@@ -81,7 +81,7 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .configuration-link { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 22px 26px; margin-bottom: 22px; color: inherit; text-decoration: none; }
 .configuration-link h2 { margin: 2px 0 6px; }
 .configuration-link p { margin: 0; color: var(--muted); }
-.credit-summary { display: grid; grid-template-columns: repeat(3, 1fr) auto; align-items: center; gap: 20px; padding: 20px 26px; margin-bottom: 22px; }
+.credit-summary { display: grid; grid-template-columns: repeat(4, 1fr) auto; align-items: center; gap: 20px; padding: 20px 26px; margin-bottom: 22px; }
 .credit-summary div { display: grid; gap: 3px; }
 .credit-summary strong { font-size: 1.45rem; }
 .credit-summary div span:not(.eyebrow) { color: var(--muted); font-size: .82rem; }
@@ -90,6 +90,13 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .service-status-grid span, .credit-row span { color: var(--muted); font-size: .82rem; }
 .credit-row { display: grid; grid-template-columns: minmax(260px, 1fr) 180px auto; align-items: end; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; }
 .credit-row .grow { display: grid; gap: 5px; align-self: center; }
+.credit-account { display: grid; border: 1px solid var(--line); border-radius: 13px; overflow: hidden; }
+.credit-account .credit-row { border: 0; border-radius: 0; }
+.credit-topup-row { display: grid; grid-template-columns: 150px minmax(240px, 1fr) auto; align-items: end; gap: 14px; padding: 14px; background: var(--brand-soft); border-top: 1px solid var(--line); }
+.grant-row { display: grid; grid-template-columns: 70px minmax(240px, 1fr) auto; align-items: center; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.grant-row > strong { color: var(--success); font-size: 1.35rem; }
+.grant-row div { display: grid; gap: 4px; }
+.grant-row small { color: var(--muted); }
 .credit-inline { display: flex; justify-content: space-between; gap: 18px; margin: -10px 0 22px; padding: 13px 16px; border-radius: 11px; background: var(--brand-soft); color: var(--brand-dark); }
 .credit-inline span { color: var(--muted); }
 .subnav { display: flex; gap: 8px; margin: -10px 0 22px; position: sticky; top: 82px; z-index: 3; }
@@ -141,7 +148,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
     .item-row .button, .inline-form .button { width: 100%; }
     .user-identity { min-width: 0; }
     .configuration-link { align-items: stretch; flex-direction: column; }
-    .credit-summary, .service-status-grid, .credit-row { grid-template-columns: 1fr; }
+    .credit-summary, .service-status-grid, .credit-row, .credit-topup-row, .grant-row { grid-template-columns: 1fr; }
     .credit-inline { flex-direction: column; }
     .subnav { overflow-x: auto; top: 76px; }
     .subnav a { white-space: nowrap; }

@@ -19,6 +19,7 @@ from app.models import (
     SystemImageSettings,
     User,
     UserRole,
+    VehicleCreditGrant,
     VehicleJob,
 )
 from app.security import hash_password
@@ -163,9 +164,18 @@ def test_system_admin_configures_image_service_and_dealership_credits() -> None:
         },
         follow_redirects=True,
     )
+    topup_response = client.post(
+        f"/admin/dealerships/{dealership_id}/credits/add",
+        data={
+            "amount": "7",
+            "note": "Kulanz",
+            "csrf_token": csrf_from(credits_response.text),
+        },
+        follow_redirects=True,
+    )
 
-    assert credits_response.status_code == 200
-    assert "25" in credits_response.text
+    assert topup_response.status_code == 200
+    assert "7 zusätzliche Fahrzeug-Credits" in topup_response.text
     with TestingSession() as db:
         image_settings = db.get(SystemImageSettings, 1)
         dealership = db.get(Dealership, dealership_id)
@@ -175,6 +185,11 @@ def test_system_admin_configures_image_service_and_dealership_credits() -> None:
         assert image_settings.default_monthly_vehicle_credits == 40
         assert dealership is not None
         assert dealership.monthly_vehicle_credits == 25
+        assert dealership.additional_vehicle_credits == 7
+        grant = db.scalar(select(VehicleCreditGrant))
+        assert grant is not None
+        assert grant.amount == 7
+        assert grant.note == "Kulanz"
 
 
 def test_dealership_admin_cannot_open_system_image_service_settings() -> None:

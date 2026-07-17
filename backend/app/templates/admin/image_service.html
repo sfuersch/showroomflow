@@ -33,17 +33,36 @@
 </section>
 
 <section class="card section-card" id="dealership-credits">
-    <div class="section-heading"><div><h2>Monatliche Autohaus-Kontingente</h2><p>Ein Credit deckt sämtliche Außenbilder eines Fahrzeugauftrags einschließlich Neuverarbeitung ab.</p></div></div>
+    <div class="section-heading"><div><h2>Autohaus-Kontingente</h2><p>Monats-Credits werden zuerst verbraucht. Zusätzliche Credits bleiben monatsübergreifend erhalten.</p></div></div>
     <div class="stack">
         {% for dealership in dealerships %}
         {% set balance = credit_balances.get(dealership.id) %}
-        <form class="credit-row" method="post" action="/admin/dealerships/{{ dealership.id }}/credits">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div class="grow"><strong>{{ dealership.name }}</strong><span>{{ balance.used }} verbraucht · {{ balance.available }} verfügbar</span></div>
-            <label>Credits pro Monat<input type="number" name="monthly_vehicle_credits" min="0" max="10000" value="{{ dealership.monthly_vehicle_credits }}" required></label>
-            <button class="button button-secondary" type="submit">Speichern</button>
-        </form>
+        <div class="credit-account">
+            <form class="credit-row" method="post" action="/admin/dealerships/{{ dealership.id }}/credits">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="grow"><strong>{{ dealership.name }}</strong><span>{{ balance.monthly_available }} Monats-Credits + {{ balance.additional_available }} dauerhafte Credits verfügbar</span></div>
+                <label>Credits pro Monat<input type="number" name="monthly_vehicle_credits" min="0" max="10000" value="{{ dealership.monthly_vehicle_credits }}" required></label>
+                <button class="button button-secondary" type="submit">Monatswert speichern</button>
+            </form>
+            <form class="credit-topup-row" method="post" action="/admin/dealerships/{{ dealership.id }}/credits/add">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <label>Anzahl zusätzlich<input type="number" name="amount" min="1" max="10000" value="1" required></label>
+                <label class="grow">Notiz (optional)<input type="text" name="note" maxlength="500" placeholder="z. B. Aktionskontingent"></label>
+                <button class="button button-primary" type="submit">Credits gutschreiben</button>
+            </form>
+        </div>
         {% else %}<p class="empty">Noch keine Autohäuser vorhanden.</p>{% endfor %}
+    </div>
+</section>
+
+<section class="card section-card">
+    <div class="section-heading"><div><h2>Letzte Credit-Gutschriften</h2><p>Nachvollziehbares Protokoll der vom Superadmin vergebenen Zusatz-Credits.</p></div></div>
+    <div class="stack">
+        {% for grant in credit_grants %}
+        {% set dealership = grant_dealerships.get(grant.dealership_id) %}
+        {% set grant_user = grant_users.get(grant.granted_by_id) %}
+        <div class="grant-row"><strong>+{{ grant.amount }}</strong><div><span>{{ dealership.name if dealership else 'Gelöschtes Autohaus' }}</span><small>{{ grant.note or 'Ohne Notiz' }}</small></div><small>{{ grant.granted_at.strftime('%d.%m.%Y %H:%M') }} · {{ grant_user.email if grant_user else 'Systemadmin' }}</small></div>
+        {% else %}<p class="empty">Noch keine zusätzlichen Credits vergeben.</p>{% endfor %}
     </div>
 </section>
 {% endblock %}

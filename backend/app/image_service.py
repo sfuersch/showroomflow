@@ -11,6 +11,8 @@ from app.config import Settings, get_settings
 from app.models import (
     Dealership,
     SystemImageSettings,
+    User,
+    VehicleCreditGrant,
     VehicleCreditUsage,
     VehicleJob,
 )
@@ -26,11 +28,20 @@ class VehicleCreditsExhausted(RuntimeError):
 @dataclass(frozen=True)
 class VehicleCreditBalance:
     allowance: int
-    used: int
+    monthly_used: int
+    additional_available: int
+
+    @property
+    def used(self) -> int:
+        return self.monthly_used
+
+    @property
+    def monthly_available(self) -> int:
+        return max(0, self.allowance - self.monthly_used)
 
     @property
     def available(self) -> int:
-        return max(0, self.allowance - self.used)
+        return self.monthly_available + self.additional_available
 
 
 def month_start(value: date | None = None) -> date:
@@ -86,11 +97,13 @@ def credit_balance(
         select(func.count(VehicleCreditUsage.id)).where(
             VehicleCreditUsage.dealership_id == dealership.id,
             VehicleCreditUsage.period_start == current_period,
+            VehicleCreditUsage.credit_source == "monthly",
         )
     )
     return VehicleCreditBalance(
         allowance=dealership.monthly_vehicle_credits,
-        used=int(used or 0),
+        monthly_used=int(used or 0),
+        additional_available=dealership.additional_vehicle_credits,
     )
 
 
@@ -113,17 +126,53 @@ def reserve_vehicle_credit(
         return existing
     current_period = month_start(period)
     balance = credit_balance(db, dealership, period=current_period)
-    if balance.available <= 0:
-        raise VehicleCreditsExhausted("Monatliches Fahrzeug-Credit-Kontingent ist aufgebraucht")
+    if balance.monthly_available > 0:
+        credit_source = "monthly"
+    elif dealership.additional_vehicle_credits > 0:
+        credit_source = "additional"
+        dealership.additional_vehicle_credits -= 1
+    else:
+        raise VehicleCreditsExhausted(
+            "Monatliches Kontingent und zusätzliche Fahrzeug-Credits sind aufgebraucht"
+        )
 
     usage = VehicleCreditUsage(
         id=uuid.uuid4(),
         dealership_id=dealership.id,
         vehicle_job_id=job.id,
         provider=provider,
+        credit_source=credit_source,
         period_start=current_period,
         consumed_at=datetime.now(timezone.utc),
     )
     db.add(usage)
     db.flush()
     return usage
+
+
+def grant_additional_credits(
+    db: Session,
+    dealership_id: uuid.UUID,
+    granted_by: User,
+    amount: int,
+    note: str = "",
+) -> VehicleCreditGrant:
+    if amount < 1 or amount > 10000:
+        raise ValueError("Zusatz-Credits müssen zwischen 1 und 10.000 liegen")
+    dealership = db.scalar(
+        select(Dealership).where(Dealership.id == dealership_id).with_for_update()
+    )
+    if dealership is None:
+        raise ValueError("Autohaus wurde nicht gefunden")
+    dealership.additional_vehicle_credits += amount
+    grant = VehicleCreditGrant(
+        id=uuid.uuid4(),
+        dealership_id=dealership.id,
+        granted_by_id=granted_by.id,
+        amount=amount,
+        note=note.strip()[:500],
+        granted_at=datetime.now(timezone.utc),
+    )
+    db.add(grant)
+    db.flush()
+    return grant

@@ -55,6 +55,7 @@ class Dealership(Timestamped, Base):
     auto_export_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     retention_days: Mapped[int] = mapped_column(Integer, default=90)
     monthly_vehicle_credits: Mapped[int] = mapped_column(Integer, default=30)
+    additional_vehicle_credits: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     locations: Mapped[list["Location"]] = relationship(back_populates="dealership")
@@ -266,8 +267,24 @@ class VehicleCreditUsage(Base):
         ForeignKey("vehicle_jobs.id", ondelete="CASCADE"), unique=True, index=True
     )
     provider: Mapped[str] = mapped_column(String(32))
+    credit_source: Mapped[str] = mapped_column(String(32), default="monthly")
     period_start: Mapped[date] = mapped_column(Date, index=True)
     consumed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
+class VehicleCreditGrant(Base):
+    __tablename__ = "vehicle_credit_grants"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dealership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dealerships.id", ondelete="CASCADE"), index=True
+    )
+    granted_by_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    amount: Mapped[int] = mapped_column(Integer)
+    note: Mapped[str] = mapped_column(String(500), default="")
+    granted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
