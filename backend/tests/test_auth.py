@@ -16,6 +16,7 @@ from app.models import (
     CaptureStep,
     Dealership,
     Location,
+    SystemImageSettings,
     User,
     UserRole,
     VehicleJob,
@@ -120,6 +121,77 @@ def csrf_from(response_text: str) -> str:
     match = re.search(r'name="csrf_token" value="([^"]+)"', response_text)
     assert match is not None
     return match.group(1)
+
+
+def test_system_admin_configures_image_service_and_dealership_credits() -> None:
+    create_system_admin()
+    with TestingSession() as db:
+        dealership = Dealership(name="Credit Autohaus", monthly_vehicle_credits=30)
+        db.add(dealership)
+        db.commit()
+        db.refresh(dealership)
+        dealership_id = dealership.id
+
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    settings_page = client.get("/admin/image-service")
+    assert settings_page.status_code == 200
+    assert "Bilddienstleister und Credits" in settings_page.text
+
+    settings_response = client.post(
+        "/admin/image-service",
+        data={
+            "provider": "photoroom",
+            "default_monthly_vehicle_credits": "40",
+            "photoroom_sandbox": "on",
+            "csrf_token": csrf_from(settings_page.text),
+        },
+        follow_redirects=True,
+    )
+    credits_response = client.post(
+        f"/admin/dealerships/{dealership_id}/credits",
+        data={
+            "monthly_vehicle_credits": "25",
+            "csrf_token": csrf_from(settings_response.text),
+        },
+        follow_redirects=True,
+    )
+
+    assert credits_response.status_code == 200
+    assert "25" in credits_response.text
+    with TestingSession() as db:
+        image_settings = db.get(SystemImageSettings, 1)
+        dealership = db.get(Dealership, dealership_id)
+        assert image_settings is not None
+        assert image_settings.provider == "photoroom"
+        assert image_settings.photoroom_sandbox is True
+        assert image_settings.default_monthly_vehicle_credits == 40
+        assert dealership is not None
+        assert dealership.monthly_vehicle_credits == 25
+
+
+def test_dealership_admin_cannot_open_system_image_service_settings() -> None:
+    create_dealership_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+
+    response = client.get("/admin/image-service")
+
+    assert response.status_code == 403
 
 
 def test_login_and_current_user() -> None:

@@ -26,6 +26,7 @@ def create_dealership(
         name=payload.name.strip(),
         auto_export_enabled=payload.auto_export_enabled,
         retention_days=payload.retention_days,
+        monthly_vehicle_credits=payload.monthly_vehicle_credits,
     )
     db.add(dealership)
     db.commit()

@@ -23,6 +23,13 @@
     <span class="button button-primary">Aufträge öffnen</span>
 </a>
 
+<section class="card credit-summary">
+    <div><span class="eyebrow">Fahrzeug-Credits · aktueller Monat</span><strong>{{ credit_balance.available }}</strong><span>verfügbar</span></div>
+    <div><strong>{{ credit_balance.used }}</strong><span>verbraucht</span></div>
+    <div><strong>{{ credit_balance.allowance }}</strong><span>Monatskontingent</span></div>
+    {% if current_user.role.value == "system_admin" %}<a class="button button-secondary" href="/admin/image-service#dealership-credits">Kontingent verwalten</a>{% endif %}
+</section>
+
 <section class="card section-card">
     <div class="section-heading">
         <div><h2>Grundeinstellungen</h2><p>Export und Aufbewahrung steuern.</p></div>

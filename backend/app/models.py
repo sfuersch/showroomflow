@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -54,6 +54,7 @@ class Dealership(Timestamped, Base):
     name: Mapped[str] = mapped_column(String(160))
     auto_export_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     retention_days: Mapped[int] = mapped_column(Integer, default=90)
+    monthly_vehicle_credits: Mapped[int] = mapped_column(Integer, default=30)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     locations: Mapped[list["Location"]] = relationship(back_populates="dealership")
@@ -209,6 +210,7 @@ class PhotoAsset(Timestamped, Base):
     )
     processed_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     processed_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processed_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     processing_attempts: Mapped[int] = mapped_column(Integer, default=0)
     processing_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     processing_started_at: Mapped[datetime | None] = mapped_column(
@@ -242,6 +244,32 @@ class PhotoProcessingVariant(Timestamped, Base):
     error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SystemImageSettings(Timestamped, Base):
+    __tablename__ = "system_image_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    provider: Mapped[str] = mapped_column(String(32), default="remove_bg")
+    photoroom_sandbox: Mapped[bool] = mapped_column(Boolean, default=True)
+    default_monthly_vehicle_credits: Mapped[int] = mapped_column(Integer, default=30)
+
+
+class VehicleCreditUsage(Base):
+    __tablename__ = "vehicle_credit_usages"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dealership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dealerships.id", ondelete="CASCADE"), index=True
+    )
+    vehicle_job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("vehicle_jobs.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32))
+    period_start: Mapped[date] = mapped_column(Date, index=True)
+    consumed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
 
 
 class ExportRun(Timestamped, Base):

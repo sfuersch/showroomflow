@@ -138,3 +138,16 @@ Sandbox-Modus. Danach API und Worker neu erstellen. In der Auftragsansicht ersch
 freizustellende Foto die Schaltfläche `Photoroom testen`. Original, remove.bg und Photoroom werden
 nebeneinander angezeigt. In dieser ersten Teststufe nutzt Photoroom einen weichen KI-Schatten,
 aber bewusst kein generatives Relighting, damit Fahrzeugfarbe und Details unverändert bleiben.
+
+Nach der Migration `0007_image_service_credits` wird der reguläre Bilddienstleister unter
+`Verwaltung > Bilddienstleister` durch den Systemadministrator gewählt. Die API-Schlüssel bleiben
+weiterhin als VPS-Secrets in `.env.production`; die Oberfläche zeigt nur ihren Status. Ein dort
+aktivierter Sandbox-Modus ergänzt bei einem Live-Schlüssel automatisch den Sandbox-Präfix. Ist
+bereits ein Sandbox-Schlüssel hinterlegt, muss er für den Produktivbetrieb auf dem VPS durch einen
+Live-Schlüssel ersetzt werden.
+
+Jedes Autohaus besitzt ein konfigurierbares Monatskontingent. Ein Credit wird beim ersten
+Verarbeitungsauftrag für ein Fahrzeug reserviert und deckt alle Außenbilder und Neuverarbeitungen
+dieses Auftrags ab. Nicht genutzte Credits werden nicht übertragen; am ersten Kalendertag gilt
+automatisch wieder das vollständige Monatskontingent. Eine neue interne Auftragsversion zählt als
+neues Fahrzeug im Sinne der Abrechnung.

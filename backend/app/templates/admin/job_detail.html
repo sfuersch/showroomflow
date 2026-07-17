@@ -3,6 +3,7 @@
 {% block content %}
 <nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}/jobs">Fahrzeugaufträge</a><span>›</span><span>{{ job.vin }}</span></nav>
 <div class="page-heading"><div><span class="eyebrow">Fahrzeugauftrag · Version {{ job.version }}</span><h1>{{ job.vin }}</h1><p class="muted">{{ job.brand }} · Status: {{ job.status.value|replace('_', ' ') }}</p></div></div>
+<div class="credit-inline"><strong>{{ credit_balance.available }} Fahrzeug-Credits verfügbar</strong><span>{{ credit_balance.used }} von {{ credit_balance.allowance }} im aktuellen Monat verbraucht · aktiver Dienst: {{ active_provider|replace('remove_bg', 'remove.bg') }}</span></div>
 {% if not processing_enabled %}<div class="flash flash-error">Der reguläre KI-Dienst ist noch nicht konfiguriert. Originalbilder bleiben verfügbar; Freistellungen können danach manuell gestartet werden.</div>{% endif %}
 <section class="photo-review-grid">
     {% for photo in photos %}
@@ -13,15 +14,15 @@
         <div class="photo-variants{% if step and step.requires_processing %} photo-variants-three{% endif %}">
             <a href="{{ original_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ original_urls[photo.id] }}" alt="Original {{ step.name if step else '' }}"><span>Original</span></a>
             {% if step and step.requires_processing %}
-                {% if photo.id in processed_urls %}<a href="{{ processed_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ processed_urls[photo.id] }}" alt="remove.bg {{ step.name if step else '' }}"><span>remove.bg · regulär</span></a>{% else %}<div class="photo-placeholder"><span>Noch kein remove.bg-Ergebnis</span></div>{% endif %}
+                {% if photo.id in processed_urls %}<a href="{{ processed_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ processed_urls[photo.id] }}" alt="Bearbeitet {{ step.name if step else '' }}"><span>{{ (photo.processed_provider or 'remove_bg')|replace('remove_bg', 'remove.bg') }} · regulär</span></a>{% else %}<div class="photo-placeholder"><span>Noch kein reguläres Ergebnis</span></div>{% endif %}
                 {% if photo.id in photoroom_urls %}<a href="{{ photoroom_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ photoroom_urls[photo.id] }}" alt="Photoroom {{ step.name if step else '' }}"><span>Photoroom{% if photoroom_sandbox %} · Sandbox{% endif %}</span></a>{% else %}<div class="photo-placeholder"><span>{% if photoroom %}Photoroom: {{ photoroom.status|replace('_', ' ') }}{% else %}Noch kein Photoroom-Vergleich{% endif %}</span></div>{% endif %}
             {% endif %}
         </div>
-        {% if photo.processing_error %}<p class="field-error">remove.bg: {{ photo.processing_error }}</p>{% endif %}
+        {% if photo.processing_error %}<p class="field-error">Bildverarbeitung: {{ photo.processing_error }}</p>{% endif %}
         {% if photoroom and photoroom.error %}<p class="field-error">Photoroom: {{ photoroom.error }}</p>{% endif %}
         {% if step and step.requires_processing %}<div class="processing-actions">
-            <form method="post" action="/admin/photos/{{ photo.id }}/process"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="provider" value="remove_bg"><button class="button button-secondary button-wide" type="submit" {% if not processing_enabled or photo.processing_status.value in ['queued', 'processing'] %}disabled{% endif %}>{{ "remove.bg erneut" if photo.processed_object_key else "remove.bg starten" }}</button></form>
-            <form method="post" action="/admin/photos/{{ photo.id }}/process"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="provider" value="photoroom"><button class="button button-secondary button-wide" type="submit" {% if not photoroom_enabled or (photoroom and photoroom.status in ['queued', 'processing']) %}disabled{% endif %}>{{ "Photoroom erneut" if photoroom and photoroom.object_key else "Photoroom testen" }}</button></form>
+            <form method="post" action="/admin/photos/{{ photo.id }}/process"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="provider" value="primary"><button class="button button-secondary button-wide" type="submit" {% if not processing_enabled or photo.processing_status.value in ['queued', 'processing'] %}disabled{% endif %}>{{ (active_provider|replace('remove_bg', 'remove.bg')) ~ (" erneut" if photo.processed_object_key else " starten") }}</button></form>
+            {% if active_provider != 'photoroom' %}<form method="post" action="/admin/photos/{{ photo.id }}/process"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="provider" value="photoroom_comparison"><button class="button button-secondary button-wide" type="submit" {% if not photoroom_enabled or (photoroom and photoroom.status in ['queued', 'processing']) %}disabled{% endif %}>{{ "Photoroom erneut" if photoroom and photoroom.object_key else "Photoroom testen" }}</button></form>{% endif %}
         </div>{% endif %}
     </article>
     {% else %}<p class="empty">Für diesen Auftrag wurden noch keine Fotos hochgeladen.</p>{% endfor %}
