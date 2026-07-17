@@ -60,6 +60,27 @@ def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
     return response.content
 
 
+def apply_cutout_mask_to_original(original_bytes: bytes, cutout_png_bytes: bytes) -> bytes:
+    """Keep original pixels while using the AI result only as transparency mask."""
+    try:
+        original = ImageOps.exif_transpose(Image.open(io.BytesIO(original_bytes))).convert("RGBA")
+        cutout = Image.open(io.BytesIO(cutout_png_bytes)).convert("RGBA")
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError(
+            "Die Freistellung konnte nicht mit dem Original verbunden werden"
+        ) from exc
+
+    alpha = cutout.getchannel("A")
+    if alpha.getbbox() is None:
+        raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
+    if alpha.size != original.size:
+        alpha = alpha.resize(original.size, Image.Resampling.LANCZOS)
+    original.putalpha(alpha)
+    output = io.BytesIO()
+    original.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
 def compose_showroom(
     background_bytes: bytes,
     vehicle_png_bytes: bytes,
@@ -163,7 +184,8 @@ def process_photo(photo_id: str) -> None:
             db.commit()
 
             original = storage.get_object(object_key=photo.original_object_key)
-            cutout = remove_vehicle_background(original, settings)
+            ai_cutout = remove_vehicle_background(original, settings)
+            cutout = apply_cutout_mask_to_original(original, ai_cutout)
             background_image = storage.get_object(object_key=background.object_key)
             finished = compose_showroom(
                 background_image,
