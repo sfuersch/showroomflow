@@ -45,7 +45,7 @@ def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
             "https://api.remove.bg/v1.0/removebg",
             headers={"X-Api-Key": settings.remove_bg_api_key},
             files={"image_file": ("vehicle.jpg", image, "image/jpeg")},
-            data={"size": "auto", "type": "car", "format": "png"},
+            data={"size": settings.remove_bg_size, "type": "car", "format": "png"},
             timeout=120,
         )
     except httpx.HTTPError as exc:
