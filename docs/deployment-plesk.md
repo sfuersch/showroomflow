@@ -75,6 +75,8 @@ ls -lh /var/backups/showroomflow
 
 Nach erfolgreichem Test den Befehl ueber Plesk als taegliche geplante Aufgabe ausfuehren. Die lokale Sicherung wird standardmaessig 14 Tage aufbewahrt. Zusaetzlich sollte das Plesk-Serverbackup extern gespeichert werden.
 
+Das Skript legt Sicherungsverzeichnis und neue Dump-Dateien mit ausschliesslichem Zugriff fuer den ausfuehrenden Root-Benutzer an.
+
 ## 8. Aktualisierung
 
 Erst nach Datenbanksicherung aktualisieren:

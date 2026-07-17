@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+umask 077
 
 PROJECT_DIR=${SHOWROOMFLOW_PROJECT_DIR:-/opt/showroomflow}
 BACKUP_DIR=${SHOWROOMFLOW_BACKUP_DIR:-/var/backups/showroomflow}
