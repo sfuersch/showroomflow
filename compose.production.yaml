@@ -59,6 +59,7 @@ services:
       redis:
         condition: service_healthy
     networks:
+      - edge
       - backend
     read_only: true
     tmpfs:
