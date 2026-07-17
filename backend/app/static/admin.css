@@ -125,6 +125,7 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .photo-review-card { padding: 18px; }
 .photo-variants { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 14px; }
 .photo-variants-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.photo-variants-four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .photo-variants a { color: var(--ink); text-decoration: none; font-size: .8rem; font-weight: 700; }
 .photo-variants img, .photo-placeholder { width: 100%; aspect-ratio: 4/3; object-fit: contain; background: #e9ebf4; border-radius: 10px; }
 .photo-variants a span { display: block; margin-top: 5px; }
@@ -157,5 +158,6 @@ button:disabled { cursor: not-allowed; opacity: .5; }
     .job-row { grid-template-columns: 1fr; }
     .photo-review-grid { grid-template-columns: 1fr; }
     .photo-variants-three { grid-template-columns: 1fr; }
+    .photo-variants-four { grid-template-columns: 1fr; }
     .processing-actions { grid-template-columns: 1fr; }
 }

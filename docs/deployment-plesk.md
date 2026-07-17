@@ -139,6 +139,13 @@ freizustellende Foto die Schaltfläche `Photoroom testen`. Original, remove.bg u
 nebeneinander angezeigt. In dieser ersten Teststufe nutzt Photoroom einen weichen KI-Schatten,
 aber bewusst kein generatives Relighting, damit Fahrzeugfarbe und Details unverändert bleiben.
 
+Zusätzlich kann `Optimiert testen` gestartet werden. Diese getrennt gespeicherte Variante verwendet
+das farbschonende Photoroom-Relighting `ai.preserve-hue-and-saturation` und deaktiviert das Einrasten
+angeschnittener Motivseiten, damit Fahrzeuggröße und Position über eine Bildserie konsistenter
+bleiben. Sie überschreibt weder das reguläre Ergebnis noch den Export. Da auch das farbschonende
+Relighting sichtbare Farb- oder Helligkeitsänderungen erzeugen kann, muss es vor einer produktiven
+Aktivierung anhand mehrerer heller, dunkler und farbiger Fahrzeuge geprüft werden.
+
 Nach der Migration `0007_image_service_credits` wird der reguläre Bilddienstleister unter
 `Verwaltung > Bilddienstleister` durch den Systemadministrator gewählt. Die API-Schlüssel bleiben
 weiterhin als VPS-Secrets in `.env.production`; die Oberfläche zeigt nur ihren Status. Ein dort

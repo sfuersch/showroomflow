@@ -809,6 +809,11 @@ def job_detail_page(
     photoroom_variants = {
         variant.photo_asset_id: variant for variant in variants if variant.provider == "photoroom"
     }
+    optimized_photoroom_variants = {
+        variant.photo_asset_id: variant
+        for variant in variants
+        if variant.provider == "photoroom_optimized"
+    }
     runtime = get_settings()
     image_settings = get_image_settings(db)
     return templates.TemplateResponse(
@@ -831,10 +836,16 @@ def job_detail_page(
                 if photo.processed_object_key
             },
             photoroom_variants=photoroom_variants,
+            optimized_photoroom_variants=optimized_photoroom_variants,
             photoroom_urls={
                 variant.photo_asset_id: storage.create_download_url(object_key=variant.object_key)
                 for variant in variants
                 if variant.provider == "photoroom" and variant.object_key
+            },
+            optimized_photoroom_urls={
+                variant.photo_asset_id: storage.create_download_url(object_key=variant.object_key)
+                for variant in variants
+                if variant.provider == "photoroom_optimized" and variant.object_key
             },
             processing_enabled=provider_is_available(image_settings, runtime),
             active_provider=image_settings.provider,
@@ -867,12 +878,15 @@ def reprocess_photo(
     _authorized_dealership(db, admin, job.dealership_id)
     runtime = get_settings()
     image_settings = get_image_settings(db)
+    comparison_provider = {
+        "photoroom_comparison": "photoroom",
+        "photoroom_optimized_comparison": "photoroom_optimized",
+    }.get(provider)
     if not step.requires_processing:
         _flash(request, "Diese Fotoposition benötigt keine Freistellung.", "error")
-    elif provider == "photoroom_comparison" and not runtime.photoroom_enabled:
+    elif comparison_provider and not runtime.photoroom_enabled:
         _flash(request, "Photoroom ist noch nicht konfiguriert.", "error")
-    elif provider == "photoroom_comparison":
-        comparison_provider = "photoroom"
+    elif comparison_provider:
         variant = db.scalar(
             select(PhotoProcessingVariant).where(
                 PhotoProcessingVariant.photo_asset_id == photo.id,
@@ -896,7 +910,10 @@ def reprocess_photo(
             db.commit()
             _flash(request, "Der Photoroom-Test konnte nicht gestartet werden.", "error")
         else:
-            _flash(request, "Photoroom-Vergleich wurde zur Verarbeitung vorgemerkt.")
+            label = (
+                "Photoroom Optimiert" if comparison_provider.endswith("optimized") else "Photoroom"
+            )
+            _flash(request, f"{label}-Vergleich wurde zur Verarbeitung vorgemerkt.")
     elif provider != "primary":
         _flash(request, "Unbekannter Bildverarbeitungsdienst.", "error")
     elif not provider_is_available(image_settings, runtime):

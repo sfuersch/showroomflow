@@ -109,3 +109,31 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
     finished = Image.open(io.BytesIO(result))
     assert finished.format == "JPEG"
     assert finished.size == (1920, 1440)
+
+
+def test_optimized_photoroom_request_preserves_color_and_consistent_positioning() -> None:
+    original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
+    background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+    api_result = image_bytes(Image.new("RGB", (1920, 1440), "gray"), "JPEG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content
+        assert b'name="lighting.mode"' in body
+        assert b"ai.preserve-hue-and-saturation" in body
+        assert b'name="ignorePaddingAndSnapOnCroppedSides"' in body
+        assert b"false" in body
+        assert b"ai.auto" not in body
+        return httpx.Response(200, content=api_result, headers={"content-type": "image/jpeg"})
+
+    settings = Settings(photoroom_api_key="test-key", photoroom_sandbox=True)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = create_photoroom_showroom(
+            original,
+            background,
+            "image/jpeg",
+            settings,
+            optimized=True,
+            client=client,
+        )
+
+    assert Image.open(io.BytesIO(result)).size == (1920, 1440)
