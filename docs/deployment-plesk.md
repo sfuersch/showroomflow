@@ -25,6 +25,8 @@ chmod 600 .env.production
 
 Alle Platzhalter in `.env.production` ersetzen. Passwoerter mit Sonderzeichen muessen in `SHOWROOMFLOW_DATABASE_URL` und `SHOWROOMFLOW_REDIS_URL` URL-kodiert werden. Geheimnisse niemals committen oder im Chat teilen.
 
+Den produktiven Cloudflare-R2-Speicher vor dem ersten Start gemaess `docs/cloudflare-r2.md` einrichten. Fuer einen EU-Bucket muss die Endpoint-URL auf `.eu.r2.cloudflarestorage.com` enden; als Region wird `auto` verwendet.
+
 Ein sicheres Anwendungsgeheimnis kann auf dem VPS so erzeugt werden:
 
 ```bash

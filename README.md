@@ -26,7 +26,7 @@ Die Authentifizierung verwendet kurzlebige Zugriffstoken und rotierende Sitzungs
 
 Die Beispielkonfiguration ist nur fuer die lokale Entwicklung bestimmt. Produktive SFTP-, KI- und Zugangsdaten werden nicht in Git gespeichert.
 
-Die produktionsnahe Installation auf Plesk ist in `docs/deployment-plesk.md` beschrieben.
+Die produktionsnahe Installation auf Plesk ist in `docs/deployment-plesk.md` beschrieben. Produktive Originale und bearbeitete Bilder werden in einem privaten Cloudflare-R2-Bucket mit EU-Zustaendigkeit gespeichert; die Einrichtung steht in `docs/cloudflare-r2.md`.
 
 ## iOS-App
 

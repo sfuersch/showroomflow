@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://showroomflow:showroomflow@db:5432/showroomflow"
     redis_url: str = "redis://redis:6379/0"
     storage_endpoint: str = "http://minio:9000"
-    storage_region: str = "us-east-1"
+    storage_region: str = "auto"
     storage_access_key: str = "showroomflow"
     storage_secret_key: str = "development-only-change-me"
     storage_bucket: str = "showroomflow"
