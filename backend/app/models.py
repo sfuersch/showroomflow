@@ -219,6 +219,31 @@ class PhotoAsset(Timestamped, Base):
     )
 
 
+class PhotoProcessingVariant(Timestamped, Base):
+    __tablename__ = "photo_processing_variants"
+    __table_args__ = (
+        UniqueConstraint(
+            "photo_asset_id",
+            "provider",
+            name="uq_photo_processing_variant_provider",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    photo_asset_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("photo_assets.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), default=ProcessingStatus.PENDING.value)
+    object_key: Mapped[str | None] = mapped_column(String(500), nullable=True, unique=True)
+    content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ExportRun(Timestamped, Base):
     __tablename__ = "export_runs"
 

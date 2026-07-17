@@ -16,6 +16,7 @@ from app.models import (
     CaptureStep,
     JobStatus,
     PhotoAsset,
+    PhotoProcessingVariant,
     ProcessingStatus,
     VehicleJob,
 )
@@ -58,6 +59,78 @@ def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
     if not response.content.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ImageProcessingError("Der KI-Dienst hat kein gültiges PNG geliefert")
     return response.content
+
+
+def _photoroom_api_key(settings: Settings) -> str:
+    if not settings.photoroom_api_key:
+        raise ImageProcessingError("Photoroom ist nicht konfiguriert")
+    if settings.photoroom_sandbox and not settings.photoroom_api_key.startswith("sandbox_"):
+        return f"sandbox_{settings.photoroom_api_key}"
+    return settings.photoroom_api_key
+
+
+def create_photoroom_showroom(
+    original_bytes: bytes,
+    background_bytes: bytes,
+    background_content_type: str,
+    settings: Settings,
+    vehicle_scale_percent: int = 60,
+    vehicle_bottom_percent: int = 90,
+    *,
+    client: httpx.Client | None = None,
+) -> bytes:
+    """Create a protected A/B variant without generative relighting."""
+    request = client.post if client is not None else httpx.post
+    background_extension = "png" if background_content_type == "image/png" else "jpg"
+    try:
+        response = request(
+            "https://image-api.photoroom.com/v2/edit",
+            headers={
+                "x-api-key": _photoroom_api_key(settings),
+                "pr-hd-background-removal": "auto",
+            },
+            files={
+                "imageFile": ("vehicle.jpg", original_bytes, "image/jpeg"),
+                "background.imageFile": (
+                    f"showroom-background.{background_extension}",
+                    background_bytes,
+                    background_content_type,
+                ),
+            },
+            data={
+                "removeBackground": "true",
+                "shadow.mode": "ai.soft",
+                "outputSize": f"{settings.output_width}x{settings.output_height}",
+                "paddingLeft": f"{max(0.02, (1 - vehicle_scale_percent / 100) / 2):.3f}",
+                "paddingRight": f"{max(0.02, (1 - vehicle_scale_percent / 100) / 2):.3f}",
+                "paddingBottom": f"{max(0.02, 1 - vehicle_bottom_percent / 100):.3f}",
+                "horizontalAlignment": "center",
+                "verticalAlignment": "bottom",
+                "export.format": "jpeg",
+            },
+            timeout=180,
+        )
+    except httpx.HTTPError as exc:
+        raise ImageProcessingError("Photoroom ist nicht erreichbar") from exc
+    if response.status_code != 200:
+        detail = response.text.replace("\n", " ")[:300]
+        raise ImageProcessingError(
+            f"Photoroom-Verarbeitung fehlgeschlagen (HTTP {response.status_code}): {detail}"
+        )
+    try:
+        finished = Image.open(io.BytesIO(response.content))
+        finished.load()
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Photoroom hat kein gültiges Bild geliefert") from exc
+    if finished.size != (settings.output_width, settings.output_height):
+        finished = ImageOps.fit(
+            finished.convert("RGB"),
+            (settings.output_width, settings.output_height),
+            method=Image.Resampling.LANCZOS,
+        )
+    output = io.BytesIO()
+    finished.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
+    return output.getvalue()
 
 
 def apply_cutout_mask_to_original(original_bytes: bytes, cutout_png_bytes: bytes) -> bytes:
@@ -224,6 +297,80 @@ def process_photo(photo_id: str) -> None:
                 job = db.get(VehicleJob, photo.vehicle_job_id)
                 if job is not None:
                     job.status = JobStatus.REVIEW_REQUIRED
+                db.commit()
+        raise
+
+
+def process_photo_variant(photo_id: str, provider: str) -> None:
+    if provider != "photoroom":
+        raise ImageProcessingError(f"Unbekannte Vergleichsverarbeitung: {provider}")
+    identifier = uuid.UUID(photo_id)
+    settings = get_settings()
+    storage = ObjectStorage(settings)
+    try:
+        with SessionLocal() as db:
+            photo = db.get(PhotoAsset, identifier)
+            if photo is None or photo.uploaded_at is None or not photo.is_selected:
+                return
+            job = db.get(VehicleJob, photo.vehicle_job_id)
+            step = db.get(CaptureStep, photo.capture_step_id)
+            if job is None or step is None or not step.requires_processing:
+                return
+            background = db.get(Background, job.background_id) if job.background_id else None
+            if background is None or not background.is_active:
+                raise ImageProcessingError("Für den Auftrag ist kein aktiver Hintergrund gewählt")
+
+            variant = db.scalar(
+                select(PhotoProcessingVariant).where(
+                    PhotoProcessingVariant.photo_asset_id == photo.id,
+                    PhotoProcessingVariant.provider == provider,
+                )
+            )
+            if variant is None:
+                variant = PhotoProcessingVariant(photo_asset_id=photo.id, provider=provider)
+                db.add(variant)
+            variant.status = ProcessingStatus.PROCESSING.value
+            variant.attempts += 1
+            variant.error = None
+            variant.started_at = datetime.now(timezone.utc)
+            db.commit()
+
+            original = storage.get_object(object_key=photo.original_object_key)
+            background_image = storage.get_object(object_key=background.object_key)
+            finished = create_photoroom_showroom(
+                original,
+                background_image,
+                background.content_type,
+                settings,
+                vehicle_scale_percent=background.vehicle_scale_percent,
+                vehicle_bottom_percent=background.vehicle_bottom_percent,
+            )
+            object_key = (
+                f"dealerships/{job.dealership_id}/jobs/{job.id}/comparisons/"
+                f"{provider}/{step.id}/{photo.id}.jpg"
+            )
+            storage.put_object(
+                object_key=object_key,
+                content=finished,
+                content_type="image/jpeg",
+            )
+            variant.object_key = object_key
+            variant.content_type = "image/jpeg"
+            variant.size_bytes = len(finished)
+            variant.status = ProcessingStatus.COMPLETED.value
+            variant.completed_at = datetime.now(timezone.utc)
+            db.commit()
+    except Exception as exc:
+        with SessionLocal() as db:
+            variant = db.scalar(
+                select(PhotoProcessingVariant).where(
+                    PhotoProcessingVariant.photo_asset_id == identifier,
+                    PhotoProcessingVariant.provider == provider,
+                )
+            )
+            if variant is not None:
+                variant.status = ProcessingStatus.FAILED.value
+                variant.error = str(exc)[:1000]
                 db.commit()
         raise
 
