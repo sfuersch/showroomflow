@@ -32,6 +32,7 @@ class DealershipCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     auto_export_enabled: bool = False
     retention_days: int = Field(default=90, ge=1, le=365)
+    monthly_vehicle_credits: int = Field(default=30, ge=0, le=10000)
 
 
 class DealershipResponse(BaseModel):
@@ -41,6 +42,7 @@ class DealershipResponse(BaseModel):
     name: str
     auto_export_enabled: bool
     retention_days: int
+    monthly_vehicle_credits: int
     is_active: bool
     created_at: datetime
 

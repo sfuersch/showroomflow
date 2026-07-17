@@ -7,6 +7,12 @@ from sqlalchemy import func, select, update
 
 from app.api.dependencies import CurrentUser, DatabaseSession
 from app.config import get_settings
+from app.image_service import (
+    VehicleCreditsExhausted,
+    get_image_settings,
+    provider_is_available,
+    reserve_vehicle_credit,
+)
 from app.models import (
     CaptureStep,
     JobStatus,
@@ -203,13 +209,24 @@ def complete_photo_upload(
     photo.uploaded_at = datetime.now(timezone.utc)
     photo.is_selected = True
     step = db.get(CaptureStep, photo.capture_step_id)
-    settings = get_settings()
-    should_enqueue = bool(step and step.requires_processing and settings.processing_enabled)
+    runtime = get_settings()
+    image_settings = get_image_settings(db)
+    should_enqueue = bool(
+        step and step.requires_processing and provider_is_available(image_settings, runtime)
+    )
+    credit_error: str | None = None
+    if should_enqueue:
+        try:
+            reserve_vehicle_credit(db, job, image_settings.provider)
+        except VehicleCreditsExhausted as exc:
+            should_enqueue = False
+            credit_error = str(exc)
     if step and step.requires_processing:
         photo.processing_status = (
             ProcessingStatus.QUEUED if should_enqueue else ProcessingStatus.PENDING
         )
         job.status = JobStatus.PROCESSING if should_enqueue else JobStatus.REVIEW_REQUIRED
+        photo.processing_error = credit_error
     else:
         photo.processing_status = ProcessingStatus.NOT_REQUIRED
     db.commit()

@@ -11,6 +11,11 @@ from sqlalchemy import select
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
+from app.image_service import (
+    get_image_settings,
+    photoroom_sandbox_active,
+    provider_is_available,
+)
 from app.models import (
     Background,
     CaptureStep,
@@ -39,7 +44,7 @@ class CompositionOptions:
 
 
 def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
-    if settings.processing_provider != "remove_bg" or not settings.remove_bg_api_key:
+    if not settings.remove_bg_api_key:
         raise ImageProcessingError("Kein KI-Dienst für die Freistellung konfiguriert")
     try:
         response = httpx.post(
@@ -61,10 +66,11 @@ def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
     return response.content
 
 
-def _photoroom_api_key(settings: Settings) -> str:
+def _photoroom_api_key(settings: Settings, sandbox: bool | None = None) -> str:
     if not settings.photoroom_api_key:
         raise ImageProcessingError("Photoroom ist nicht konfiguriert")
-    if settings.photoroom_sandbox and not settings.photoroom_api_key.startswith("sandbox_"):
+    use_sandbox = settings.photoroom_sandbox if sandbox is None else sandbox
+    if use_sandbox and not settings.photoroom_api_key.startswith("sandbox_"):
         return f"sandbox_{settings.photoroom_api_key}"
     return settings.photoroom_api_key
 
@@ -76,6 +82,7 @@ def create_photoroom_showroom(
     settings: Settings,
     vehicle_scale_percent: int = 60,
     vehicle_bottom_percent: int = 90,
+    photoroom_sandbox: bool | None = None,
     *,
     client: httpx.Client | None = None,
 ) -> bytes:
@@ -86,7 +93,7 @@ def create_photoroom_showroom(
         response = request(
             "https://image-api.photoroom.com/v2/edit",
             headers={
-                "x-api-key": _photoroom_api_key(settings),
+                "x-api-key": _photoroom_api_key(settings, photoroom_sandbox),
                 "pr-hd-background-removal": "auto",
             },
             files={
@@ -249,6 +256,9 @@ def process_photo(photo_id: str) -> None:
             background = db.get(Background, job.background_id) if job.background_id else None
             if background is None or not background.is_active:
                 raise ImageProcessingError("Für den Auftrag ist kein aktiver Hintergrund gewählt")
+            image_settings = get_image_settings(db)
+            if not provider_is_available(image_settings, settings):
+                raise ImageProcessingError("Der gewählte Bilddienstleister ist nicht verfügbar")
 
             photo.processing_status = ProcessingStatus.PROCESSING
             photo.processing_attempts += 1
@@ -258,22 +268,35 @@ def process_photo(photo_id: str) -> None:
             db.commit()
 
             original = storage.get_object(object_key=photo.original_object_key)
-            ai_cutout = remove_vehicle_background(original, settings)
-            cutout = apply_cutout_mask_to_original(original, ai_cutout)
             background_image = storage.get_object(object_key=background.object_key)
-            finished = compose_showroom(
-                background_image,
-                cutout,
-                CompositionOptions(
-                    width=settings.output_width,
-                    height=settings.output_height,
+            if image_settings.provider == "photoroom":
+                finished = create_photoroom_showroom(
+                    original,
+                    background_image,
+                    background.content_type,
+                    settings,
                     vehicle_scale_percent=background.vehicle_scale_percent,
                     vehicle_bottom_percent=background.vehicle_bottom_percent,
-                    shadow_opacity_percent=background.shadow_opacity_percent,
-                    reflection_opacity_percent=background.reflection_opacity_percent,
-                    brightness_percent=background.brightness_percent,
-                ),
-            )
+                    photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
+                )
+            elif image_settings.provider == "remove_bg":
+                ai_cutout = remove_vehicle_background(original, settings)
+                cutout = apply_cutout_mask_to_original(original, ai_cutout)
+                finished = compose_showroom(
+                    background_image,
+                    cutout,
+                    CompositionOptions(
+                        width=settings.output_width,
+                        height=settings.output_height,
+                        vehicle_scale_percent=background.vehicle_scale_percent,
+                        vehicle_bottom_percent=background.vehicle_bottom_percent,
+                        shadow_opacity_percent=background.shadow_opacity_percent,
+                        reflection_opacity_percent=background.reflection_opacity_percent,
+                        brightness_percent=background.brightness_percent,
+                    ),
+                )
+            else:
+                raise ImageProcessingError("Die Bildverarbeitung ist deaktiviert")
             processed_key = (
                 f"dealerships/{job.dealership_id}/jobs/{job.id}/processed/{step.id}/{photo.id}.jpg"
             )
@@ -285,6 +308,7 @@ def process_photo(photo_id: str) -> None:
             photo.processed_object_key = processed_key
             photo.processed_content_type = "image/jpeg"
             photo.processed_size_bytes = len(finished)
+            photo.processed_provider = image_settings.provider
             photo.processing_status = ProcessingStatus.COMPLETED
             photo.processing_completed_at = datetime.now(timezone.utc)
             job.status = _next_job_status(db, job.id)
@@ -320,6 +344,7 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
             background = db.get(Background, job.background_id) if job.background_id else None
             if background is None or not background.is_active:
                 raise ImageProcessingError("Für den Auftrag ist kein aktiver Hintergrund gewählt")
+            image_settings = get_image_settings(db)
 
             variant = db.scalar(
                 select(PhotoProcessingVariant).where(
@@ -345,6 +370,7 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 settings,
                 vehicle_scale_percent=background.vehicle_scale_percent,
                 vehicle_bottom_percent=background.vehicle_bottom_percent,
+                photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
             )
             object_key = (
                 f"dealerships/{job.dealership_id}/jobs/{job.id}/comparisons/"

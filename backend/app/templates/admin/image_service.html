@@ -1,0 +1,49 @@
+{% extends "admin/base.html" %}
+{% block title %}Bilddienstleister{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><span>Bilddienstleister</span></nav>
+<div class="page-heading"><div><span class="eyebrow">Systemkonfiguration</span><h1>Bilddienstleister und Credits</h1><p class="muted">Zentraler Verarbeitungsdienst und monatliche Fahrzeugkontingente.</p></div><span class="status {{ 'status-active' if provider_available else 'status-inactive' }}">{{ "Betriebsbereit" if provider_available else "Nicht verfügbar" }}</span></div>
+
+<section class="card section-card">
+    <div class="section-heading"><div><h2>Bildverarbeitung</h2><p>API-Schlüssel bleiben geschützt in der VPS-Konfiguration.</p></div></div>
+    <div class="service-status-grid">
+        <div><span>remove.bg-Schlüssel</span><strong>{{ "Konfiguriert" if remove_bg_key_configured else "Fehlt" }}</strong></div>
+        <div><span>Photoroom-Schlüssel</span><strong>{{ ("Sandbox-Schlüssel" if photoroom_key_is_sandbox else "Konfiguriert") if photoroom_key_configured else "Fehlt" }}</strong></div>
+        <div><span>Aktiver Dienst</span><strong>{{ image_settings.provider|replace('remove_bg', 'remove.bg')|capitalize }}</strong></div>
+    </div>
+    <form class="form-grid add-row" method="post" action="/admin/image-service">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Standard-Bilddienstleister
+            <select name="provider" required>
+                <option value="disabled" {% if image_settings.provider == 'disabled' %}selected{% endif %}>Deaktiviert</option>
+                <option value="remove_bg" {% if image_settings.provider == 'remove_bg' %}selected{% endif %}>remove.bg</option>
+                <option value="photoroom" {% if image_settings.provider == 'photoroom' %}selected{% endif %}>Photoroom</option>
+            </select>
+        </label>
+        <label>Standard-Credits für neue Autohäuser
+            <input type="number" name="default_monthly_vehicle_credits" min="0" max="10000" value="{{ image_settings.default_monthly_vehicle_credits }}" required>
+        </label>
+        <label class="check-row span-2">
+            <input type="checkbox" name="photoroom_sandbox" {% if image_settings.photoroom_sandbox %}checked{% endif %}>
+            <span><strong>Photoroom Sandbox</strong><small>Kostenlose Tests mit Wasserzeichen. Für produktive Verkaufsbilder deaktivieren.</small></span>
+        </label>
+        {% if photoroom_key_is_sandbox %}<p class="muted span-2">Der VPS verwendet derzeit einen Sandbox-Schlüssel. Für Verkaufsbilder muss dort später ein Live-Schlüssel hinterlegt und die Sandbox hier deaktiviert werden.</p>{% endif %}
+        <div class="form-actions span-2"><button class="button button-primary" type="submit">Grundeinstellungen speichern</button></div>
+    </form>
+</section>
+
+<section class="card section-card" id="dealership-credits">
+    <div class="section-heading"><div><h2>Monatliche Autohaus-Kontingente</h2><p>Ein Credit deckt sämtliche Außenbilder eines Fahrzeugauftrags einschließlich Neuverarbeitung ab.</p></div></div>
+    <div class="stack">
+        {% for dealership in dealerships %}
+        {% set balance = credit_balances.get(dealership.id) %}
+        <form class="credit-row" method="post" action="/admin/dealerships/{{ dealership.id }}/credits">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="grow"><strong>{{ dealership.name }}</strong><span>{{ balance.used }} verbraucht · {{ balance.available }} verfügbar</span></div>
+            <label>Credits pro Monat<input type="number" name="monthly_vehicle_credits" min="0" max="10000" value="{{ dealership.monthly_vehicle_credits }}" required></label>
+            <button class="button button-secondary" type="submit">Speichern</button>
+        </form>
+        {% else %}<p class="empty">Noch keine Autohäuser vorhanden.</p>{% endfor %}
+    </div>
+</section>
+{% endblock %}

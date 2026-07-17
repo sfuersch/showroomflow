@@ -14,6 +14,15 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.database import get_db
+from app.image_service import (
+    IMAGE_PROVIDERS,
+    VehicleCreditsExhausted,
+    credit_balance,
+    get_image_settings,
+    photoroom_sandbox_active,
+    provider_is_available,
+    reserve_vehicle_credit,
+)
 from app.models import (
     Background,
     Brand,
@@ -311,16 +320,113 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     if admin.role == UserRole.DEALERSHIP_ADMIN:
         statement = statement.where(Dealership.id == admin.dealership_id)
     dealerships = list(db.scalars(statement))
+    credit_balances = {dealership.id: credit_balance(db, dealership) for dealership in dealerships}
     return templates.TemplateResponse(
         request,
         "admin/dashboard.html",
-        _context(request, admin, dealerships=dealerships),
+        _context(
+            request,
+            admin,
+            dealerships=dealerships,
+            credit_balances=credit_balances,
+        ),
     )
 
 
 @router.get("/dealerships", response_class=HTMLResponse)
 def dealerships_page(request: Request, db: Session = Depends(get_db)):
     return dashboard(request, db)
+
+
+@router.get("/image-service", response_class=HTMLResponse)
+def image_service_page(request: Request, db: Session = Depends(get_db)):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    if admin.role != UserRole.SYSTEM_ADMIN:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    image_settings = get_image_settings(db)
+    runtime = get_settings()
+    dealerships = list(db.scalars(select(Dealership).order_by(Dealership.name)))
+    return templates.TemplateResponse(
+        request,
+        "admin/image_service.html",
+        _context(
+            request,
+            admin,
+            image_settings=image_settings,
+            provider_available=provider_is_available(image_settings, runtime),
+            remove_bg_key_configured=bool(runtime.remove_bg_api_key),
+            photoroom_key_configured=bool(runtime.photoroom_api_key),
+            photoroom_key_is_sandbox=bool(
+                runtime.photoroom_api_key and runtime.photoroom_api_key.startswith("sandbox_")
+            ),
+            dealerships=dealerships,
+            credit_balances={
+                dealership.id: credit_balance(db, dealership) for dealership in dealerships
+            },
+        ),
+    )
+
+
+@router.post("/image-service")
+def update_image_service(
+    request: Request,
+    provider: str = Form(),
+    default_monthly_vehicle_credits: int = Form(),
+    photoroom_sandbox: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    if admin.role != UserRole.SYSTEM_ADMIN:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    if provider not in IMAGE_PROVIDERS or not 0 <= default_monthly_vehicle_credits <= 10000:
+        _flash(request, "Bitte prüfen Sie Bilddienstleister und Standardkontingent.", "error")
+    else:
+        image_settings = get_image_settings(db)
+        image_settings.provider = provider
+        image_settings.photoroom_sandbox = photoroom_sandbox == "on"
+        image_settings.default_monthly_vehicle_credits = default_monthly_vehicle_credits
+        db.commit()
+        if provider_is_available(image_settings, get_settings()) or provider == "disabled":
+            _flash(request, "Bilddienstleister-Einstellungen wurden gespeichert.")
+        else:
+            _flash(
+                request,
+                "Einstellungen gespeichert, aber für den Anbieter fehlt das VPS-Secret.",
+                "error",
+            )
+    return RedirectResponse("/admin/image-service", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/dealerships/{dealership_id}/credits")
+def update_dealership_credits(
+    dealership_id: uuid.UUID,
+    request: Request,
+    monthly_vehicle_credits: int = Form(),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    if admin.role != UserRole.SYSTEM_ADMIN:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    dealership = db.get(Dealership, dealership_id)
+    if dealership is None:
+        raise HTTPException(status_code=404, detail="Autohaus wurde nicht gefunden")
+    if not 0 <= monthly_vehicle_credits <= 10000:
+        _flash(request, "Das Monatskontingent muss zwischen 0 und 10.000 liegen.", "error")
+    else:
+        dealership.monthly_vehicle_credits = monthly_vehicle_credits
+        db.commit()
+        _flash(request, f"Credit-Kontingent für {dealership.name} wurde gespeichert.")
+    return RedirectResponse("/admin/image-service", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/dealerships")
@@ -343,7 +449,13 @@ def create_dealership(
     if _dealership_name_exists(db, cleaned_name):
         _flash(request, "Ein Autohaus mit diesem Namen ist bereits vorhanden.", "error")
         return RedirectResponse("/admin", status_code=status.HTTP_303_SEE_OTHER)
-    dealership = Dealership(name=cleaned_name, retention_days=90, auto_export_enabled=False)
+    image_settings = get_image_settings(db)
+    dealership = Dealership(
+        name=cleaned_name,
+        retention_days=90,
+        auto_export_enabled=False,
+        monthly_vehicle_credits=image_settings.default_monthly_vehicle_credits,
+    )
     db.add(dealership)
     db.commit()
     db.refresh(dealership)
@@ -371,6 +483,7 @@ def dealership_detail(
     users = list(
         db.scalars(select(User).where(User.dealership_id == dealership.id).order_by(User.email))
     )
+    balance = credit_balance(db, dealership)
     return templates.TemplateResponse(
         request,
         "admin/dealership_detail.html",
@@ -381,6 +494,7 @@ def dealership_detail(
             locations=locations,
             users=users,
             user_roles=UserRole,
+            credit_balance=balance,
         ),
     )
 
@@ -651,7 +765,8 @@ def job_detail_page(
     photoroom_variants = {
         variant.photo_asset_id: variant for variant in variants if variant.provider == "photoroom"
     }
-    settings = get_settings()
+    runtime = get_settings()
+    image_settings = get_image_settings(db)
     return templates.TemplateResponse(
         request,
         "admin/job_detail.html",
@@ -677,9 +792,11 @@ def job_detail_page(
                 for variant in variants
                 if variant.provider == "photoroom" and variant.object_key
             },
-            processing_enabled=settings.processing_enabled,
-            photoroom_enabled=settings.photoroom_enabled,
-            photoroom_sandbox=settings.photoroom_sandbox,
+            processing_enabled=provider_is_available(image_settings, runtime),
+            active_provider=image_settings.provider,
+            photoroom_enabled=runtime.photoroom_enabled,
+            photoroom_sandbox=photoroom_sandbox_active(image_settings, runtime),
+            credit_balance=credit_balance(db, dealership),
         ),
     )
 
@@ -689,7 +806,7 @@ def reprocess_photo(
     photo_id: uuid.UUID,
     request: Request,
     csrf_token: str = Form(),
-    provider: str = Form(default="remove_bg"),
+    provider: str = Form(default="primary"),
     db: Session = Depends(get_db),
 ):
     admin = _require_admin(request, db)
@@ -704,26 +821,31 @@ def reprocess_photo(
     if job is None or step is None:
         raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
     _authorized_dealership(db, admin, job.dealership_id)
-    settings = get_settings()
+    runtime = get_settings()
+    image_settings = get_image_settings(db)
     if not step.requires_processing:
         _flash(request, "Diese Fotoposition benötigt keine Freistellung.", "error")
-    elif provider == "photoroom" and not settings.photoroom_enabled:
+    elif provider == "photoroom_comparison" and not runtime.photoroom_enabled:
         _flash(request, "Photoroom ist noch nicht konfiguriert.", "error")
-    elif provider == "photoroom":
+    elif provider == "photoroom_comparison":
+        comparison_provider = "photoroom"
         variant = db.scalar(
             select(PhotoProcessingVariant).where(
                 PhotoProcessingVariant.photo_asset_id == photo.id,
-                PhotoProcessingVariant.provider == provider,
+                PhotoProcessingVariant.provider == comparison_provider,
             )
         )
         if variant is None:
-            variant = PhotoProcessingVariant(photo_asset_id=photo.id, provider=provider)
+            variant = PhotoProcessingVariant(
+                photo_asset_id=photo.id,
+                provider=comparison_provider,
+            )
             db.add(variant)
         variant.status = ProcessingStatus.QUEUED.value
         variant.error = None
         db.commit()
         try:
-            enqueue_photo_variant(photo.id, provider)
+            enqueue_photo_variant(photo.id, comparison_provider)
         except ProcessingQueueUnavailable:
             variant.status = ProcessingStatus.FAILED.value
             variant.error = "Verarbeitungswarteschlange ist nicht erreichbar"
@@ -731,25 +853,33 @@ def reprocess_photo(
             _flash(request, "Der Photoroom-Test konnte nicht gestartet werden.", "error")
         else:
             _flash(request, "Photoroom-Vergleich wurde zur Verarbeitung vorgemerkt.")
-    elif provider != "remove_bg":
+    elif provider != "primary":
         _flash(request, "Unbekannter Bildverarbeitungsdienst.", "error")
-    elif not settings.processing_enabled:
+    elif not provider_is_available(image_settings, runtime):
         _flash(request, "Es ist noch kein KI-Dienst konfiguriert.", "error")
     else:
-        photo.processing_status = ProcessingStatus.QUEUED
-        photo.processing_error = None
-        job.status = JobStatus.PROCESSING
-        db.commit()
         try:
-            enqueue_photo_processing(photo.id)
-        except ProcessingQueueUnavailable:
-            photo.processing_status = ProcessingStatus.FAILED
-            photo.processing_error = "Verarbeitungswarteschlange ist nicht erreichbar"
-            job.status = JobStatus.REVIEW_REQUIRED
+            reserve_vehicle_credit(db, job, image_settings.provider)
+        except VehicleCreditsExhausted as exc:
+            photo.processing_status = ProcessingStatus.PENDING
+            photo.processing_error = str(exc)
             db.commit()
-            _flash(request, "Die Verarbeitung konnte nicht gestartet werden.", "error")
+            _flash(request, str(exc), "error")
         else:
-            _flash(request, "Das Foto wurde zur Verarbeitung vorgemerkt.")
+            photo.processing_status = ProcessingStatus.QUEUED
+            photo.processing_error = None
+            job.status = JobStatus.PROCESSING
+            db.commit()
+            try:
+                enqueue_photo_processing(photo.id)
+            except ProcessingQueueUnavailable:
+                photo.processing_status = ProcessingStatus.FAILED
+                photo.processing_error = "Verarbeitungswarteschlange ist nicht erreichbar"
+                job.status = JobStatus.REVIEW_REQUIRED
+                db.commit()
+                _flash(request, "Die Verarbeitung konnte nicht gestartet werden.", "error")
+            else:
+                _flash(request, "Das Foto wurde zur Verarbeitung vorgemerkt.")
     return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 

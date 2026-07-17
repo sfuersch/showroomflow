@@ -16,6 +16,7 @@
         <div>
             <h2>{{ dealership.name }}</h2>
             <p>{{ "Automatischer Export aktiv" if dealership.auto_export_enabled else "Manuelle Freigabe aktiv" }}</p>
+            {% set balance = credit_balances.get(dealership.id) %}{% if balance %}<p>{{ balance.available }} von {{ balance.allowance }} Fahrzeug-Credits verfügbar</p>{% endif %}
         </div>
         <span class="status {{ 'status-active' if dealership.is_active else 'status-inactive' }}">
             {{ "Aktiv" if dealership.is_active else "Inaktiv" }}
@@ -25,6 +26,10 @@
 </section>
 
 {% if current_user.role.value == "system_admin" %}
+<a class="card configuration-link" href="/admin/image-service">
+    <div><span class="eyebrow">Systemkonfiguration</span><h2>Bilddienstleister und Credits</h2><p>Standardanbieter, Betriebsmodus und Monatskontingente verwalten.</p></div>
+    <span class="button button-primary">Einstellungen öffnen</span>
+</a>
 <section class="card section-card compact-card">
     <div>
         <h2>Autohaus hinzufügen</h2>
