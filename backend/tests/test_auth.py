@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.models import Dealership, User, UserRole
+from app.models import Dealership, Location, User, UserRole
 from app.security import hash_password
 
 engine = create_engine(
@@ -58,6 +58,29 @@ def login() -> dict[str, str | int]:
     response = client.post(
         "/api/v1/auth/login",
         json={"email": "admin@example.com", "password": "a-secure-test-password"},
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+def create_system_admin() -> User:
+    with TestingSession() as db:
+        admin = User(
+            dealership_id=None,
+            email="system@example.com",
+            password_hash=hash_password("a-secure-system-password"),
+            role=UserRole.SYSTEM_ADMIN,
+        )
+        db.add(admin)
+        db.commit()
+        db.refresh(admin)
+        return admin
+
+
+def system_login() -> dict[str, str | int]:
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "system@example.com", "password": "a-secure-system-password"},
     )
     assert response.status_code == 200
     return response.json()
@@ -153,3 +176,117 @@ def test_dealership_admin_cannot_create_system_admin() -> None:
     )
 
     assert response.status_code == 403
+
+
+def test_system_admin_creates_dealership_and_location() -> None:
+    create_system_admin()
+    tokens = system_login()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    dealership_response = client.post(
+        "/api/v1/admin/dealerships",
+        headers=headers,
+        json={
+            "name": "Autohaus Nord",
+            "auto_export_enabled": True,
+            "retention_days": 90,
+        },
+    )
+    assert dealership_response.status_code == 201
+    dealership_id = dealership_response.json()["id"]
+
+    location_response = client.post(
+        "/api/v1/locations",
+        headers=headers,
+        json={"name": "Hamburg", "dealership_id": dealership_id},
+    )
+
+    assert location_response.status_code == 201
+    assert location_response.json()["dealership_id"] == dealership_id
+
+
+def test_repeated_vin_creates_incremented_job_version() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        db_dealership = db.get(Dealership, dealership.id)
+        assert db_dealership is not None
+        db_dealership.auto_export_enabled = True
+        location = Location(dealership_id=dealership.id, name="Hauptstandort")
+        db.add(location)
+        db.commit()
+        db.refresh(location)
+        location_id = location.id
+
+    tokens = login()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    payload = {
+        "location_id": str(location_id),
+        "vin": " wvw123abc ",
+        "brand": "Volkswagen",
+    }
+
+    first = client.post("/api/v1/jobs", headers=headers, json=payload)
+    second = client.post("/api/v1/jobs", headers=headers, json=payload)
+
+    assert first.status_code == 201
+    assert first.json()["vin"] == "WVW123ABC"
+    assert first.json()["version"] == 1
+    assert first.json()["auto_export"] is True
+    assert second.status_code == 201
+    assert second.json()["version"] == 2
+
+
+def test_dealership_user_cannot_use_location_from_other_dealership() -> None:
+    create_dealership_admin()
+    with TestingSession() as db:
+        other_dealership = Dealership(name="Fremdes Autohaus")
+        db.add(other_dealership)
+        db.flush()
+        other_location = Location(dealership_id=other_dealership.id, name="Fremdstandort")
+        db.add(other_location)
+        db.commit()
+        db.refresh(other_location)
+        other_location_id = other_location.id
+
+    tokens = login()
+    response = client.post(
+        "/api/v1/jobs",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        json={
+            "location_id": str(other_location_id),
+            "vin": "VIN-ISOLATION",
+            "brand": "Test",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Standort wurde nicht gefunden"
+
+
+def test_dealership_job_list_is_tenant_scoped() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        own_location = Location(dealership_id=dealership.id, name="Eigener Standort")
+        db.add(own_location)
+        other_dealership = Dealership(name="Anderer Mandant")
+        db.add(other_dealership)
+        db.flush()
+        other_location = Location(dealership_id=other_dealership.id, name="Anderer Standort")
+        db.add(other_location)
+        db.commit()
+        db.refresh(own_location)
+        own_location_id = own_location.id
+
+    tokens = login()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    created = client.post(
+        "/api/v1/jobs",
+        headers=headers,
+        json={"location_id": str(own_location_id), "vin": "OWN-VIN", "brand": "Marke"},
+    )
+    assert created.status_code == 201
+
+    response = client.get("/api/v1/jobs", headers=headers)
+
+    assert response.status_code == 200
+    assert [job["vin"] for job in response.json()] == ["OWN-VIN"]

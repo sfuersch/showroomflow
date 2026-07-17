@@ -48,4 +48,43 @@ final class SessionStore: ObservableObject {
             }
         }
     }
+
+    func loadLocations() async throws -> [LocationSummary] {
+        try await withAccessToken { token in
+            try await apiClient.locations(accessToken: token)
+        }
+    }
+
+    func loadJobs() async throws -> [VehicleJob] {
+        try await withAccessToken { token in
+            try await apiClient.jobs(accessToken: token)
+        }
+    }
+
+    func createJob(locationID: UUID, vin: String, brand: String) async throws -> VehicleJob {
+        try await withAccessToken { token in
+            try await apiClient.createJob(
+                locationID: locationID,
+                vin: vin,
+                brand: brand,
+                accessToken: token
+            )
+        }
+    }
+
+    private func withAccessToken<Value>(
+        _ operation: (String) async throws -> Value
+    ) async throws -> Value {
+        guard let tokens = keychain.loadTokens() else {
+            throw APIError.unauthorized
+        }
+
+        do {
+            return try await operation(tokens.accessToken)
+        } catch APIError.unauthorized {
+            let renewedTokens = try await apiClient.refresh(refreshToken: tokens.refreshToken)
+            try keychain.save(tokens: renewedTokens)
+            return try await operation(renewedTokens.accessToken)
+        }
+    }
 }
