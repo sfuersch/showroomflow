@@ -3,7 +3,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models import UserRole
+from app.models import JobStatus, UserRole
 
 
 class HealthResponse(BaseModel):
@@ -26,6 +26,59 @@ class StorageHealthResponse(BaseModel):
     status: str
     provider: str
     bucket: str
+
+
+class DealershipCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    auto_export_enabled: bool = False
+    retention_days: int = Field(default=90, ge=1, le=365)
+
+
+class DealershipResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    auto_export_enabled: bool
+    retention_days: int
+    created_at: datetime
+
+
+class LocationCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    dealership_id: uuid.UUID | None = None
+
+
+class LocationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    dealership_id: uuid.UUID
+    name: str
+    created_at: datetime
+
+
+class VehicleJobCreateRequest(BaseModel):
+    dealership_id: uuid.UUID | None = None
+    location_id: uuid.UUID
+    vin: str = Field(min_length=1, max_length=64)
+    brand: str = Field(min_length=1, max_length=100)
+    auto_export: bool | None = None
+
+
+class VehicleJobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    dealership_id: uuid.UUID
+    location_id: uuid.UUID
+    created_by_id: uuid.UUID
+    vin: str
+    version: int
+    brand: str
+    status: JobStatus
+    auto_export: bool
+    created_at: datetime
 
 
 class LoginRequest(BaseModel):

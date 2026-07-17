@@ -8,9 +8,12 @@ struct RootView: View {
             if session.isRestoring {
                 ProgressView("Sitzung wird geladen …")
             } else if session.isAuthenticated {
-                JobListView {
-                    session.logout()
-                }
+                JobListView(
+                    loadJobs: session.loadJobs,
+                    loadLocations: session.loadLocations,
+                    createJob: session.createJob,
+                    onLogout: session.logout
+                )
             } else {
                 LoginView { email, password in
                     try await session.login(email: email, password: password)
