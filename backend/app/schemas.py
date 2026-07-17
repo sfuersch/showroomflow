@@ -95,6 +95,33 @@ class AppConfigurationResponse(BaseModel):
     capture_steps: list[CaptureStepConfigurationResponse]
 
 
+class PhotoAssetResponse(BaseModel):
+    id: uuid.UUID
+    capture_step_id: uuid.UUID
+    revision: int
+    image_url: str
+    uploaded_at: datetime
+
+
+class CaptureSessionResponse(BaseModel):
+    job: "VehicleJobResponse"
+    capture_steps: list[CaptureStepConfigurationResponse]
+    photos: list[PhotoAssetResponse]
+
+
+class PhotoUploadRequest(BaseModel):
+    capture_step_id: uuid.UUID
+    content_type: str = Field(pattern="^image/jpeg$")
+    size_bytes: int = Field(ge=1, le=25 * 1024 * 1024)
+
+
+class PhotoUploadResponse(BaseModel):
+    photo_id: uuid.UUID
+    revision: int
+    upload_url: str
+    expires_in: int
+
+
 class VehicleJobCreateRequest(BaseModel):
     dealership_id: uuid.UUID | None = None
     location_id: uuid.UUID

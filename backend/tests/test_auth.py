@@ -10,7 +10,16 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.models import Background, Brand, CaptureStep, Dealership, Location, User, UserRole
+from app.models import (
+    Background,
+    Brand,
+    CaptureStep,
+    Dealership,
+    Location,
+    User,
+    UserRole,
+    VehicleJob,
+)
 from app.security import hash_password
 from app.storage import get_object_storage
 
@@ -40,6 +49,14 @@ class ConfigurationStorage:
 
     def create_download_url(self, *, object_key: str, expires_in: int = 900) -> str:
         return f"https://images.example/{object_key}?expires={expires_in}"
+
+    def create_upload_url(
+        self, *, object_key: str, content_type: str, expires_in: int = 900
+    ) -> str:
+        return f"https://uploads.example/{object_key}?type={content_type}&expires={expires_in}"
+
+    def object_metadata(self, *, object_key: str) -> tuple[int, str]:
+        return 1234, "image/jpeg"
 
 
 @pytest.fixture(autouse=True)
@@ -670,3 +687,113 @@ def test_job_stores_selected_brand_and_background() -> None:
     assert response.json()["brand"] == "Volkswagen"
     assert response.json()["brand_id"] == str(brand_id)
     assert response.json()["background_id"] == str(background_id)
+
+
+def test_guided_capture_upload_tracks_progress_and_revision() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Front",
+            instruction="Gerade aufnehmen",
+            category="exterior",
+            capture_order=1,
+            export_order=1,
+            requires_processing=True,
+        )
+        db.add_all([location, step])
+        db.commit()
+        db.refresh(location)
+        db.refresh(step)
+        location_id = location.id
+        step_id = step.id
+    tokens = login()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    job_response = client.post(
+        "/api/v1/jobs",
+        headers=headers,
+        json={"location_id": str(location_id), "vin": "PHOTO-VIN", "brand": "Ford"},
+    )
+    job_id = job_response.json()["id"]
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        initial_session = client.get(f"/api/v1/jobs/{job_id}/capture", headers=headers)
+        first_upload = client.post(
+            f"/api/v1/jobs/{job_id}/capture/uploads",
+            headers=headers,
+            json={
+                "capture_step_id": str(step_id),
+                "content_type": "image/jpeg",
+                "size_bytes": 1234,
+            },
+        )
+        first_complete = client.post(
+            f"/api/v1/jobs/{job_id}/capture/photos/{first_upload.json()['photo_id']}/complete",
+            headers=headers,
+        )
+        second_upload = client.post(
+            f"/api/v1/jobs/{job_id}/capture/uploads",
+            headers=headers,
+            json={
+                "capture_step_id": str(step_id),
+                "content_type": "image/jpeg",
+                "size_bytes": 1234,
+            },
+        )
+        second_complete = client.post(
+            f"/api/v1/jobs/{job_id}/capture/photos/{second_upload.json()['photo_id']}/complete",
+            headers=headers,
+        )
+        final_session = client.get(f"/api/v1/jobs/{job_id}/capture", headers=headers)
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert initial_session.status_code == 200
+    assert len(initial_session.json()["capture_steps"]) == 1
+    assert initial_session.json()["photos"] == []
+    assert first_upload.status_code == 201
+    assert first_upload.json()["revision"] == 1
+    assert first_complete.status_code == 200
+    assert second_upload.json()["revision"] == 2
+    assert second_complete.status_code == 200
+    assert len(final_session.json()["photos"]) == 1
+    assert final_session.json()["photos"][0]["revision"] == 2
+
+
+def test_guided_capture_is_tenant_scoped() -> None:
+    create_dealership_admin()
+    with TestingSession() as db:
+        other_dealership = Dealership(name="Fremdes Autohaus")
+        db.add(other_dealership)
+        db.flush()
+        other_location = Location(dealership_id=other_dealership.id, name="Fremdstandort")
+        other_user = User(
+            dealership_id=other_dealership.id,
+            email="other@example.com",
+            password_hash=hash_password("another-secure-password"),
+            role=UserRole.DEALERSHIP_ADMIN,
+        )
+        db.add_all([other_location, other_user])
+        db.flush()
+        other_job = VehicleJob(
+            dealership_id=other_dealership.id,
+            location_id=other_location.id,
+            created_by_id=other_user.id,
+            vin="OTHER-VIN",
+            version=1,
+            brand="Andere Marke",
+        )
+        db.add(other_job)
+        db.commit()
+        db.refresh(other_job)
+        other_job_id = other_job.id
+
+    tokens = login()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    response = client.get(f"/api/v1/jobs/{other_job_id}/capture", headers=headers)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Auftrag wurde nicht gefunden"

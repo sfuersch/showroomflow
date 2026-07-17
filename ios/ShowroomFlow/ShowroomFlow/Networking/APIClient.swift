@@ -103,6 +103,61 @@ struct APIClient {
         return try JSONDecoder().decode(VehicleJob.self, from: data)
     }
 
+    func captureSession(jobID: UUID, accessToken: String) async throws -> CaptureSession {
+        let data = try await authorizedRequest(
+            path: "jobs/\(jobID.uuidString)/capture",
+            accessToken: accessToken
+        )
+        return try JSONDecoder().decode(CaptureSession.self, from: data)
+    }
+
+    func requestPhotoUpload(
+        jobID: UUID,
+        captureStepID: UUID,
+        sizeBytes: Int,
+        accessToken: String
+    ) async throws -> PhotoUploadTicket {
+        let body = try JSONEncoder().encode(
+            PhotoUploadPayload(
+                captureStepID: captureStepID,
+                contentType: "image/jpeg",
+                sizeBytes: sizeBytes
+            )
+        )
+        let data = try await authorizedRequest(
+            path: "jobs/\(jobID.uuidString)/capture/uploads",
+            method: "POST",
+            accessToken: accessToken,
+            body: body
+        )
+        return try JSONDecoder().decode(PhotoUploadTicket.self, from: data)
+    }
+
+    func uploadPhoto(_ data: Data, to uploadURL: URL) async throws {
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "PUT"
+        request.setValue("image/jpeg", forHTTPHeaderField: "Content-Type")
+        request.httpBody = data
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              200..<300 ~= httpResponse.statusCode else {
+            throw APIError.server("Das Foto konnte nicht hochgeladen werden.")
+        }
+    }
+
+    func completePhotoUpload(
+        jobID: UUID,
+        photoID: UUID,
+        accessToken: String
+    ) async throws -> CapturedPhoto {
+        let data = try await authorizedRequest(
+            path: "jobs/\(jobID.uuidString)/capture/photos/\(photoID.uuidString)/complete",
+            method: "POST",
+            accessToken: accessToken
+        )
+        return try JSONDecoder().decode(CapturedPhoto.self, from: data)
+    }
+
     private func authorizedRequest(
         path: String,
         method: String = "GET",
@@ -152,6 +207,7 @@ struct APIClient {
         }
         return try JSONDecoder().decode(TokenPair.self, from: data)
     }
+
 }
 
 enum APIError: LocalizedError {
@@ -302,6 +358,46 @@ struct ConfiguredCaptureStep: Decodable, Identifiable {
     }
 }
 
+struct CaptureSession: Decodable {
+    let job: VehicleJob
+    let captureSteps: [ConfiguredCaptureStep]
+    let photos: [CapturedPhoto]
+
+    enum CodingKeys: String, CodingKey {
+        case job, photos
+        case captureSteps = "capture_steps"
+    }
+}
+
+struct CapturedPhoto: Decodable, Identifiable {
+    let id: UUID
+    let captureStepID: UUID
+    let revision: Int
+    let imageURL: URL
+    let uploadedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, revision
+        case captureStepID = "capture_step_id"
+        case imageURL = "image_url"
+        case uploadedAt = "uploaded_at"
+    }
+}
+
+struct PhotoUploadTicket: Decodable {
+    let photoID: UUID
+    let revision: Int
+    let uploadURL: URL
+    let expiresIn: Int
+
+    enum CodingKeys: String, CodingKey {
+        case revision
+        case photoID = "photo_id"
+        case uploadURL = "upload_url"
+        case expiresIn = "expires_in"
+    }
+}
+
 private struct CreateJobPayload: Encodable {
     let locationID: UUID
     let vin: String
@@ -314,5 +410,17 @@ private struct CreateJobPayload: Encodable {
         case locationID = "location_id"
         case brandID = "brand_id"
         case backgroundID = "background_id"
+    }
+}
+
+private struct PhotoUploadPayload: Encodable {
+    let captureStepID: UUID
+    let contentType: String
+    let sizeBytes: Int
+
+    enum CodingKeys: String, CodingKey {
+        case captureStepID = "capture_step_id"
+        case contentType = "content_type"
+        case sizeBytes = "size_bytes"
     }
 }

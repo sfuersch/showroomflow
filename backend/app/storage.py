@@ -12,6 +12,10 @@ class StorageUnavailableError(RuntimeError):
     """Raised when the configured object store cannot be reached."""
 
 
+class StorageObjectNotFoundError(RuntimeError):
+    """Raised when an expected object does not exist."""
+
+
 class ObjectStorage:
     def __init__(self, settings: Settings, client: Any | None = None) -> None:
         self.bucket = settings.storage_bucket
@@ -79,6 +83,20 @@ class ObjectStorage:
             )
         except (BotoCoreError, ClientError) as exc:
             raise StorageUnavailableError("Object storage is unavailable") from exc
+
+    def object_metadata(self, *, object_key: str) -> tuple[int, str]:
+        if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+            raise ValueError("Invalid object key")
+        try:
+            response = self._client.head_object(Bucket=self.bucket, Key=object_key)
+        except ClientError as exc:
+            error_code = str(exc.response.get("Error", {}).get("Code", ""))
+            if error_code in {"404", "NoSuchKey", "NotFound"}:
+                raise StorageObjectNotFoundError("Object does not exist") from exc
+            raise StorageUnavailableError("Object storage is unavailable") from exc
+        except BotoCoreError as exc:
+            raise StorageUnavailableError("Object storage is unavailable") from exc
+        return int(response["ContentLength"]), str(response.get("ContentType", ""))
 
 
 @lru_cache
