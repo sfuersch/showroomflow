@@ -10,6 +10,8 @@ Produktive Adresse: `https://showroomflow.promotekk.com`
 - `backend`: FastAPI-API und spaetere Verarbeitungsworker
 - `docs`: Architektur und fachliche Entscheidungen
 - `compose.yaml`: lokale beziehungsweise VPS-nahe Docker-Umgebung
+- `compose.production.yaml`: abgeschottete Produktionskonfiguration fuer Plesk
+- `ops`: Plesk-nginx- und Sicherungskonfiguration
 
 ## Lokaler Start des Backends
 
@@ -23,6 +25,8 @@ Beim Start werden Datenbankmigrationen ausgefuehrt und der in `.env` konfigurier
 Die Authentifizierung verwendet kurzlebige Zugriffstoken und rotierende Sitzungstoken. Benutzer werden ueber `/api/v1/admin/users` verwaltet. Autohausadministratoren sehen und bearbeiten dabei ausschliesslich Benutzer ihres eigenen Autohauses.
 
 Die Beispielkonfiguration ist nur fuer die lokale Entwicklung bestimmt. Produktive SFTP-, KI- und Zugangsdaten werden nicht in Git gespeichert.
+
+Die produktionsnahe Installation auf Plesk ist in `docs/deployment-plesk.md` beschrieben.
 
 ## iOS-App
 

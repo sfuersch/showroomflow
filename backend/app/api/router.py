@@ -1,7 +1,9 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
+from sqlalchemy import text
 
+from app.api.dependencies import DatabaseSession
 from app.config import get_settings
 from app.schemas import AppInfoResponse, HealthResponse
 from app.api.auth import router as auth_router
@@ -22,6 +24,12 @@ def health() -> HealthResponse:
         retention_days=settings.retention_days,
         timestamp=datetime.now(timezone.utc),
     )
+
+
+@router.get("/ready", response_model=HealthResponse, tags=["system"])
+def ready(db: DatabaseSession) -> HealthResponse:
+    db.execute(text("SELECT 1"))
+    return health()
 
 
 @router.get("/app-info", response_model=AppInfoResponse, tags=["system"])

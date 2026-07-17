@@ -11,6 +11,11 @@ COPY migrations ./migrations
 COPY alembic.ini start.sh ./
 RUN pip install --no-cache-dir .
 RUN chmod +x /app/start.sh
+RUN addgroup --system showroomflow \
+    && adduser --system --ingroup showroomflow showroomflow \
+    && chown -R showroomflow:showroomflow /app
+
+USER showroomflow
 
 EXPOSE 8000
 CMD ["/app/start.sh"]

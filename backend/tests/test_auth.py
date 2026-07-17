@@ -77,6 +77,12 @@ def test_login_and_current_user() -> None:
     assert response.json()["role"] == "dealership_admin"
 
 
+def test_ready_checks_database() -> None:
+    response = client.get("/api/v1/ready")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
 def test_refresh_token_is_rotated() -> None:
     create_dealership_admin()
     tokens = login()

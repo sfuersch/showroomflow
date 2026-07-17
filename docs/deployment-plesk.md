@@ -1,0 +1,90 @@
+# Produktionsnahes Deployment auf Plesk
+
+Diese Anleitung ist fuer Ubuntu 24.04, Plesk Obsidian, Docker Compose v5 und die Domain `showroomflow.promotekk.com` vorbereitet. ShowroomFlow bindet ausschliesslich an `127.0.0.1:18080`; Datenbank und Redis bleiben in einem internen Docker-Netzwerk.
+
+## 1. DNS vorbereiten
+
+Beim DNS-Anbieter einen A-Record fuer `showroomflow.promotekk.com` auf die oeffentliche IPv4-Adresse des VPS setzen. Einen AAAA-Record nur setzen, wenn der VPS korrekt ueber IPv6 erreichbar ist.
+
+## 2. Subdomain in Plesk anlegen
+
+1. In Plesk `showroomflow.promotekk.com` als Subdomain anlegen.
+2. Ein Let's-Encrypt-Zertifikat fuer die Subdomain ausstellen.
+3. Dauerhafte Weiterleitung von HTTP auf HTTPS aktivieren.
+4. Noch keine globalen nginx-Einstellungen aendern.
+
+## 3. Repository im Plesk-Terminal installieren
+
+```bash
+mkdir -p /opt/showroomflow
+git clone https://github.com/sfuersch/showroomflow.git /opt/showroomflow
+cd /opt/showroomflow
+cp .env.production.example .env.production
+chmod 600 .env.production
+```
+
+Alle Platzhalter in `.env.production` ersetzen. Passwoerter mit Sonderzeichen muessen in `SHOWROOMFLOW_DATABASE_URL` und `SHOWROOMFLOW_REDIS_URL` URL-kodiert werden. Geheimnisse niemals committen oder im Chat teilen.
+
+Ein sicheres Anwendungsgeheimnis kann auf dem VPS so erzeugt werden:
+
+```bash
+openssl rand -hex 48
+```
+
+## 4. Konfiguration vor dem Start pruefen
+
+```bash
+cd /opt/showroomflow
+docker compose --env-file .env.production -f compose.production.yaml config --quiet
+docker compose --env-file .env.production -f compose.production.yaml build
+```
+
+## 5. Container starten
+
+```bash
+cd /opt/showroomflow
+docker compose --env-file .env.production -f compose.production.yaml up -d
+docker compose --env-file .env.production -f compose.production.yaml ps
+docker compose --env-file .env.production -f compose.production.yaml logs --tail=100 api
+curl --fail http://127.0.0.1:18080/api/v1/ready
+```
+
+Nach erfolgreicher erster Anmeldung die beiden `SHOWROOMFLOW_BOOTSTRAP_ADMIN_*`-Zeilen aus `.env.production` entfernen und den API-Container neu erstellen.
+
+## 6. Plesk nginx verbinden
+
+Unter `Domains > showroomflow.promotekk.com > Apache & nginx Settings` den Proxy-Modus fuer diese Subdomain deaktivieren und PHP-Unterstuetzung abschalten. Danach den Inhalt aus `ops/plesk-nginx.conf` als zusaetzliche nginx-Direktiven eintragen. Plesk muss die Konfiguration ohne Fehler annehmen.
+
+Anschliessend pruefen:
+
+```bash
+curl --fail https://showroomflow.promotekk.com/api/v1/health
+curl --fail https://showroomflow.promotekk.com/api/v1/ready
+```
+
+## 7. Datenbanksicherung
+
+```bash
+chmod 750 /opt/showroomflow/ops/backup-database.sh
+mkdir -p /var/backups/showroomflow
+/opt/showroomflow/ops/backup-database.sh
+ls -lh /var/backups/showroomflow
+```
+
+Nach erfolgreichem Test den Befehl ueber Plesk als taegliche geplante Aufgabe ausfuehren. Die lokale Sicherung wird standardmaessig 14 Tage aufbewahrt. Zusaetzlich sollte das Plesk-Serverbackup extern gespeichert werden.
+
+## 8. Aktualisierung
+
+Erst nach Datenbanksicherung aktualisieren:
+
+```bash
+cd /opt/showroomflow
+git pull --ff-only
+docker compose --env-file .env.production -f compose.production.yaml build
+docker compose --env-file .env.production -f compose.production.yaml up -d
+docker compose --env-file .env.production -f compose.production.yaml ps
+```
+
+## Rollback
+
+Vor jedem produktiven Update den aktuellen Commit notieren und eine Datenbanksicherung erstellen. Ein Datenbank-Rollback darf nicht allein durch Zuruecksetzen des Git-Commits erfolgen; Migrationen muessen passend zur betroffenen Version behandelt werden.

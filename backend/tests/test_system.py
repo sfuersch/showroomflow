@@ -1,5 +1,8 @@
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from app.config import Settings
 from app.main import app
 
 
@@ -19,3 +22,23 @@ def test_app_info() -> None:
     assert response.json()["name"] == "ShowroomFlow"
     assert response.json()["output_width"] == 1920
     assert response.json()["output_height"] == 1440
+
+
+def test_production_rejects_placeholder_secrets() -> None:
+    with pytest.raises(ValidationError):
+        Settings(environment="production", secret_key="replace-with-an-insecure-placeholder-value")
+
+
+def test_production_accepts_complete_secure_configuration() -> None:
+    settings = Settings(
+        environment="production",
+        secret_key="a" * 64,
+        database_url="postgresql+psycopg://user:secret@db:5432/showroomflow",
+        redis_url="redis://:secret@redis:6379/0",
+        storage_endpoint="https://s3.example.com",
+        storage_region="eu-central-1",
+        storage_access_key="production-access-key",
+        storage_secret_key="production-secret-key",
+        storage_bucket="showroomflow-production",
+    )
+    assert settings.environment == "production"
