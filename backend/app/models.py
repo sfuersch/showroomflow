@@ -27,6 +27,15 @@ class JobStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+class ProcessingStatus(str, enum.Enum):
+    NOT_REQUIRED = "not_required"
+    PENDING = "pending"
+    QUEUED = "queued"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class Timestamped:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -93,6 +102,11 @@ class Background(Timestamped, Base):
     name: Mapped[str] = mapped_column(String(160))
     object_key: Mapped[str] = mapped_column(String(500), unique=True)
     content_type: Mapped[str] = mapped_column(String(100))
+    vehicle_scale_percent: Mapped[int] = mapped_column(Integer, default=78)
+    vehicle_bottom_percent: Mapped[int] = mapped_column(Integer, default=90)
+    shadow_opacity_percent: Mapped[int] = mapped_column(Integer, default=32)
+    reflection_opacity_percent: Mapped[int] = mapped_column(Integer, default=10)
+    brightness_percent: Mapped[int] = mapped_column(Integer, default=100)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     locations: Mapped[list[Location]] = relationship(secondary="background_locations")
@@ -187,6 +201,22 @@ class PhotoAsset(Timestamped, Base):
     original_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_selected: Mapped[bool] = mapped_column(Boolean, default=False)
+    processing_status: Mapped[ProcessingStatus] = mapped_column(
+        Enum(ProcessingStatus), default=ProcessingStatus.NOT_REQUIRED
+    )
+    processed_object_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, unique=True
+    )
+    processed_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    processed_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processing_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    processing_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    processing_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class ExportRun(Timestamped, Base):

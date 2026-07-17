@@ -45,6 +45,36 @@ services:
         max-size: 20m
         max-file: "5"
 
+  worker:
+    container_name: showroomflow-worker
+    build:
+      context: ./backend
+    command: python -m app.worker
+    restart: unless-stopped
+    init: true
+    env_file: .env.production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1536m
+    cpus: 2.0
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
+
   db:
     container_name: showroomflow-db
     image: postgres:16-alpine

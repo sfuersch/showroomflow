@@ -1,0 +1,17 @@
+{% extends "admin/base.html" %}
+{% block title %}Fahrzeugaufträge · {{ dealership.name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><span>Fahrzeugaufträge</span></nav>
+<div class="page-heading"><div><span class="eyebrow">Fahrzeugaufträge</span><h1>{{ dealership.name }}</h1><p class="muted">Aufnahmen, Verarbeitung und spätere Exporte kontrollieren.</p></div><span class="count">{{ jobs|length }}</span></div>
+<section class="card section-card">
+    <div class="job-list">
+        {% for job in jobs %}
+        <a class="job-row" href="/admin/jobs/{{ job.id }}">
+            <div><strong>{{ job.vin }}</strong><span>Version {{ job.version }} · {{ job.brand }}</span></div>
+            <div><strong>{{ locations[job.location_id].name if job.location_id in locations else "Unbekannter Standort" }}</strong><span>{{ job.created_at.strftime('%d.%m.%Y %H:%M') }}</span></div>
+            <span class="status status-{{ 'active' if job.status.value in ['completed', 'review_required'] else 'inactive' }}">{{ job.status.value|replace('_', ' ') }}</span>
+        </a>
+        {% else %}<p class="empty">Noch keine Fahrzeugaufträge vorhanden.</p>{% endfor %}
+    </div>
+</section>
+{% endblock %}

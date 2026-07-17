@@ -1,0 +1,21 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ job.vin }} · V{{ job.version }}{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}/jobs">Fahrzeugaufträge</a><span>›</span><span>{{ job.vin }}</span></nav>
+<div class="page-heading"><div><span class="eyebrow">Fahrzeugauftrag · Version {{ job.version }}</span><h1>{{ job.vin }}</h1><p class="muted">{{ job.brand }} · Status: {{ job.status.value|replace('_', ' ') }}</p></div></div>
+{% if not processing_enabled %}<div class="flash flash-error">Der KI-Dienst ist noch nicht konfiguriert. Originalbilder bleiben verfügbar; Freistellungen können danach manuell gestartet werden.</div>{% endif %}
+<section class="photo-review-grid">
+    {% for photo in photos %}
+    {% set step = steps.get(photo.capture_step_id) %}
+    <article class="card photo-review-card">
+        <div class="section-heading"><div><h2>{{ step.name if step else "Fotoposition" }}</h2><p>Revision {{ photo.revision }}</p></div><span class="status status-{{ 'active' if photo.processing_status.value in ['completed', 'not_required'] else 'inactive' }}">{{ photo.processing_status.value|replace('_', ' ') }}</span></div>
+        <div class="photo-pair">
+            <a href="{{ original_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ original_urls[photo.id] }}" alt="Original {{ step.name if step else '' }}"><span>Original</span></a>
+            {% if photo.id in processed_urls %}<a href="{{ processed_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ processed_urls[photo.id] }}" alt="Bearbeitet {{ step.name if step else '' }}"><span>Bearbeitet</span></a>{% else %}<div class="photo-placeholder"><span>Noch kein bearbeitetes Bild</span></div>{% endif %}
+        </div>
+        {% if photo.processing_error %}<p class="field-error">{{ photo.processing_error }}</p>{% endif %}
+        {% if step and step.requires_processing %}<form method="post" action="/admin/photos/{{ photo.id }}/process"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary button-wide" type="submit" {% if not processing_enabled or photo.processing_status.value in ['queued', 'processing'] %}disabled{% endif %}>{{ "Erneut verarbeiten" if photo.processed_object_key else "Verarbeitung starten" }}</button></form>{% endif %}
+    </article>
+    {% else %}<p class="empty">Für diesen Auftrag wurden noch keine Fotos hochgeladen.</p>{% endfor %}
+</section>
+{% endblock %}

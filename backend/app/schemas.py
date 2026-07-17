@@ -3,7 +3,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models import JobStatus, UserRole
+from app.models import JobStatus, ProcessingStatus, UserRole
 
 
 class HealthResponse(BaseModel):
@@ -100,6 +100,9 @@ class PhotoAssetResponse(BaseModel):
     capture_step_id: uuid.UUID
     revision: int
     image_url: str
+    processed_image_url: str | None = None
+    processing_status: ProcessingStatus
+    processing_error: str | None = None
     uploaded_at: datetime
 
 

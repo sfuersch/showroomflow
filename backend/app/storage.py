@@ -84,6 +84,20 @@ class ObjectStorage:
         except (BotoCoreError, ClientError) as exc:
             raise StorageUnavailableError("Object storage is unavailable") from exc
 
+    def get_object(self, *, object_key: str) -> bytes:
+        if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+            raise ValueError("Invalid object key")
+        try:
+            response = self._client.get_object(Bucket=self.bucket, Key=object_key)
+            return bytes(response["Body"].read())
+        except ClientError as exc:
+            error_code = str(exc.response.get("Error", {}).get("Code", ""))
+            if error_code in {"404", "NoSuchKey", "NotFound"}:
+                raise StorageObjectNotFoundError("Object does not exist") from exc
+            raise StorageUnavailableError("Object storage is unavailable") from exc
+        except BotoCoreError as exc:
+            raise StorageUnavailableError("Object storage is unavailable") from exc
+
     def object_metadata(self, *, object_key: str) -> tuple[int, str]:
         if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
             raise ValueError("Invalid object key")

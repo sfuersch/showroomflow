@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     storage_secret_key: str = "development-only-change-me"
     storage_bucket: str = "showroomflow"
     retention_days: int = Field(default=90, ge=1)
+    processing_provider: str = "disabled"
+    processing_queue: str = "showroomflow-processing"
+    remove_bg_api_key: str | None = None
+    output_width: int = Field(default=1920, ge=640, le=7680)
+    output_height: int = Field(default=1440, ge=480, le=4320)
+
+    @property
+    def processing_enabled(self) -> bool:
+        return self.processing_provider != "disabled"
 
     @property
     def allowed_hosts_list(self) -> list[str]:
@@ -61,6 +70,10 @@ class Settings(BaseSettings):
             or "replace" in self.bootstrap_admin_password.lower()
         ):
             raise ValueError("Bootstrap administrator password is not secure")
+        if self.processing_provider not in {"disabled", "remove_bg"}:
+            raise ValueError("SHOWROOMFLOW_PROCESSING_PROVIDER is not supported")
+        if self.processing_provider == "remove_bg" and not self.remove_bg_api_key:
+            raise ValueError("SHOWROOMFLOW_REMOVE_BG_API_KEY is required for remove_bg")
         return self
 
 
