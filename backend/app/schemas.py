@@ -22,6 +22,12 @@ class AppInfoResponse(BaseModel):
     output_height: int
 
 
+class StorageHealthResponse(BaseModel):
+    status: str
+    provider: str
+    bucket: str
+
+
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=256)

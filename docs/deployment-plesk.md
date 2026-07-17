@@ -45,7 +45,7 @@ docker compose --env-file .env.production -f compose.production.yaml build
 
 ```bash
 cd /opt/showroomflow
-docker compose --env-file .env.production -f compose.production.yaml up -d
+docker compose --env-file .env.production -f compose.production.yaml up -d --wait
 docker compose --env-file .env.production -f compose.production.yaml ps
 docker compose --env-file .env.production -f compose.production.yaml logs --tail=100 api
 curl --fail http://127.0.0.1:18080/api/v1/ready
@@ -83,7 +83,7 @@ Erst nach Datenbanksicherung aktualisieren:
 cd /opt/showroomflow
 git pull --ff-only
 docker compose --env-file .env.production -f compose.production.yaml build
-docker compose --env-file .env.production -f compose.production.yaml up -d
+docker compose --env-file .env.production -f compose.production.yaml up -d --wait
 docker compose --env-file .env.production -f compose.production.yaml ps
 ```
 
