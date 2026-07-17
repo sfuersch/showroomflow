@@ -54,3 +54,12 @@ flowchart LR
 - SFTP- und KI-Zugangsdaten nur als verschluesselte Serverkonfiguration
 - keine produktiven Geheimnisse in Git oder in der iOS-App
 - revisionsfaehiges Protokoll fuer Freigaben, Aenderungen und Exporte
+
+## Anmeldung und Rollen
+
+- Passwoerter werden mit Argon2 gehasht.
+- Zugriffstoken sind 30 Minuten gueltig.
+- Sitzungstoken werden bei jeder Erneuerung rotiert und serverseitig widerrufbar gespeichert.
+- Die iOS-App legt Sitzungstoken ausschliesslich im iOS-Schluesselbund ab.
+- Autohausadministratoren koennen nur Benutzer ihres eigenen Autohauses verwalten.
+- Nur Systemadministratoren duerfen systemweite Benutzer anlegen.

@@ -18,6 +18,10 @@ Produktive Adresse: `https://showroomflow.promotekk.com`
 3. API-Dokumentation unter `http://localhost:8000/docs` aufrufen.
 4. Statuspruefung unter `http://localhost:8000/api/v1/health` aufrufen.
 
+Beim Start werden Datenbankmigrationen ausgefuehrt und der in `.env` konfigurierte erste Systemadministrator einmalig angelegt. Danach sollte dessen Bootstrap-Passwort aus der Serverkonfiguration entfernt werden.
+
+Die Authentifizierung verwendet kurzlebige Zugriffstoken und rotierende Sitzungstoken. Benutzer werden ueber `/api/v1/admin/users` verwaltet. Autohausadministratoren sehen und bearbeiten dabei ausschliesslich Benutzer ihres eigenen Autohauses.
+
 Die Beispielkonfiguration ist nur fuer die lokale Entwicklung bestimmt. Produktive SFTP-, KI- und Zugangsdaten werden nicht in Git gespeichert.
 
 ## iOS-App

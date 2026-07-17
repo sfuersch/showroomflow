@@ -3,7 +3,9 @@ import SwiftUI
 struct LoginView: View {
     @State private var email = ""
     @State private var password = ""
-    let onLogin: () -> Void
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    let onLogin: (String, String) async throws -> Void
 
     var body: some View {
         NavigationStack {
@@ -17,9 +19,25 @@ struct LoginView: View {
                         .textContentType(.password)
                 }
 
-                Button("Anmelden", action: onLogin)
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                Button {
+                    Task { await login() }
+                } label: {
+                    HStack {
+                        if isLoading {
+                            ProgressView()
+                        }
+                        Text("Anmelden")
+                    }
                     .frame(maxWidth: .infinity)
-                    .disabled(email.isEmpty || password.isEmpty)
+                }
+                .disabled(email.isEmpty || password.isEmpty || isLoading)
             }
             .navigationTitle("ShowroomFlow")
             .safeAreaInset(edge: .bottom) {
@@ -30,8 +48,21 @@ struct LoginView: View {
             }
         }
     }
+
+    @MainActor
+    private func login() async {
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+
+        do {
+            try await onLogin(email, password)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }
 
 #Preview {
-    LoginView(onLogin: {})
+    LoginView { _, _ in }
 }

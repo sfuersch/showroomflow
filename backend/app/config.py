@@ -15,7 +15,11 @@ class Settings(BaseSettings):
 
     environment: str = "development"
     public_base_url: str = "https://showroomflow.promotekk.com"
-    secret_key: str = Field(default="development-only-change-me", min_length=24)
+    secret_key: str = Field(default="development-only-change-me-please", min_length=32)
+    access_token_minutes: int = Field(default=30, ge=5, le=1440)
+    refresh_token_days: int = Field(default=30, ge=1, le=90)
+    bootstrap_admin_email: str | None = None
+    bootstrap_admin_password: str | None = None
     database_url: str = "postgresql+psycopg://showroomflow:showroomflow@db:5432/showroomflow"
     redis_url: str = "redis://redis:6379/0"
     storage_endpoint: str = "http://minio:9000"

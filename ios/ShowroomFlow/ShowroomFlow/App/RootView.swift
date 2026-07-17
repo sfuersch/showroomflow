@@ -1,19 +1,26 @@
 import SwiftUI
 
 struct RootView: View {
-    @State private var isAuthenticated = false
+    @StateObject private var session = SessionStore()
 
     var body: some View {
         Group {
-            if isAuthenticated {
-                JobListView()
+            if session.isRestoring {
+                ProgressView("Sitzung wird geladen …")
+            } else if session.isAuthenticated {
+                JobListView {
+                    session.logout()
+                }
             } else {
-                LoginView {
-                    isAuthenticated = true
+                LoginView { email, password in
+                    try await session.login(email: email, password: password)
                 }
             }
         }
         .tint(.indigo)
+        .task {
+            await session.restore()
+        }
     }
 }
 

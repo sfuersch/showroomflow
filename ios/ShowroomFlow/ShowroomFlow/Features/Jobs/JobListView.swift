@@ -2,6 +2,7 @@ import SwiftUI
 
 struct JobListView: View {
     @State private var isCreatingJob = false
+    let onLogout: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -12,6 +13,9 @@ struct JobListView: View {
             )
             .navigationTitle("Fahrzeuge")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Abmelden", systemImage: "rectangle.portrait.and.arrow.right", action: onLogout)
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Neuer Auftrag", systemImage: "plus") {
                         isCreatingJob = true
@@ -26,5 +30,5 @@ struct JobListView: View {
 }
 
 #Preview {
-    JobListView()
+    JobListView(onLogout: {})
 }

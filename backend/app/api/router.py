@@ -4,8 +4,12 @@ from fastapi import APIRouter
 
 from app.config import get_settings
 from app.schemas import AppInfoResponse, HealthResponse
+from app.api.auth import router as auth_router
+from app.api.users import router as users_router
 
 router = APIRouter()
+router.include_router(auth_router)
+router.include_router(users_router)
 
 
 @router.get("/health", response_model=HealthResponse, tags=["system"])
