@@ -1,16 +1,53 @@
 import AVFoundation
+import CoreMotion
 import Foundation
+import UIKit
 
 final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
     let session = AVCaptureSession()
 
     @Published private(set) var isReady = false
+    @Published private(set) var isLandscape = false
+    @Published private(set) var previewRotationAngle: CGFloat = 0
+    @Published private(set) var horizonAngle: Double = 0
+    @Published private(set) var verticalAngle: Double = 0
+    @Published private(set) var isMotionAvailable = false
     @Published private(set) var errorMessage: String?
 
     private let photoOutput = AVCapturePhotoOutput()
+    private let motionManager = CMMotionManager()
+    private let motionQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.promotekk.showroomflow.motion"
+        queue.qualityOfService = .userInteractive
+        return queue
+    }()
     private let sessionQueue = DispatchQueue(label: "com.promotekk.showroomflow.camera")
     private var isConfigured = false
     private var photoContinuation: CheckedContinuation<Data, Error>?
+    private var orientationObserver: NSObjectProtocol?
+
+    override init() {
+        super.init()
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        orientationObserver = NotificationCenter.default.addObserver(
+            forName: UIDevice.orientationDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateOrientation()
+        }
+        updateOrientation()
+        startMotionUpdates()
+    }
+
+    deinit {
+        if let orientationObserver {
+            NotificationCenter.default.removeObserver(orientationObserver)
+        }
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        motionManager.stopDeviceMotionUpdates()
+    }
 
     func start() async {
         guard await cameraAccessGranted() else {
@@ -50,10 +87,12 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
             guard let self, self.session.isRunning else { return }
             self.session.stopRunning()
         }
+        motionManager.stopDeviceMotionUpdates()
     }
 
     func capturePhoto() async throws -> Data {
         guard isReady else { throw CameraError.unavailable }
+        guard isLandscape else { throw CameraError.landscapeRequired }
         return try await withCheckedThrowingContinuation { continuation in
             sessionQueue.async { [weak self] in
                 guard let self else {
@@ -69,6 +108,7 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
                     format: [AVVideoCodecKey: AVVideoCodecType.jpeg]
                 )
                 settings.photoQualityPrioritization = .quality
+                self.applyPhotoRotation(for: UIDevice.current.orientation)
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
@@ -111,6 +151,70 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
         photoOutput.maxPhotoQualityPrioritization = .quality
         isConfigured = true
     }
+
+    private func updateOrientation() {
+        let orientation = UIDevice.current.orientation
+        guard orientation == .portrait
+                || orientation == .portraitUpsideDown
+                || orientation == .landscapeLeft
+                || orientation == .landscapeRight else {
+            return
+        }
+        let isLandscape = orientation.isLandscape
+        let rotationAngle = rotationAngle(for: orientation)
+        DispatchQueue.main.async { [weak self] in
+            self?.isLandscape = isLandscape
+            if let rotationAngle {
+                self?.previewRotationAngle = rotationAngle
+            }
+        }
+        sessionQueue.async { [weak self] in
+            self?.applyPhotoRotation(for: orientation)
+        }
+    }
+
+    private func startMotionUpdates() {
+        guard motionManager.isDeviceMotionAvailable else { return }
+        isMotionAvailable = true
+        motionManager.deviceMotionUpdateInterval = 1.0 / 20.0
+        motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, _ in
+            guard let self, let gravity = motion?.gravity else { return }
+            let horizonRadians = atan2(-gravity.y, abs(gravity.x))
+            let verticalRadians = atan2(
+                gravity.z,
+                hypot(gravity.x, gravity.y)
+            )
+            let horizon = horizonRadians * 180 / .pi
+            let vertical = verticalRadians * 180 / .pi
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                horizonAngle = (horizonAngle * 0.72) + (horizon * 0.28)
+                verticalAngle = (verticalAngle * 0.72) + (vertical * 0.28)
+            }
+        }
+    }
+
+    private func applyPhotoRotation(for orientation: UIDeviceOrientation) {
+        guard let connection = photoOutput.connection(with: .video) else { return }
+        guard let rotationAngle = rotationAngle(for: orientation) else { return }
+        guard connection.isVideoRotationAngleSupported(rotationAngle) else { return }
+        connection.videoRotationAngle = rotationAngle
+    }
+
+    private func rotationAngle(for orientation: UIDeviceOrientation) -> CGFloat? {
+        switch orientation {
+        case .portrait:
+            90
+        case .portraitUpsideDown:
+            270
+        case .landscapeLeft:
+            0
+        case .landscapeRight:
+            180
+        default:
+            nil
+        }
+    }
 }
 
 extension CameraController: AVCapturePhotoCaptureDelegate {
@@ -136,6 +240,7 @@ private enum CameraError: LocalizedError {
     case configurationFailed
     case captureInProgress
     case invalidPhoto
+    case landscapeRequired
 
     var errorDescription: String? {
         switch self {
@@ -147,6 +252,8 @@ private enum CameraError: LocalizedError {
             "Eine Aufnahme wird bereits verarbeitet."
         case .invalidPhoto:
             "Das Foto konnte nicht gelesen werden."
+        case .landscapeRequired:
+            "Bitte halten Sie das iPhone für diese Aufnahme quer."
         }
     }
 }
