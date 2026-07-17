@@ -86,6 +86,35 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    func loadCaptureSession(jobID: UUID) async throws -> CaptureSession {
+        try await withAccessToken { token in
+            try await apiClient.captureSession(jobID: jobID, accessToken: token)
+        }
+    }
+
+    func uploadCapturedPhoto(
+        jobID: UUID,
+        captureStepID: UUID,
+        data: Data
+    ) async throws -> CapturedPhoto {
+        let ticket = try await withAccessToken { token in
+            try await apiClient.requestPhotoUpload(
+                jobID: jobID,
+                captureStepID: captureStepID,
+                sizeBytes: data.count,
+                accessToken: token
+            )
+        }
+        try await apiClient.uploadPhoto(data, to: ticket.uploadURL)
+        return try await withAccessToken { token in
+            try await apiClient.completePhotoUpload(
+                jobID: jobID,
+                photoID: ticket.photoID,
+                accessToken: token
+            )
+        }
+    }
+
     private func withAccessToken<Value>(
         _ operation: (String) async throws -> Value
     ) async throws -> Value {

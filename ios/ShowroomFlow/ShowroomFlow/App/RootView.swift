@@ -13,6 +13,8 @@ struct RootView: View {
                     loadLocations: session.loadLocations,
                     loadConfiguration: session.loadConfiguration,
                     createJob: session.createJob,
+                    loadCaptureSession: session.loadCaptureSession,
+                    uploadCapturedPhoto: session.uploadCapturedPhoto,
                     onLogout: session.logout
                 )
             } else {

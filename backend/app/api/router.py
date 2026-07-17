@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.schemas import AppInfoResponse, HealthResponse
 from app.api.auth import router as auth_router
 from app.api.configuration import router as configuration_router
+from app.api.capture import router as capture_router
 from app.api.dealerships import router as dealerships_router
 from app.api.jobs import router as jobs_router
 from app.api.locations import router as locations_router
@@ -17,6 +18,7 @@ from app.api.users import router as users_router
 router = APIRouter()
 router.include_router(auth_router)
 router.include_router(configuration_router)
+router.include_router(capture_router)
 router.include_router(dealerships_router)
 router.include_router(jobs_router)
 router.include_router(locations_router)

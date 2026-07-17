@@ -165,6 +165,30 @@ class VehicleJob(Timestamped, Base):
     auto_export: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class PhotoAsset(Timestamped, Base):
+    __tablename__ = "photo_assets"
+    __table_args__ = (
+        UniqueConstraint(
+            "vehicle_job_id",
+            "capture_step_id",
+            "revision",
+            name="uq_photo_asset_revision",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    vehicle_job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vehicle_jobs.id"), index=True)
+    capture_step_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("capture_steps.id"), index=True)
+    captured_by_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    original_object_key: Mapped[str] = mapped_column(String(500), unique=True)
+    original_content_type: Mapped[str] = mapped_column(String(100))
+    expected_size_bytes: Mapped[int] = mapped_column(Integer)
+    original_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_selected: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class ExportRun(Timestamped, Base):
     __tablename__ = "export_runs"
 

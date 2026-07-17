@@ -3,6 +3,7 @@ import SwiftUI
 struct JobListView: View {
     @State private var jobs: [VehicleJob] = []
     @State private var isCreatingJob = false
+    @State private var captureJob: VehicleJob?
     @State private var isLoading = true
     @State private var errorMessage: String?
 
@@ -10,6 +11,8 @@ struct JobListView: View {
     let loadLocations: () async throws -> [LocationSummary]
     let loadConfiguration: (UUID) async throws -> AppConfiguration
     let createJob: (UUID, String, UUID, String, UUID?) async throws -> VehicleJob
+    let loadCaptureSession: (UUID) async throws -> CaptureSession
+    let uploadCapturedPhoto: (UUID, UUID, Data) async throws -> CapturedPhoto
     let onLogout: () -> Void
 
     var body: some View {
@@ -25,21 +28,31 @@ struct JobListView: View {
                     )
                 } else {
                     List(jobs) { job in
-                        VStack(alignment: .leading, spacing: 5) {
+                        Button {
+                            captureJob = job
+                        } label: {
                             HStack {
-                                Text(job.brand)
-                                    .font(.headline)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    HStack {
+                                        Text(job.brand)
+                                            .font(.headline)
+                                        Text("Version \(job.version)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text(job.vin)
+                                        .font(.subheadline.monospaced())
+                                    Text(job.localizedStatus)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                                 Spacer()
-                                Text("Version \(job.version)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                Image(systemName: "camera.fill")
+                                    .foregroundStyle(.tint)
                             }
-                            Text(job.vin)
-                                .font(.subheadline.monospaced())
-                            Text(job.localizedStatus)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            .contentShape(.rect)
                         }
+                        .buttonStyle(.plain)
                         .padding(.vertical, 3)
                     }
                     .refreshable { await reload() }
@@ -66,6 +79,15 @@ struct JobListView: View {
                     loadConfiguration: loadConfiguration,
                     createJob: createJob,
                     onCreated: { job in jobs.insert(job, at: 0) }
+                )
+            }
+            .fullScreenCover(item: $captureJob, onDismiss: {
+                Task { await reload() }
+            }) { job in
+                CaptureFlowView(
+                    job: job,
+                    loadCaptureSession: loadCaptureSession,
+                    uploadCapturedPhoto: uploadCapturedPhoto
                 )
             }
             .task { await reload() }
@@ -108,6 +130,8 @@ private extension VehicleJob {
             AppConfiguration(brands: [], backgrounds: [], captureSteps: [])
         },
         createJob: { _, _, _, _, _ in throw APIError.invalidResponse },
+        loadCaptureSession: { _ in throw APIError.invalidResponse },
+        uploadCapturedPhoto: { _, _, _ in throw APIError.invalidResponse },
         onLogout: {}
     )
 }

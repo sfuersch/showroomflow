@@ -17,6 +17,7 @@ class FakeS3Client:
         self.head_bucket_name: str | None = None
         self.presign_call: dict[str, object] | None = None
         self.put_call: dict[str, object] | None = None
+        self.head_object_call: dict[str, object] | None = None
 
     def head_bucket(self, *, Bucket: str) -> None:
         self.head_bucket_name = Bucket
@@ -27,6 +28,10 @@ class FakeS3Client:
 
     def put_object(self, **kwargs: object) -> None:
         self.put_call = kwargs
+
+    def head_object(self, **kwargs: object) -> dict[str, object]:
+        self.head_object_call = kwargs
+        return {"ContentLength": 1234, "ContentType": "image/jpeg"}
 
 
 class UnavailableStorage:
@@ -120,6 +125,19 @@ def test_private_configuration_image_can_be_uploaded_and_read_with_signed_url() 
         },
         "ExpiresIn": 300,
         "HttpMethod": "GET",
+    }
+
+
+def test_uploaded_photo_metadata_is_verified() -> None:
+    fake_client = FakeS3Client()
+    storage = ObjectStorage(Settings(storage_bucket="test-bucket"), client=fake_client)
+
+    metadata = storage.object_metadata(object_key="dealerships/one/jobs/job/photo.jpg")
+
+    assert metadata == (1234, "image/jpeg")
+    assert fake_client.head_object_call == {
+        "Bucket": "test-bucket",
+        "Key": "dealerships/one/jobs/job/photo.jpg",
     }
 
 
