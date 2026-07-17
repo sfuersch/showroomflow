@@ -1,0 +1,106 @@
+name: showroomflow
+
+services:
+  api:
+    container_name: showroomflow-api
+    build:
+      context: ./backend
+    restart: unless-stopped
+    init: true
+    env_file: .env.production
+    ports:
+      - "127.0.0.1:18080:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - edge
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 2.0
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  db:
+    container_name: showroomflow-db
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${SHOWROOMFLOW_POSTGRES_DB:?set in .env.production}
+      POSTGRES_USER: ${SHOWROOMFLOW_POSTGRES_USER:?set in .env.production}
+      POSTGRES_PASSWORD: ${SHOWROOMFLOW_POSTGRES_PASSWORD:?set in .env.production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 2.0
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "5"
+
+  redis:
+    container_name: showroomflow-redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${SHOWROOMFLOW_REDIS_PASSWORD:?set in .env.production}
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$SHOWROOMFLOW_REDIS_PASSWORD redis-cli ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    environment:
+      SHOWROOMFLOW_REDIS_PASSWORD: ${SHOWROOMFLOW_REDIS_PASSWORD:?set in .env.production}
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  edge:
+    name: showroomflow-edge
+  backend:
+    name: showroomflow-backend
+    internal: true
+
+volumes:
+  postgres_data:
+    name: showroomflow-postgres
+  redis_data:
+    name: showroomflow-redis
