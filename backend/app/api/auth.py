@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.api.dependencies import CurrentUser, DatabaseSession
-from app.models import RefreshSession, User
+from app.models import Dealership, RefreshSession, User
 from app.schemas import LoginRequest, RefreshRequest, TokenResponse, UserResponse
 from app.security import (
     create_access_token,
@@ -38,9 +38,11 @@ def _issue_session(db: DatabaseSession, user: User) -> TokenResponse:
 def login(payload: LoginRequest, db: DatabaseSession) -> TokenResponse:
     email = str(payload.email).strip().lower()
     user = db.scalar(select(User).where(User.email == email))
+    dealership = db.get(Dealership, user.dealership_id) if user and user.dealership_id else None
     if (
         user is None
         or not user.is_active
+        or (user.dealership_id is not None and (dealership is None or not dealership.is_active))
         or not verify_password(payload.password, user.password_hash)
     ):
         raise HTTPException(

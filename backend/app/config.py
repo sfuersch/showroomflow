@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="development-only-change-me-please", min_length=32)
     access_token_minutes: int = Field(default=30, ge=5, le=1440)
     refresh_token_days: int = Field(default=30, ge=1, le=90)
+    admin_session_hours: int = Field(default=8, ge=1, le=24)
     bootstrap_admin_email: str | None = None
     bootstrap_admin_password: str | None = None
     database_url: str = "postgresql+psycopg://showroomflow:showroomflow@db:5432/showroomflow"

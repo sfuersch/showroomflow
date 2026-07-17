@@ -41,6 +41,7 @@ class DealershipResponse(BaseModel):
     name: str
     auto_export_enabled: bool
     retention_days: int
+    is_active: bool
     created_at: datetime
 
 
@@ -55,6 +56,7 @@ class LocationResponse(BaseModel):
     id: uuid.UUID
     dealership_id: uuid.UUID
     name: str
+    is_active: bool
     created_at: datetime
 
 

@@ -6,7 +6,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import User, UserRole
+from app.models import Dealership, User, UserRole
 from app.security import decode_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -31,7 +31,12 @@ def get_current_user(
         raise unauthorized from None
 
     user = db.get(User, user_id)
-    if user is None or not user.is_active:
+    dealership = db.get(Dealership, user.dealership_id) if user and user.dealership_id else None
+    if (
+        user is None
+        or not user.is_active
+        or (user.dealership_id is not None and (dealership is None or not dealership.is_active))
+    ):
         raise unauthorized
     return user
 

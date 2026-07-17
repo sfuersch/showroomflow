@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Verwaltung{% endblock %} · ShowroomFlow</title>
+    <link rel="stylesheet" href="{{ url_for('admin-static', path='/admin.css') }}">
+</head>
+<body>
+    <header class="topbar">
+        <a class="brand" href="/admin" aria-label="ShowroomFlow Startseite">
+            <span class="brand-mark">S</span>
+            <span><strong>ShowroomFlow</strong><small>Verwaltung</small></span>
+        </a>
+        {% if current_user %}
+        <div class="account">
+            <span>{{ current_user.email }}</span>
+            <form method="post" action="/admin/logout">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="button button-quiet" type="submit">Abmelden</button>
+            </form>
+        </div>
+        {% endif %}
+    </header>
+
+    <main class="page">
+        {% if flash %}
+        <div class="flash flash-{{ flash.category }}" role="status">{{ flash.message }}</div>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

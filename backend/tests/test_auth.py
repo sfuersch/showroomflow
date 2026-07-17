@@ -1,9 +1,10 @@
 import uuid
 from collections.abc import Generator
+import re
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -84,6 +85,12 @@ def system_login() -> dict[str, str | int]:
     )
     assert response.status_code == 200
     return response.json()
+
+
+def csrf_from(response_text: str) -> str:
+    match = re.search(r'name="csrf_token" value="([^"]+)"', response_text)
+    assert match is not None
+    return match.group(1)
 
 
 def test_login_and_current_user() -> None:
@@ -290,3 +297,160 @@ def test_dealership_job_list_is_tenant_scoped() -> None:
 
     assert response.status_code == 200
     assert [job["vin"] for job in response.json()] == ["OWN-VIN"]
+
+
+def test_admin_interface_requires_login() -> None:
+    response = client.get("/admin", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/login"
+
+
+def test_dealership_admin_logs_into_tenant_interface() -> None:
+    dealership, _ = create_dealership_admin()
+    login_page = client.get("/admin/login")
+
+    login_response = client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+        follow_redirects=False,
+    )
+    dashboard = client.get("/admin")
+
+    assert login_response.status_code == 303
+    assert dashboard.status_code == 200
+    assert dealership.name in dashboard.text
+    assert "Autohaus hinzufügen" not in dashboard.text
+
+
+def test_admin_form_rejects_invalid_csrf_token() -> None:
+    create_dealership_admin()
+
+    response = client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": "invalid",
+        },
+    )
+
+    assert response.status_code == 400
+
+
+def test_photographer_cannot_log_into_admin_interface() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        photographer = User(
+            dealership_id=dealership.id,
+            email="photo@example.com",
+            password_hash=hash_password("a-secure-photo-password"),
+            role=UserRole.PHOTOGRAPHER,
+        )
+        db.add(photographer)
+        db.commit()
+    login_page = client.get("/admin/login")
+
+    response = client.post(
+        "/admin/login",
+        data={
+            "email": "photo@example.com",
+            "password": "a-secure-photo-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+
+    assert response.status_code == 401
+    assert "E-Mail-Adresse oder Passwort ist nicht korrekt" in response.text
+
+
+def test_admin_interface_rejects_invalid_user_email() -> None:
+    dealership, _ = create_dealership_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    detail_page = client.get(f"/admin/dealerships/{dealership.id}")
+
+    response = client.post(
+        f"/admin/dealerships/{dealership.id}/users",
+        data={
+            "email": "keine-adresse",
+            "password": "another-secure-password",
+            "role": "photographer",
+            "csrf_token": csrf_from(detail_page.text),
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Bitte geben Sie eine gültige E-Mail-Adresse ein" in response.text
+    with TestingSession() as db:
+        assert db.scalar(select(User).where(User.email == "keine-adresse")) is None
+
+
+def test_admin_interface_rejects_duplicate_location() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        db.add(Location(dealership_id=dealership.id, name="Bad Neustadt"))
+        db.commit()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    detail_page = client.get(f"/admin/dealerships/{dealership.id}")
+
+    response = client.post(
+        f"/admin/dealerships/{dealership.id}/locations",
+        data={
+            "name": "bad neustadt",
+            "csrf_token": csrf_from(detail_page.text),
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Dieser Standort ist bereits vorhanden" in response.text
+    with TestingSession() as db:
+        locations = list(db.scalars(select(Location)))
+        assert len(locations) == 1
+
+
+def test_inactive_dealership_cannot_log_in() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        stored_dealership = db.get(Dealership, dealership.id)
+        assert stored_dealership is not None
+        stored_dealership.is_active = False
+        db.commit()
+
+    api_response = client.post(
+        "/api/v1/auth/login",
+        json={"email": "admin@example.com", "password": "a-secure-test-password"},
+    )
+    login_page = client.get("/admin/login")
+    admin_response = client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+
+    assert api_response.status_code == 401
+    assert admin_response.status_code == 401

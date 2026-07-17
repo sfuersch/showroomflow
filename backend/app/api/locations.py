@@ -22,7 +22,7 @@ def list_locations(
     current_user: CurrentUser,
     dealership_id: uuid.UUID | None = Query(default=None),
 ) -> list[Location]:
-    statement = select(Location).order_by(Location.name)
+    statement = select(Location).where(Location.is_active.is_(True)).order_by(Location.name)
     target_id = _target_dealership(current_user, dealership_id)
     if current_user.role != UserRole.SYSTEM_ADMIN or target_id is not None:
         statement = statement.where(Location.dealership_id == target_id)

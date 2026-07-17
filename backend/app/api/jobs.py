@@ -45,9 +45,9 @@ def create_job(
         raise HTTPException(status_code=422, detail="Autohaus ist erforderlich")
 
     dealership = db.get(Dealership, dealership_id, with_for_update=True)
-    if dealership is None:
+    if dealership is None or not dealership.is_active:
         raise HTTPException(status_code=422, detail="Autohaus wurde nicht gefunden")
-    if location is None or location.dealership_id != dealership_id:
+    if location is None or not location.is_active or location.dealership_id != dealership_id:
         raise HTTPException(status_code=422, detail="Standort wurde nicht gefunden")
 
     vin = payload.vin.strip().upper()
@@ -70,9 +70,7 @@ def create_job(
         brand=brand,
         status=JobStatus.DRAFT,
         auto_export=(
-            dealership.auto_export_enabled
-            if payload.auto_export is None
-            else payload.auto_export
+            dealership.auto_export_enabled if payload.auto_export is None else payload.auto_export
         ),
     )
     db.add(job)
