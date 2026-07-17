@@ -24,6 +24,10 @@ def test_app_info() -> None:
     assert response.json()["output_height"] == 1440
 
 
+def test_processing_uses_preview_size_by_default() -> None:
+    assert Settings().remove_bg_size == "preview"
+
+
 def test_production_rejects_placeholder_secrets() -> None:
     with pytest.raises(ValidationError):
         Settings(environment="production", secret_key="replace-with-an-insecure-placeholder-value")

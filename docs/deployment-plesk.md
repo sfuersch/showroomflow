@@ -101,6 +101,7 @@ werden in `.env.production` folgende Werte gesetzt:
 ```dotenv
 SHOWROOMFLOW_PROCESSING_PROVIDER=remove_bg
 SHOWROOMFLOW_REMOVE_BG_API_KEY=<API-Schlüssel>
+SHOWROOMFLOW_REMOVE_BG_SIZE=preview
 SHOWROOMFLOW_PROCESSING_QUEUE=showroomflow-processing
 SHOWROOMFLOW_OUTPUT_WIDTH=1920
 SHOWROOMFLOW_OUTPUT_HEIGHT=1440
@@ -117,3 +118,6 @@ docker compose --env-file .env.production -f compose.production.yaml logs --tail
 
 Der API-Container führt beim Start die Migration aus. Der Worker besitzt keinen öffentlichen Port
 und ist nur mit PostgreSQL, Redis, R2 und dem konfigurierten KI-Dienst verbunden.
+
+`preview` verwendet die kostengünstige Testauflösung. Für freigegebene Verkaufsbilder wird der
+Wert später auf `auto` geändert und der Worker neu erstellt.
