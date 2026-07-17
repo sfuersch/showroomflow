@@ -83,12 +83,32 @@ def create_photoroom_showroom(
     vehicle_scale_percent: int = 60,
     vehicle_bottom_percent: int = 90,
     photoroom_sandbox: bool | None = None,
+    optimized: bool = False,
     *,
     client: httpx.Client | None = None,
 ) -> bytes:
-    """Create a protected A/B variant without generative relighting."""
+    """Create a standard or color-preserving optimized Photoroom result."""
     request = client.post if client is not None else httpx.post
     background_extension = "png" if background_content_type == "image/png" else "jpg"
+    edit_options = {
+        "removeBackground": "true",
+        "background.color": "FFFFFF",
+        "shadow.mode": "ai.soft",
+        "outputSize": f"{settings.output_width}x{settings.output_height}",
+        "paddingLeft": f"{max(0.02, (1 - vehicle_scale_percent / 100) / 2):.3f}",
+        "paddingRight": f"{max(0.02, (1 - vehicle_scale_percent / 100) / 2):.3f}",
+        "paddingBottom": f"{max(0.02, 1 - vehicle_bottom_percent / 100):.3f}",
+        "horizontalAlignment": "center",
+        "verticalAlignment": "bottom",
+        "export.format": "jpeg",
+    }
+    if optimized:
+        edit_options.update(
+            {
+                "lighting.mode": "ai.preserve-hue-and-saturation",
+                "ignorePaddingAndSnapOnCroppedSides": "false",
+            }
+        )
     try:
         response = request(
             "https://image-api.photoroom.com/v2/edit",
@@ -104,18 +124,7 @@ def create_photoroom_showroom(
                     background_content_type,
                 ),
             },
-            data={
-                "removeBackground": "true",
-                "background.color": "FFFFFF",
-                "shadow.mode": "ai.soft",
-                "outputSize": f"{settings.output_width}x{settings.output_height}",
-                "paddingLeft": f"{max(0.02, (1 - vehicle_scale_percent / 100) / 2):.3f}",
-                "paddingRight": f"{max(0.02, (1 - vehicle_scale_percent / 100) / 2):.3f}",
-                "paddingBottom": f"{max(0.02, 1 - vehicle_bottom_percent / 100):.3f}",
-                "horizontalAlignment": "center",
-                "verticalAlignment": "bottom",
-                "export.format": "jpeg",
-            },
+            data=edit_options,
             timeout=180,
         )
     except httpx.HTTPError as exc:
@@ -327,7 +336,7 @@ def process_photo(photo_id: str) -> None:
 
 
 def process_photo_variant(photo_id: str, provider: str) -> None:
-    if provider != "photoroom":
+    if provider not in {"photoroom", "photoroom_optimized"}:
         raise ImageProcessingError(f"Unbekannte Vergleichsverarbeitung: {provider}")
     identifier = uuid.UUID(photo_id)
     settings = get_settings()
@@ -371,6 +380,7 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 vehicle_scale_percent=background.vehicle_scale_percent,
                 vehicle_bottom_percent=background.vehicle_bottom_percent,
                 photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
+                optimized=provider == "photoroom_optimized",
             )
             object_key = (
                 f"dealerships/{job.dealership_id}/jobs/{job.id}/comparisons/"
