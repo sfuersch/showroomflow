@@ -43,6 +43,7 @@ class DealershipResponse(BaseModel):
     auto_export_enabled: bool
     retention_days: int
     monthly_vehicle_credits: int
+    additional_vehicle_credits: int
     is_active: bool
     created_at: datetime
 

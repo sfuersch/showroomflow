@@ -18,6 +18,7 @@ from app.image_service import (
     IMAGE_PROVIDERS,
     VehicleCreditsExhausted,
     credit_balance,
+    grant_additional_credits,
     get_image_settings,
     photoroom_sandbox_active,
     provider_is_available,
@@ -36,6 +37,7 @@ from app.models import (
     RefreshSession,
     User,
     UserRole,
+    VehicleCreditGrant,
     VehicleJob,
 )
 from app.processing_queue import (
@@ -348,6 +350,12 @@ def image_service_page(request: Request, db: Session = Depends(get_db)):
     image_settings = get_image_settings(db)
     runtime = get_settings()
     dealerships = list(db.scalars(select(Dealership).order_by(Dealership.name)))
+    credit_grants = list(
+        db.scalars(
+            select(VehicleCreditGrant).order_by(VehicleCreditGrant.granted_at.desc()).limit(50)
+        )
+    )
+    grant_user_ids = {grant.granted_by_id for grant in credit_grants}
     return templates.TemplateResponse(
         request,
         "admin/image_service.html",
@@ -365,6 +373,14 @@ def image_service_page(request: Request, db: Session = Depends(get_db)):
             credit_balances={
                 dealership.id: credit_balance(db, dealership) for dealership in dealerships
             },
+            credit_grants=credit_grants,
+            grant_dealerships={dealership.id: dealership for dealership in dealerships},
+            grant_users={
+                user.id: user
+                for user in db.scalars(select(User).where(User.id.in_(grant_user_ids)))
+            }
+            if grant_user_ids
+            else {},
         ),
     )
 
@@ -427,6 +443,34 @@ def update_dealership_credits(
         db.commit()
         _flash(request, f"Credit-Kontingent für {dealership.name} wurde gespeichert.")
     return RedirectResponse("/admin/image-service", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/dealerships/{dealership_id}/credits/add")
+def add_dealership_credits(
+    dealership_id: uuid.UUID,
+    request: Request,
+    amount: int = Form(),
+    note: str = Form(default=""),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    if admin.role != UserRole.SYSTEM_ADMIN:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    try:
+        grant_additional_credits(db, dealership_id, admin, amount, note)
+    except ValueError as exc:
+        _flash(request, str(exc), "error")
+    else:
+        db.commit()
+        _flash(request, f"{amount} zusätzliche Fahrzeug-Credits wurden gutgeschrieben.")
+    return RedirectResponse(
+        "/admin/image-service#dealership-credits",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @router.post("/dealerships")

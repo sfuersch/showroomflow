@@ -16,7 +16,7 @@
         <div>
             <h2>{{ dealership.name }}</h2>
             <p>{{ "Automatischer Export aktiv" if dealership.auto_export_enabled else "Manuelle Freigabe aktiv" }}</p>
-            {% set balance = credit_balances.get(dealership.id) %}{% if balance %}<p>{{ balance.available }} von {{ balance.allowance }} Fahrzeug-Credits verfügbar</p>{% endif %}
+            {% set balance = credit_balances.get(dealership.id) %}{% if balance %}<p>{{ balance.available }} Fahrzeug-Credits verfügbar · davon {{ balance.additional_available }} dauerhaft</p>{% endif %}
         </div>
         <span class="status {{ 'status-active' if dealership.is_active else 'status-inactive' }}">
             {{ "Aktiv" if dealership.is_active else "Inaktiv" }}

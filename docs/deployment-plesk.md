@@ -151,3 +151,9 @@ Verarbeitungsauftrag für ein Fahrzeug reserviert und deckt alle Außenbilder un
 dieses Auftrags ab. Nicht genutzte Credits werden nicht übertragen; am ersten Kalendertag gilt
 automatisch wieder das vollständige Monatskontingent. Eine neue interne Auftragsversion zählt als
 neues Fahrzeug im Sinne der Abrechnung.
+
+Der Systemadministrator kann einem Autohaus zusätzlich dauerhafte Credits gutschreiben. Diese
+werden erst verwendet, wenn das Monatskontingent aufgebraucht ist, und verfallen beim Monatswechsel
+nicht. Jede Gutschrift wird mit Betrag, Systemadministrator, Zeitpunkt und optionaler Notiz
+protokolliert. Der aktuelle Zusatzsaldo wird atomar geführt, damit parallele Bildverarbeitungen
+keine Credits doppelt verbrauchen.
