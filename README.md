@@ -24,6 +24,8 @@ Beim Start werden Datenbankmigrationen ausgefuehrt und der in `.env` konfigurier
 
 Die Authentifizierung verwendet kurzlebige Zugriffstoken und rotierende Sitzungstoken. Benutzer werden ueber `/api/v1/admin/users` verwaltet. Autohausadministratoren sehen und bearbeiten dabei ausschliesslich Benutzer ihres eigenen Autohauses.
 
+Die deutschsprachige Verwaltungsoberflaeche ist unter `/admin` erreichbar. Systemadministratoren pflegen dort Autohäuser, Standorte und Benutzer; Autohausadministratoren sehen ausschließlich den eigenen Mandanten. Änderungen werden per geschützter Sitzung und CSRF-Schutz abgesichert.
+
 Die Beispielkonfiguration ist nur fuer die lokale Entwicklung bestimmt. Produktive SFTP-, KI- und Zugangsdaten werden nicht in Git gespeichert.
 
 Die produktionsnahe Installation auf Plesk ist in `docs/deployment-plesk.md` beschrieben. Produktive Originale und bearbeitete Bilder werden in einem privaten Cloudflare-R2-Bucket mit EU-Zustaendigkeit gespeichert; die Einrichtung steht in `docs/cloudflare-r2.md`.

@@ -1,0 +1,42 @@
+{% extends "admin/base.html" %}
+{% block title %}Übersicht{% endblock %}
+{% block content %}
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Übersicht</span>
+        <h1>Autohäuser</h1>
+        <p class="muted">Standorte, Benutzer und Grundeinstellungen verwalten.</p>
+    </div>
+</div>
+
+<section class="dealership-grid">
+    {% for dealership in dealerships %}
+    <a class="card dealership-card" href="/admin/dealerships/{{ dealership.id }}">
+        <div class="card-icon">⌂</div>
+        <div>
+            <h2>{{ dealership.name }}</h2>
+            <p>{{ "Automatischer Export aktiv" if dealership.auto_export_enabled else "Manuelle Freigabe aktiv" }}</p>
+        </div>
+        <span class="status {{ 'status-active' if dealership.is_active else 'status-inactive' }}">
+            {{ "Aktiv" if dealership.is_active else "Inaktiv" }}
+        </span>
+    </a>
+    {% endfor %}
+</section>
+
+{% if current_user.role.value == "system_admin" %}
+<section class="card section-card compact-card">
+    <div>
+        <h2>Autohaus hinzufügen</h2>
+        <p class="muted">Ein neuer Mandant startet mit manueller Exportfreigabe.</p>
+    </div>
+    <form class="inline-form" method="post" action="/admin/dealerships">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="grow">Name
+            <input type="text" name="name" maxlength="160" required placeholder="Vollständiger Firmenname">
+        </label>
+        <button class="button button-primary" type="submit">Autohaus anlegen</button>
+    </form>
+</section>
+{% endif %}
+{% endblock %}

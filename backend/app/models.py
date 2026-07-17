@@ -45,6 +45,7 @@ class Dealership(Timestamped, Base):
     name: Mapped[str] = mapped_column(String(160))
     auto_export_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     retention_days: Mapped[int] = mapped_column(Integer, default=90)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     locations: Mapped[list["Location"]] = relationship(back_populates="dealership")
 
@@ -55,6 +56,7 @@ class Location(Timestamped, Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     dealership_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dealerships.id"), index=True)
     name: Mapped[str] = mapped_column(String(160))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     dealership: Mapped[Dealership] = relationship(back_populates="locations")
 

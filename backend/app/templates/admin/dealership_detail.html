@@ -1,0 +1,109 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ dealership.name }}{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><span>{{ dealership.name }}</span></nav>
+
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">Autohaus</span>
+        <h1>{{ dealership.name }}</h1>
+        <p class="muted">Zentrale Einstellungen für diesen Mandanten.</p>
+    </div>
+    <span class="status {{ 'status-active' if dealership.is_active else 'status-inactive' }}">
+        {{ "Aktiv" if dealership.is_active else "Inaktiv" }}
+    </span>
+</div>
+
+<section class="card section-card">
+    <div class="section-heading">
+        <div><h2>Grundeinstellungen</h2><p>Export und Aufbewahrung steuern.</p></div>
+    </div>
+    <form class="form-grid" method="post" action="/admin/dealerships/{{ dealership.id }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="span-2">Name
+            <input type="text" name="name" value="{{ dealership.name }}" maxlength="160" required>
+        </label>
+        <label>Aufbewahrung in Tagen
+            <input type="number" name="retention_days" min="1" max="365" value="{{ dealership.retention_days }}" required>
+        </label>
+        <label class="check-row">
+            <input type="checkbox" name="auto_export_enabled" {% if dealership.auto_export_enabled %}checked{% endif %}>
+            <span><strong>Automatischer Export</strong><small>Fertige Aufträge ohne manuelle Freigabe exportieren.</small></span>
+        </label>
+        {% if current_user.role.value == "system_admin" %}
+        <label class="check-row">
+            <input type="checkbox" name="is_active" {% if dealership.is_active %}checked{% endif %}>
+            <span><strong>Autohaus aktiv</strong><small>Deaktivierte Mandanten können nicht produktiv arbeiten.</small></span>
+        </label>
+        {% endif %}
+        <div class="form-actions span-2"><button class="button button-primary" type="submit">Änderungen speichern</button></div>
+    </form>
+</section>
+
+<section class="card section-card" id="locations">
+    <div class="section-heading">
+        <div><h2>Standorte</h2><p>In der Foto-App auswählbare Betriebe.</p></div>
+        <span class="count">{{ locations|length }}</span>
+    </div>
+    <div class="stack">
+        {% for location in locations %}
+        <form class="item-row" method="post" action="/admin/locations/{{ location.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="grow">Standortname
+                <input type="text" name="name" value="{{ location.name }}" maxlength="160" required>
+            </label>
+            <label class="toggle"><input type="checkbox" name="is_active" {% if location.is_active %}checked{% endif %}><span>Aktiv</span></label>
+            <button class="button button-secondary" type="submit">Speichern</button>
+        </form>
+        {% else %}
+        <p class="empty">Noch kein Standort angelegt.</p>
+        {% endfor %}
+    </div>
+    <form class="inline-form add-row" method="post" action="/admin/dealerships/{{ dealership.id }}/locations">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label class="grow">Neuer Standort
+            <input type="text" name="name" maxlength="160" required placeholder="z. B. Bad Neustadt">
+        </label>
+        <button class="button button-primary" type="submit">Standort hinzufügen</button>
+    </form>
+</section>
+
+<section class="card section-card" id="users">
+    <div class="section-heading">
+        <div><h2>Benutzer</h2><p>Administratoren und Fotografen dieses Autohauses.</p></div>
+        <span class="count">{{ users|length }}</span>
+    </div>
+    <div class="stack">
+        {% for user in users %}
+        <form class="item-row user-row" method="post" action="/admin/users/{{ user.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="grow user-identity">
+                <strong>{{ user.email }}</strong>
+                <span>{{ "Autohausadministrator" if user.role.value == "dealership_admin" else "Fotograf" }}</span>
+            </div>
+            <label>Neues Passwort
+                <input type="password" name="password" minlength="16" autocomplete="new-password" placeholder="Unverändert lassen">
+            </label>
+            <label class="toggle"><input type="checkbox" name="is_active" {% if user.is_active %}checked{% endif %}><span>Aktiv</span></label>
+            <button class="button button-secondary" type="submit">Speichern</button>
+        </form>
+        {% endfor %}
+    </div>
+    <form class="form-grid add-panel" method="post" action="/admin/dealerships/{{ dealership.id }}/users">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>E-Mail-Adresse
+            <input type="email" name="email" required autocomplete="off">
+        </label>
+        <label>Rolle
+            <select name="role">
+                <option value="photographer">Fotograf</option>
+                <option value="dealership_admin">Autohausadministrator</option>
+            </select>
+        </label>
+        <label>Initiales Passwort
+            <input type="password" name="password" minlength="16" required autocomplete="new-password">
+        </label>
+        <div class="form-actions"><button class="button button-primary" type="submit">Benutzer hinzufügen</button></div>
+    </form>
+</section>
+{% endblock %}

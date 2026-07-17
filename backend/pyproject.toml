@@ -18,6 +18,9 @@ dependencies = [
     "psycopg[binary]>=3.2,<4.0",
     "alembic>=1.13,<2.0",
     "boto3>=1.35,<2.0",
+    "jinja2>=3.1,<4.0",
+    "python-multipart>=0.0.12,<1.0",
+    "itsdangerous>=2.2,<3.0",
 ]
 
 [project.optional-dependencies]

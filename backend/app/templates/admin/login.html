@@ -1,0 +1,26 @@
+{% extends "admin/base.html" %}
+{% block title %}Anmelden{% endblock %}
+{% block content %}
+<section class="login-shell">
+    <div class="login-copy">
+        <span class="eyebrow">Fahrzeugfotografie, organisiert</span>
+        <h1>Willkommen bei ShowroomFlow</h1>
+        <p>Verwalten Sie Standorte, Benutzer und Fotoabläufe zentral für Ihr Autohaus.</p>
+    </div>
+    <form class="card login-card" method="post" action="/admin/login">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div>
+            <h2>Anmelden</h2>
+            <p class="muted">Mit Ihrem Administratorkonto fortfahren.</p>
+        </div>
+        {% if error %}<div class="field-error" role="alert">{{ error }}</div>{% endif %}
+        <label>E-Mail-Adresse
+            <input type="email" name="email" autocomplete="username" required autofocus>
+        </label>
+        <label>Passwort
+            <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button class="button button-primary button-wide" type="submit">Anmelden</button>
+    </form>
+</section>
+{% endblock %}
