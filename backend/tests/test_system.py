@@ -28,6 +28,12 @@ def test_processing_uses_preview_size_by_default() -> None:
     assert Settings().remove_bg_size == "preview"
 
 
+def test_photoroom_comparison_uses_sandbox_by_default() -> None:
+    settings = Settings(photoroom_api_key="test-key")
+    assert settings.photoroom_enabled is True
+    assert settings.photoroom_sandbox is True
+
+
 def test_production_rejects_placeholder_secrets() -> None:
     with pytest.raises(ValidationError):
         Settings(environment="production", secret_key="replace-with-an-insecure-placeholder-value")

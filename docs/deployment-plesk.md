@@ -121,3 +121,20 @@ und ist nur mit PostgreSQL, Redis, R2 und dem konfigurierten KI-Dienst verbunden
 
 `preview` verwendet die kostengünstige Testauflösung. Für freigegebene Verkaufsbilder wird der
 Wert später auf `auto` geändert und der Worker neu erstellt.
+
+### Photoroom als A/B-Vergleich testen
+
+Photoroom ist zunächst nur eine zusätzliche, manuell gestartete Vergleichsvariante. Das reguläre
+remove.bg-Ergebnis und der Export werden dadurch nicht ersetzt. Für kostenlose, mit Wasserzeichen
+versehene Sandbox-Tests werden diese Werte ergänzt:
+
+```dotenv
+SHOWROOMFLOW_PHOTOROOM_API_KEY=<API-Schlüssel>
+SHOWROOMFLOW_PHOTOROOM_SANDBOX=true
+```
+
+Der Schlüssel kann ohne `sandbox_` eingetragen werden; ShowroomFlow ergänzt den Präfix im
+Sandbox-Modus. Danach API und Worker neu erstellen. In der Auftragsansicht erscheint für jedes
+freizustellende Foto die Schaltfläche `Photoroom testen`. Original, remove.bg und Photoroom werden
+nebeneinander angezeigt. In dieser ersten Teststufe nutzt Photoroom einen weichen KI-Schatten,
+aber bewusst kein generatives Relighting, damit Fahrzeugfarbe und Details unverändert bleiben.

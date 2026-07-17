@@ -35,12 +35,18 @@ class Settings(BaseSettings):
     processing_queue: str = "showroomflow-processing"
     remove_bg_api_key: str | None = None
     remove_bg_size: Literal["preview", "auto", "full", "50MP"] = "preview"
+    photoroom_api_key: str | None = None
+    photoroom_sandbox: bool = True
     output_width: int = Field(default=1920, ge=640, le=7680)
     output_height: int = Field(default=1440, ge=480, le=4320)
 
     @property
     def processing_enabled(self) -> bool:
         return self.processing_provider != "disabled"
+
+    @property
+    def photoroom_enabled(self) -> bool:
+        return bool(self.photoroom_api_key)
 
     @property
     def allowed_hosts_list(self) -> list[str]:

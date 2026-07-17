@@ -22,13 +22,18 @@ from app.models import (
     JobStatus,
     Location,
     PhotoAsset,
+    PhotoProcessingVariant,
     ProcessingStatus,
     RefreshSession,
     User,
     UserRole,
     VehicleJob,
 )
-from app.processing_queue import ProcessingQueueUnavailable, enqueue_photo_processing
+from app.processing_queue import (
+    ProcessingQueueUnavailable,
+    enqueue_photo_processing,
+    enqueue_photo_variant,
+)
 from app.security import hash_password, verify_password
 from app.storage import ObjectStorage, StorageUnavailableError, get_object_storage
 
@@ -632,6 +637,21 @@ def job_detail_page(
             select(CaptureStep).where(CaptureStep.dealership_id == dealership.id)
         )
     }
+    variants = (
+        list(
+            db.scalars(
+                select(PhotoProcessingVariant).where(
+                    PhotoProcessingVariant.photo_asset_id.in_([photo.id for photo in photos])
+                )
+            )
+        )
+        if photos
+        else []
+    )
+    photoroom_variants = {
+        variant.photo_asset_id: variant for variant in variants if variant.provider == "photoroom"
+    }
+    settings = get_settings()
     return templates.TemplateResponse(
         request,
         "admin/job_detail.html",
@@ -651,7 +671,15 @@ def job_detail_page(
                 for photo in photos
                 if photo.processed_object_key
             },
-            processing_enabled=get_settings().processing_enabled,
+            photoroom_variants=photoroom_variants,
+            photoroom_urls={
+                variant.photo_asset_id: storage.create_download_url(object_key=variant.object_key)
+                for variant in variants
+                if variant.provider == "photoroom" and variant.object_key
+            },
+            processing_enabled=settings.processing_enabled,
+            photoroom_enabled=settings.photoroom_enabled,
+            photoroom_sandbox=settings.photoroom_sandbox,
         ),
     )
 
@@ -661,6 +689,7 @@ def reprocess_photo(
     photo_id: uuid.UUID,
     request: Request,
     csrf_token: str = Form(),
+    provider: str = Form(default="remove_bg"),
     db: Session = Depends(get_db),
 ):
     admin = _require_admin(request, db)
@@ -675,9 +704,36 @@ def reprocess_photo(
     if job is None or step is None:
         raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
     _authorized_dealership(db, admin, job.dealership_id)
+    settings = get_settings()
     if not step.requires_processing:
         _flash(request, "Diese Fotoposition benötigt keine Freistellung.", "error")
-    elif not get_settings().processing_enabled:
+    elif provider == "photoroom" and not settings.photoroom_enabled:
+        _flash(request, "Photoroom ist noch nicht konfiguriert.", "error")
+    elif provider == "photoroom":
+        variant = db.scalar(
+            select(PhotoProcessingVariant).where(
+                PhotoProcessingVariant.photo_asset_id == photo.id,
+                PhotoProcessingVariant.provider == provider,
+            )
+        )
+        if variant is None:
+            variant = PhotoProcessingVariant(photo_asset_id=photo.id, provider=provider)
+            db.add(variant)
+        variant.status = ProcessingStatus.QUEUED.value
+        variant.error = None
+        db.commit()
+        try:
+            enqueue_photo_variant(photo.id, provider)
+        except ProcessingQueueUnavailable:
+            variant.status = ProcessingStatus.FAILED.value
+            variant.error = "Verarbeitungswarteschlange ist nicht erreichbar"
+            db.commit()
+            _flash(request, "Der Photoroom-Test konnte nicht gestartet werden.", "error")
+        else:
+            _flash(request, "Photoroom-Vergleich wurde zur Verarbeitung vorgemerkt.")
+    elif provider != "remove_bg":
+        _flash(request, "Unbekannter Bildverarbeitungsdienst.", "error")
+    elif not settings.processing_enabled:
         _flash(request, "Es ist noch kein KI-Dienst konfiguriert.", "error")
     else:
         photo.processing_status = ProcessingStatus.QUEUED

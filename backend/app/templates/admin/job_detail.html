@@ -3,18 +3,26 @@
 {% block content %}
 <nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}/jobs">Fahrzeugaufträge</a><span>›</span><span>{{ job.vin }}</span></nav>
 <div class="page-heading"><div><span class="eyebrow">Fahrzeugauftrag · Version {{ job.version }}</span><h1>{{ job.vin }}</h1><p class="muted">{{ job.brand }} · Status: {{ job.status.value|replace('_', ' ') }}</p></div></div>
-{% if not processing_enabled %}<div class="flash flash-error">Der KI-Dienst ist noch nicht konfiguriert. Originalbilder bleiben verfügbar; Freistellungen können danach manuell gestartet werden.</div>{% endif %}
+{% if not processing_enabled %}<div class="flash flash-error">Der reguläre KI-Dienst ist noch nicht konfiguriert. Originalbilder bleiben verfügbar; Freistellungen können danach manuell gestartet werden.</div>{% endif %}
 <section class="photo-review-grid">
     {% for photo in photos %}
     {% set step = steps.get(photo.capture_step_id) %}
+    {% set photoroom = photoroom_variants.get(photo.id) %}
     <article class="card photo-review-card">
         <div class="section-heading"><div><h2>{{ step.name if step else "Fotoposition" }}</h2><p>Revision {{ photo.revision }}</p></div><span class="status status-{{ 'active' if photo.processing_status.value in ['completed', 'not_required'] else 'inactive' }}">{{ photo.processing_status.value|replace('_', ' ') }}</span></div>
-        <div class="photo-pair">
+        <div class="photo-variants{% if step and step.requires_processing %} photo-variants-three{% endif %}">
             <a href="{{ original_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ original_urls[photo.id] }}" alt="Original {{ step.name if step else '' }}"><span>Original</span></a>
-            {% if photo.id in processed_urls %}<a href="{{ processed_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ processed_urls[photo.id] }}" alt="Bearbeitet {{ step.name if step else '' }}"><span>Bearbeitet</span></a>{% else %}<div class="photo-placeholder"><span>Noch kein bearbeitetes Bild</span></div>{% endif %}
+            {% if step and step.requires_processing %}
+                {% if photo.id in processed_urls %}<a href="{{ processed_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ processed_urls[photo.id] }}" alt="remove.bg {{ step.name if step else '' }}"><span>remove.bg · regulär</span></a>{% else %}<div class="photo-placeholder"><span>Noch kein remove.bg-Ergebnis</span></div>{% endif %}
+                {% if photo.id in photoroom_urls %}<a href="{{ photoroom_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ photoroom_urls[photo.id] }}" alt="Photoroom {{ step.name if step else '' }}"><span>Photoroom{% if photoroom_sandbox %} · Sandbox{% endif %}</span></a>{% else %}<div class="photo-placeholder"><span>{% if photoroom %}Photoroom: {{ photoroom.status|replace('_', ' ') }}{% else %}Noch kein Photoroom-Vergleich{% endif %}</span></div>{% endif %}
+            {% endif %}
         </div>
-        {% if photo.processing_error %}<p class="field-error">{{ photo.processing_error }}</p>{% endif %}
-        {% if step and step.requires_processing %}<form method="post" action="/admin/photos/{{ photo.id }}/process"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary button-wide" type="submit" {% if not processing_enabled or photo.processing_status.value in ['queued', 'processing'] %}disabled{% endif %}>{{ "Erneut verarbeiten" if photo.processed_object_key else "Verarbeitung starten" }}</button></form>{% endif %}
+        {% if photo.processing_error %}<p class="field-error">remove.bg: {{ photo.processing_error }}</p>{% endif %}
+        {% if photoroom and photoroom.error %}<p class="field-error">Photoroom: {{ photoroom.error }}</p>{% endif %}
+        {% if step and step.requires_processing %}<div class="processing-actions">
+            <form method="post" action="/admin/photos/{{ photo.id }}/process"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="provider" value="remove_bg"><button class="button button-secondary button-wide" type="submit" {% if not processing_enabled or photo.processing_status.value in ['queued', 'processing'] %}disabled{% endif %}>{{ "remove.bg erneut" if photo.processed_object_key else "remove.bg starten" }}</button></form>
+            <form method="post" action="/admin/photos/{{ photo.id }}/process"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="provider" value="photoroom"><button class="button button-secondary button-wide" type="submit" {% if not photoroom_enabled or (photoroom and photoroom.status in ['queued', 'processing']) %}disabled{% endif %}>{{ "Photoroom erneut" if photoroom and photoroom.object_key else "Photoroom testen" }}</button></form>
+        </div>{% endif %}
     </article>
     {% else %}<p class="empty">Für diesen Auftrag wurden noch keine Fotos hochgeladen.</p>{% endfor %}
 </section>
