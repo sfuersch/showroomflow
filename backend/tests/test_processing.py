@@ -81,6 +81,8 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
         body = request.content
         assert b'name="imageFile"' in body
         assert b'name="background.imageFile"' in body
+        assert b'name="background.color"' in body
+        assert b"FFFFFF" in body
         assert b'name="shadow.mode"' in body
         assert b"ai.soft" in body
         assert b'name="outputSize"' in body

@@ -99,6 +99,7 @@ def create_photoroom_showroom(
             },
             data={
                 "removeBackground": "true",
+                "background.color": "FFFFFF",
                 "shadow.mode": "ai.soft",
                 "outputSize": f"{settings.output_width}x{settings.output_height}",
                 "paddingLeft": f"{max(0.02, (1 - vehicle_scale_percent / 100) / 2):.3f}",
