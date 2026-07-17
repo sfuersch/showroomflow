@@ -61,12 +61,26 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    func createJob(locationID: UUID, vin: String, brand: String) async throws -> VehicleJob {
+    func loadConfiguration(locationID: UUID) async throws -> AppConfiguration {
+        try await withAccessToken { token in
+            try await apiClient.configuration(locationID: locationID, accessToken: token)
+        }
+    }
+
+    func createJob(
+        locationID: UUID,
+        vin: String,
+        brandID: UUID,
+        brand: String,
+        backgroundID: UUID?
+    ) async throws -> VehicleJob {
         try await withAccessToken { token in
             try await apiClient.createJob(
                 locationID: locationID,
                 vin: vin,
+                brandID: brandID,
                 brand: brand,
+                backgroundID: backgroundID,
                 accessToken: token
             )
         }

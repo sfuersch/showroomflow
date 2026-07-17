@@ -8,7 +8,8 @@ struct JobListView: View {
 
     let loadJobs: () async throws -> [VehicleJob]
     let loadLocations: () async throws -> [LocationSummary]
-    let createJob: (UUID, String, String) async throws -> VehicleJob
+    let loadConfiguration: (UUID) async throws -> AppConfiguration
+    let createJob: (UUID, String, UUID, String, UUID?) async throws -> VehicleJob
     let onLogout: () -> Void
 
     var body: some View {
@@ -62,6 +63,7 @@ struct JobListView: View {
             .sheet(isPresented: $isCreatingJob) {
                 NewJobView(
                     loadLocations: loadLocations,
+                    loadConfiguration: loadConfiguration,
                     createJob: createJob,
                     onCreated: { job in jobs.insert(job, at: 0) }
                 )
@@ -102,7 +104,10 @@ private extension VehicleJob {
     JobListView(
         loadJobs: { [] },
         loadLocations: { [] },
-        createJob: { _, _, _ in throw APIError.invalidResponse },
+        loadConfiguration: { _ in
+            AppConfiguration(brands: [], backgrounds: [], captureSteps: [])
+        },
+        createJob: { _, _, _, _, _ in throw APIError.invalidResponse },
         onLogout: {}
     )
 }

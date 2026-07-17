@@ -61,6 +61,63 @@ class Location(Timestamped, Base):
     dealership: Mapped[Dealership] = relationship(back_populates="locations")
 
 
+class Brand(Timestamped, Base):
+    __tablename__ = "brands"
+    __table_args__ = (UniqueConstraint("dealership_id", "name", name="uq_brand_dealership_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dealership_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dealerships.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class BackgroundLocation(Base):
+    __tablename__ = "background_locations"
+
+    background_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("backgrounds.id", ondelete="CASCADE"), primary_key=True
+    )
+    location_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("locations.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class Background(Timestamped, Base):
+    __tablename__ = "backgrounds"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dealership_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dealerships.id"), index=True)
+    brand_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("brands.id"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    object_key: Mapped[str] = mapped_column(String(500), unique=True)
+    content_type: Mapped[str] = mapped_column(String(100))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    locations: Mapped[list[Location]] = relationship(secondary="background_locations")
+
+
+class CaptureStep(Timestamped, Base):
+    __tablename__ = "capture_steps"
+    __table_args__ = (
+        UniqueConstraint("dealership_id", "name", name="uq_capture_step_dealership_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dealership_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dealerships.id"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    instruction: Mapped[str] = mapped_column(String(500), default="")
+    category: Mapped[str] = mapped_column(String(32), default="detail")
+    capture_order: Mapped[int] = mapped_column(Integer)
+    export_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    requires_processing: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    silhouette_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    silhouette_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
 class User(Timestamped, Base):
     __tablename__ = "users"
     __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
@@ -98,6 +155,12 @@ class VehicleJob(Timestamped, Base):
     vin: Mapped[str] = mapped_column(String(64), index=True)
     version: Mapped[int] = mapped_column(Integer)
     brand: Mapped[str] = mapped_column(String(100))
+    brand_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("brands.id"), nullable=True, index=True
+    )
+    background_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("backgrounds.id"), nullable=True, index=True
+    )
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.DRAFT)
     auto_export: Mapped[bool] = mapped_column(Boolean, default=False)
 

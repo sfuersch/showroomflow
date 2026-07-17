@@ -5,13 +5,14 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.models import Dealership, Location, User, UserRole
+from app.models import Background, Brand, CaptureStep, Dealership, Location, User, UserRole
 from app.security import hash_password
+from app.storage import get_object_storage
 
 engine = create_engine(
     "sqlite://",
@@ -28,6 +29,17 @@ def override_db() -> Generator[Session, None, None]:
 
 app.dependency_overrides[get_db] = override_db
 client = TestClient(app)
+
+
+class ConfigurationStorage:
+    def __init__(self) -> None:
+        self.uploads: list[dict[str, object]] = []
+
+    def put_object(self, **values: object) -> None:
+        self.uploads.append(values)
+
+    def create_download_url(self, *, object_key: str, expires_in: int = 900) -> str:
+        return f"https://images.example/{object_key}?expires={expires_in}"
 
 
 @pytest.fixture(autouse=True)
@@ -454,3 +466,207 @@ def test_inactive_dealership_cannot_log_in() -> None:
 
     assert api_response.status_code == 401
     assert admin_response.status_code == 401
+
+
+def test_admin_adds_brand_and_standard_capture_sequence() -> None:
+    dealership, _ = create_dealership_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+    csrf_token = csrf_from(configuration_page.text)
+
+    brand_response = client.post(
+        f"/admin/dealerships/{dealership.id}/brands",
+        data={"name": "Volkswagen", "csrf_token": csrf_token},
+        follow_redirects=True,
+    )
+    defaults_response = client.post(
+        f"/admin/dealerships/{dealership.id}/capture-steps/defaults",
+        data={"csrf_token": csrf_from(brand_response.text)},
+        follow_redirects=True,
+    )
+
+    assert brand_response.status_code == 200
+    assert "Volkswagen" in brand_response.text
+    assert defaults_response.status_code == 200
+    assert "16 Standard-Fotopositionen wurden ergänzt" in defaults_response.text
+    with TestingSession() as db:
+        brands = list(db.scalars(select(Brand)))
+        steps = list(db.scalars(select(CaptureStep).order_by(CaptureStep.capture_order)))
+        assert [brand.name for brand in brands] == ["Volkswagen"]
+        assert len(steps) == 16
+        assert steps[0].name == "Front"
+        assert steps[0].requires_processing is True
+        assert steps[-1].name == "Kofferraum"
+        assert steps[-1].requires_processing is False
+
+
+def test_admin_uploads_background_with_location_assignment() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        brand = Brand(dealership_id=dealership.id, name="Volkswagen")
+        db.add_all([location, brand])
+        db.commit()
+        db.refresh(location)
+        db.refresh(brand)
+        location_id = location.id
+        brand_id = brand.id
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        login_page = client.get("/admin/login")
+        client.post(
+            "/admin/login",
+            data={
+                "email": "admin@example.com",
+                "password": "a-secure-test-password",
+                "csrf_token": csrf_from(login_page.text),
+            },
+        )
+        configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+
+        response = client.post(
+            f"/admin/dealerships/{dealership.id}/backgrounds",
+            data={
+                "name": "Heller Showroom",
+                "brand_id": str(brand_id),
+                "location_ids": str(location_id),
+                "csrf_token": csrf_from(configuration_page.text),
+            },
+            files={"image": ("showroom.jpg", b"\xff\xd8\xffimage-content", "image/jpeg")},
+            follow_redirects=True,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert response.status_code == 200
+    assert "Hintergrund wurde hochgeladen" in response.text
+    assert len(storage.uploads) == 1
+    assert storage.uploads[0]["content_type"] == "image/jpeg"
+    with TestingSession() as db:
+        background = db.scalar(select(Background).options(selectinload(Background.locations)))
+        assert background is not None
+        assert background.brand_id == brand_id
+        assert [item.id for item in background.locations] == [location_id]
+
+
+def test_app_configuration_is_location_and_tenant_scoped() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        own_location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        other_location = Location(dealership_id=dealership.id, name="Bad Kissingen")
+        brand = Brand(dealership_id=dealership.id, name="Volkswagen")
+        db.add_all([own_location, other_location, brand])
+        db.flush()
+        db.add_all(
+            [
+                Background(
+                    dealership_id=dealership.id,
+                    brand_id=brand.id,
+                    name="Für Neustadt",
+                    object_key="backgrounds/neustadt.jpg",
+                    content_type="image/jpeg",
+                    locations=[own_location],
+                ),
+                Background(
+                    dealership_id=dealership.id,
+                    brand_id=None,
+                    name="Für alle",
+                    object_key="backgrounds/all.jpg",
+                    content_type="image/jpeg",
+                ),
+                Background(
+                    dealership_id=dealership.id,
+                    brand_id=brand.id,
+                    name="Für Kissingen",
+                    object_key="backgrounds/kissingen.jpg",
+                    content_type="image/jpeg",
+                    locations=[other_location],
+                ),
+                CaptureStep(
+                    dealership_id=dealership.id,
+                    name="Front",
+                    instruction="Gerade aufnehmen",
+                    category="exterior",
+                    capture_order=1,
+                    export_order=3,
+                    requires_processing=True,
+                ),
+            ]
+        )
+        db.commit()
+        db.refresh(own_location)
+        own_location_id = own_location.id
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        tokens = login()
+        response = client.get(
+            "/api/v1/configuration",
+            params={"location_id": str(own_location_id)},
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [brand["name"] for brand in payload["brands"]] == ["Volkswagen"]
+    assert {background["name"] for background in payload["backgrounds"]} == {
+        "Für alle",
+        "Für Neustadt",
+    }
+    assert payload["capture_steps"][0]["capture_order"] == 1
+    assert payload["capture_steps"][0]["export_order"] == 3
+    assert payload["capture_steps"][0]["requires_processing"] is True
+
+
+def test_job_stores_selected_brand_and_background() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        brand = Brand(dealership_id=dealership.id, name="Volkswagen")
+        db.add_all([location, brand])
+        db.flush()
+        background = Background(
+            dealership_id=dealership.id,
+            brand_id=brand.id,
+            name="Showroom",
+            object_key="backgrounds/showroom.jpg",
+            content_type="image/jpeg",
+            locations=[location],
+        )
+        db.add(background)
+        db.commit()
+        db.refresh(location)
+        db.refresh(brand)
+        db.refresh(background)
+        location_id = location.id
+        brand_id = brand.id
+        background_id = background.id
+
+    tokens = login()
+    response = client.post(
+        "/api/v1/jobs",
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        json={
+            "location_id": str(location_id),
+            "vin": "CONFIG-VIN",
+            "brand": "Wird serverseitig ersetzt",
+            "brand_id": str(brand_id),
+            "background_id": str(background_id),
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["brand"] == "Volkswagen"
+    assert response.json()["brand_id"] == str(brand_id)
+    assert response.json()["background_id"] == str(background_id)

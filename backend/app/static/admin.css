@@ -77,6 +77,26 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .flash-success { color: var(--success); background: var(--success-soft); }
 .flash-error, .field-error { color: var(--danger); background: var(--danger-soft); }
 .empty { padding: 20px; color: var(--muted); text-align: center; }
+.configuration-link { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 22px 26px; margin-bottom: 22px; color: inherit; text-decoration: none; }
+.configuration-link h2 { margin: 2px 0 6px; }
+.configuration-link p { margin: 0; color: var(--muted); }
+.subnav { display: flex; gap: 8px; margin: -10px 0 22px; position: sticky; top: 82px; z-index: 3; }
+.subnav a { background: rgba(255,255,255,.94); border: 1px solid var(--line); border-radius: 999px; padding: 9px 15px; box-shadow: 0 5px 15px rgba(16,24,40,.07); text-decoration: none; }
+.background-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.asset-card { border: 1px solid var(--line); border-radius: 16px; padding: 13px; display: grid; gap: 12px; background: #fbfcff; }
+.asset-card > img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 11px; background: #e9ebf4; }
+.choice-group { border: 1px solid var(--line); border-radius: 12px; padding: 11px; display: grid; gap: 7px; }
+.choice-group legend { color: var(--muted); padding: 0 5px; font-size: .82rem; font-weight: 700; }
+.choice-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.standard-action { margin: -4px 0 16px; }
+.step-stack { display: grid; gap: 12px; }
+.step-card { display: grid; grid-template-columns: 145px minmax(260px, 1fr) 180px; align-items: end; gap: 12px; border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+.order-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.step-main { display: grid; gap: 7px; }
+.step-options { display: flex; flex-wrap: wrap; gap: 8px; align-self: center; }
+.silhouette-field a { display: block; font-size: .78rem; margin: 3px 0; color: var(--brand); }
+.step-card > .button { justify-self: end; }
 .login-shell { min-height: calc(100vh - 194px); display: grid; grid-template-columns: 1.15fr .85fr; align-items: center; gap: clamp(40px, 8vw, 110px); }
 .login-copy h1 { max-width: 650px; font-size: clamp(2.5rem, 6vw, 4.8rem); }
 .login-copy p { max-width: 580px; color: var(--muted); font-size: 1.12rem; line-height: 1.65; }
@@ -92,4 +112,9 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
     .item-row, .inline-form { align-items: stretch; flex-direction: column; }
     .item-row .button, .inline-form .button { width: 100%; }
     .user-identity { min-width: 0; }
+    .configuration-link { align-items: stretch; flex-direction: column; }
+    .subnav { overflow-x: auto; top: 76px; }
+    .subnav a { white-space: nowrap; }
+    .step-card { grid-template-columns: 1fr; }
+    .background-grid { grid-template-columns: 1fr; }
 }
