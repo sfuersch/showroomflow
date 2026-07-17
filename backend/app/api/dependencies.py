@@ -46,3 +46,12 @@ def require_user_admin(current_user: CurrentUser) -> User:
 
 
 UserAdmin = Annotated[User, Depends(require_user_admin)]
+
+
+def require_system_admin(current_user: CurrentUser) -> User:
+    if current_user.role != UserRole.SYSTEM_ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Keine Berechtigung")
+    return current_user
+
+
+SystemAdmin = Annotated[User, Depends(require_system_admin)]

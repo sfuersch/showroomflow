@@ -55,4 +55,4 @@ Die Grossbuchstaben sind Platzhalter und muessen auf dem VPS ersetzt werden. Die
 
 ## 6. Inbetriebnahme pruefen
 
-Nach dem Eintragen der Werte wird zuerst die Docker-Konfiguration geprueft. Anschliessend prueft ein geplanter Backend-Speichertest das Schreiben, Lesen und Loeschen eines kleinen Testobjekts. Erst danach werden echte Fahrzeugbilder hochgeladen.
+Nach dem Eintragen der Werte wird zuerst die Docker-Konfiguration geprueft. Ein Systemadministrator kann anschliessend den geschuetzten Endpunkt `/api/v1/admin/storage/health` aufrufen. Er prueft den privaten Bucket-Zugriff, ohne ein Objekt anzulegen oder Zugangsdaten auszugeben. Erst nach erfolgreicher Pruefung werden echte Fahrzeugbilder hochgeladen.
