@@ -26,6 +26,8 @@ Die Authentifizierung verwendet kurzlebige Zugriffstoken und rotierende Sitzungs
 
 Die deutschsprachige Verwaltungsoberflaeche ist unter `/admin` erreichbar. Systemadministratoren pflegen dort Autohäuser, Standorte und Benutzer; Autohausadministratoren sehen ausschließlich den eigenen Mandanten. Änderungen werden per geschützter Sitzung und CSRF-Schutz abgesichert.
 
+In der Foto-Konfiguration eines Autohauses werden Marken, virtuelle Showroom-Hintergründe und Fotopositionen gepflegt. Hintergründe können für eine Marke und ausgewählte Standorte freigegeben werden. Aufnahme- und Exportnummer jeder Fotoposition sind unabhängig voneinander; Silhouetten werden als transparente PNG-Dateien im privaten Objektspeicher abgelegt. Die iOS-App lädt diese Konfiguration nach der Standortauswahl.
+
 Die Beispielkonfiguration ist nur fuer die lokale Entwicklung bestimmt. Produktive SFTP-, KI- und Zugangsdaten werden nicht in Git gespeichert.
 
 Die produktionsnahe Installation auf Plesk ist in `docs/deployment-plesk.md` beschrieben. Produktive Originale und bearbeitete Bilder werden in einem privaten Cloudflare-R2-Bucket mit EU-Zustaendigkeit gespeichert; die Einrichtung steht in `docs/cloudflare-r2.md`.

@@ -55,6 +55,31 @@ class ObjectStorage:
             HttpMethod="PUT",
         )
 
+    def create_download_url(self, *, object_key: str, expires_in: int = 900) -> str:
+        if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+            raise ValueError("Invalid object key")
+        if expires_in < 1 or expires_in > 3600:
+            raise ValueError("Download URL expiry must be between 1 and 3600 seconds")
+        return self._client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.bucket, "Key": object_key},
+            ExpiresIn=expires_in,
+            HttpMethod="GET",
+        )
+
+    def put_object(self, *, object_key: str, content: bytes, content_type: str) -> None:
+        if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+            raise ValueError("Invalid object key")
+        try:
+            self._client.put_object(
+                Bucket=self.bucket,
+                Key=object_key,
+                Body=content,
+                ContentType=content_type,
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageUnavailableError("Object storage is unavailable") from exc
+
 
 @lru_cache
 def get_object_storage() -> ObjectStorage:

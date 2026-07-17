@@ -11,6 +11,7 @@ struct RootView: View {
                 JobListView(
                     loadJobs: session.loadJobs,
                     loadLocations: session.loadLocations,
+                    loadConfiguration: session.loadConfiguration,
                     createJob: session.createJob,
                     onLogout: session.logout
                 )

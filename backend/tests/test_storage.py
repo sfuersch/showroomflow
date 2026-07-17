@@ -16,6 +16,7 @@ class FakeS3Client:
     def __init__(self) -> None:
         self.head_bucket_name: str | None = None
         self.presign_call: dict[str, object] | None = None
+        self.put_call: dict[str, object] | None = None
 
     def head_bucket(self, *, Bucket: str) -> None:
         self.head_bucket_name = Bucket
@@ -23,6 +24,9 @@ class FakeS3Client:
     def generate_presigned_url(self, operation: str, **kwargs: object) -> str:
         self.presign_call = {"operation": operation, **kwargs}
         return "https://signed.example/upload"
+
+    def put_object(self, **kwargs: object) -> None:
+        self.put_call = kwargs
 
 
 class UnavailableStorage:
@@ -84,6 +88,38 @@ def test_presigned_upload_is_limited_to_content_type_and_expiry() -> None:
         },
         "ExpiresIn": 600,
         "HttpMethod": "PUT",
+    }
+
+
+def test_private_configuration_image_can_be_uploaded_and_read_with_signed_url() -> None:
+    fake_client = FakeS3Client()
+    storage = ObjectStorage(Settings(storage_bucket="test-bucket"), client=fake_client)
+
+    storage.put_object(
+        object_key="dealerships/one/configuration/backgrounds/image.jpg",
+        content=b"image",
+        content_type="image/jpeg",
+    )
+    url = storage.create_download_url(
+        object_key="dealerships/one/configuration/backgrounds/image.jpg",
+        expires_in=300,
+    )
+
+    assert fake_client.put_call == {
+        "Bucket": "test-bucket",
+        "Key": "dealerships/one/configuration/backgrounds/image.jpg",
+        "Body": b"image",
+        "ContentType": "image/jpeg",
+    }
+    assert url == "https://signed.example/upload"
+    assert fake_client.presign_call == {
+        "operation": "get_object",
+        "Params": {
+            "Bucket": "test-bucket",
+            "Key": "dealerships/one/configuration/backgrounds/image.jpg",
+        },
+        "ExpiresIn": 300,
+        "HttpMethod": "GET",
     }
 
 

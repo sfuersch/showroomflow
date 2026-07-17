@@ -5,7 +5,16 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import CurrentUser, DatabaseSession
-from app.models import Dealership, JobStatus, Location, User, UserRole, VehicleJob
+from app.models import (
+    Background,
+    Brand,
+    Dealership,
+    JobStatus,
+    Location,
+    User,
+    UserRole,
+    VehicleJob,
+)
 from app.schemas import VehicleJobCreateRequest, VehicleJobResponse
 
 router = APIRouter(prefix="/jobs", tags=["vehicle jobs"])
@@ -51,9 +60,26 @@ def create_job(
         raise HTTPException(status_code=422, detail="Standort wurde nicht gefunden")
 
     vin = payload.vin.strip().upper()
-    brand = payload.brand.strip()
+    selected_brand = db.get(Brand, payload.brand_id) if payload.brand_id else None
+    if selected_brand is not None and (
+        not selected_brand.is_active or selected_brand.dealership_id != dealership_id
+    ):
+        raise HTTPException(status_code=422, detail="Marke wurde nicht gefunden")
+    if payload.brand_id is not None and selected_brand is None:
+        raise HTTPException(status_code=422, detail="Marke wurde nicht gefunden")
+    brand = selected_brand.name if selected_brand else payload.brand.strip()
     if not vin or not brand:
         raise HTTPException(status_code=422, detail="VIN und Marke sind erforderlich")
+
+    background = db.get(Background, payload.background_id) if payload.background_id else None
+    if payload.background_id is not None and (
+        background is None
+        or not background.is_active
+        or background.dealership_id != dealership_id
+        or (background.brand_id is not None and background.brand_id != payload.brand_id)
+        or (background.locations and location not in background.locations)
+    ):
+        raise HTTPException(status_code=422, detail="Hintergrund wurde nicht gefunden")
 
     latest_version = db.scalar(
         select(func.max(VehicleJob.version)).where(
@@ -68,6 +94,8 @@ def create_job(
         vin=vin,
         version=(latest_version or 0) + 1,
         brand=brand,
+        brand_id=selected_brand.id if selected_brand else None,
+        background_id=background.id if background else None,
         status=JobStatus.DRAFT,
         auto_export=(
             dealership.auto_export_enabled if payload.auto_export is None else payload.auto_export

@@ -60,11 +60,48 @@ class LocationResponse(BaseModel):
     created_at: datetime
 
 
+class BrandConfigurationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+
+
+class BackgroundConfigurationResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    brand_id: uuid.UUID | None
+    location_ids: list[uuid.UUID]
+    image_url: str
+
+
+class CaptureStepConfigurationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    instruction: str
+    category: str
+    capture_order: int
+    export_order: int | None
+    is_required: bool
+    requires_processing: bool
+    silhouette_url: str | None = None
+
+
+class AppConfigurationResponse(BaseModel):
+    brands: list[BrandConfigurationResponse]
+    backgrounds: list[BackgroundConfigurationResponse]
+    capture_steps: list[CaptureStepConfigurationResponse]
+
+
 class VehicleJobCreateRequest(BaseModel):
     dealership_id: uuid.UUID | None = None
     location_id: uuid.UUID
     vin: str = Field(min_length=1, max_length=64)
     brand: str = Field(min_length=1, max_length=100)
+    brand_id: uuid.UUID | None = None
+    background_id: uuid.UUID | None = None
     auto_export: bool | None = None
 
 
@@ -78,6 +115,8 @@ class VehicleJobResponse(BaseModel):
     vin: str
     version: int
     brand: str
+    brand_id: uuid.UUID | None
+    background_id: uuid.UUID | None
     status: JobStatus
     auto_export: bool
     created_at: datetime

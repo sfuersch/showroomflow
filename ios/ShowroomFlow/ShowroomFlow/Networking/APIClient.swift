@@ -68,14 +68,31 @@ struct APIClient {
         return try JSONDecoder().decode([VehicleJob].self, from: data)
     }
 
+    func configuration(locationID: UUID, accessToken: String) async throws -> AppConfiguration {
+        let data = try await authorizedRequest(
+            path: "configuration",
+            accessToken: accessToken,
+            queryItems: [URLQueryItem(name: "location_id", value: locationID.uuidString)]
+        )
+        return try JSONDecoder().decode(AppConfiguration.self, from: data)
+    }
+
     func createJob(
         locationID: UUID,
         vin: String,
+        brandID: UUID,
         brand: String,
+        backgroundID: UUID?,
         accessToken: String
     ) async throws -> VehicleJob {
         let body = try JSONEncoder().encode(
-            CreateJobPayload(locationID: locationID, vin: vin, brand: brand)
+            CreateJobPayload(
+                locationID: locationID,
+                vin: vin,
+                brandID: brandID,
+                brand: brand,
+                backgroundID: backgroundID
+            )
         )
         let data = try await authorizedRequest(
             path: "jobs",
@@ -90,9 +107,12 @@ struct APIClient {
         path: String,
         method: String = "GET",
         accessToken: String,
-        body: Data? = nil
+        body: Data? = nil,
+        queryItems: [URLQueryItem] = []
     ) async throws -> Data {
-        let url = baseURL.appending(path: path)
+        var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)
+        components?.queryItems = queryItems.isEmpty ? nil : queryItems
+        guard let url = components?.url else { throw APIError.invalidResponse }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
@@ -215,6 +235,8 @@ struct VehicleJob: Decodable, Identifiable {
     let vin: String
     let version: Int
     let brand: String
+    let brandID: UUID?
+    let backgroundID: UUID?
     let status: String
     let autoExport: Bool
 
@@ -222,17 +244,75 @@ struct VehicleJob: Decodable, Identifiable {
         case id, vin, version, brand, status
         case dealershipID = "dealership_id"
         case locationID = "location_id"
+        case brandID = "brand_id"
+        case backgroundID = "background_id"
         case autoExport = "auto_export"
+    }
+}
+
+struct AppConfiguration: Decodable {
+    let brands: [ConfiguredBrand]
+    let backgrounds: [ConfiguredBackground]
+    let captureSteps: [ConfiguredCaptureStep]
+
+    enum CodingKeys: String, CodingKey {
+        case brands, backgrounds
+        case captureSteps = "capture_steps"
+    }
+}
+
+struct ConfiguredBrand: Decodable, Identifiable, Hashable {
+    let id: UUID
+    let name: String
+}
+
+struct ConfiguredBackground: Decodable, Identifiable, Hashable {
+    let id: UUID
+    let name: String
+    let brandID: UUID?
+    let locationIDs: [UUID]
+    let imageURL: URL
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case brandID = "brand_id"
+        case locationIDs = "location_ids"
+        case imageURL = "image_url"
+    }
+}
+
+struct ConfiguredCaptureStep: Decodable, Identifiable {
+    let id: UUID
+    let name: String
+    let instruction: String
+    let category: String
+    let captureOrder: Int
+    let exportOrder: Int?
+    let isRequired: Bool
+    let requiresProcessing: Bool
+    let silhouetteURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, instruction, category
+        case captureOrder = "capture_order"
+        case exportOrder = "export_order"
+        case isRequired = "is_required"
+        case requiresProcessing = "requires_processing"
+        case silhouetteURL = "silhouette_url"
     }
 }
 
 private struct CreateJobPayload: Encodable {
     let locationID: UUID
     let vin: String
+    let brandID: UUID
     let brand: String
+    let backgroundID: UUID?
 
     enum CodingKeys: String, CodingKey {
         case vin, brand
         case locationID = "location_id"
+        case brandID = "brand_id"
+        case backgroundID = "background_id"
     }
 }

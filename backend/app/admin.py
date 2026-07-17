@@ -4,20 +4,71 @@ from datetime import datetime, timezone
 from hmac import compare_digest
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
-from app.models import Dealership, Location, RefreshSession, User, UserRole
+from app.models import (
+    Background,
+    Brand,
+    CaptureStep,
+    Dealership,
+    Location,
+    RefreshSession,
+    User,
+    UserRole,
+)
 from app.security import hash_password, verify_password
+from app.storage import ObjectStorage, StorageUnavailableError, get_object_storage
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+
+MAX_CONFIGURATION_IMAGE_BYTES = 20 * 1024 * 1024
+IMAGE_EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png"}
+STANDARD_CAPTURE_STEPS = [
+    ("Front", "Fahrzeug gerade und vollständig von vorne aufnehmen.", "exterior", True),
+    ("Diagonal vorne links", "Vordere linke Fahrzeugecke vollständig zeigen.", "exterior", True),
+    ("Seite links", "Linke Fahrzeugseite gerade und vollständig aufnehmen.", "exterior", True),
+    ("Diagonal hinten links", "Hintere linke Fahrzeugecke vollständig zeigen.", "exterior", True),
+    ("Heck", "Fahrzeug gerade und vollständig von hinten aufnehmen.", "exterior", True),
+    ("Diagonal hinten rechts", "Hintere rechte Fahrzeugecke vollständig zeigen.", "exterior", True),
+    ("Seite rechts", "Rechte Fahrzeugseite gerade und vollständig aufnehmen.", "exterior", True),
+    ("Diagonal vorne rechts", "Vordere rechte Fahrzeugecke vollständig zeigen.", "exterior", True),
+    ("Innenraum", "Gesamteindruck des Innenraums aufnehmen.", "interior", False),
+    ("Lenkrad", "Lenkrad mittig und ohne Spiegelungen aufnehmen.", "detail", False),
+    ("Armaturenbrett", "Armaturenbrett vollständig und scharf aufnehmen.", "detail", False),
+    (
+        "Blick ins Fahrzeug links",
+        "Seitlichen Einblick durch die linke Tür aufnehmen.",
+        "interior",
+        False,
+    ),
+    (
+        "Blick ins Fahrzeug rechts",
+        "Seitlichen Einblick durch die rechte Tür aufnehmen.",
+        "interior",
+        False,
+    ),
+    (
+        "Rücksitzbank links",
+        "Rücksitzbank von der linken Fahrzeugseite aufnehmen.",
+        "interior",
+        False,
+    ),
+    (
+        "Rücksitzbank rechts",
+        "Rücksitzbank von der rechten Fahrzeugseite aufnehmen.",
+        "interior",
+        False,
+    ),
+    ("Kofferraum", "Geöffneten Kofferraum vollständig aufnehmen.", "detail", False),
+]
 
 
 def _csrf_token(request: Request) -> str:
@@ -123,6 +174,77 @@ def _location_name_exists(
     if excluding_id is not None:
         statement = statement.where(Location.id != excluding_id)
     return db.scalar(statement) is not None
+
+
+def _optional_uuid(value: str) -> uuid.UUID | None:
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Ungültige Auswahl") from exc
+
+
+def _tenant_locations(
+    db: Session, dealership_id: uuid.UUID, ids: list[uuid.UUID]
+) -> list[Location]:
+    if not ids:
+        return []
+    unique_ids = set(ids)
+    locations = list(
+        db.scalars(
+            select(Location).where(
+                Location.dealership_id == dealership_id,
+                Location.id.in_(unique_ids),
+            )
+        )
+    )
+    if len(locations) != len(unique_ids):
+        raise HTTPException(status_code=400, detail="Ungültige Standortauswahl")
+    return locations
+
+
+def _tenant_brand(
+    db: Session, dealership_id: uuid.UUID, brand_id: uuid.UUID | None
+) -> Brand | None:
+    if brand_id is None:
+        return None
+    brand = db.get(Brand, brand_id)
+    if brand is None or brand.dealership_id != dealership_id:
+        raise HTTPException(status_code=400, detail="Ungültige Markenauswahl")
+    return brand
+
+
+async def _store_configuration_image(
+    storage: ObjectStorage,
+    upload: UploadFile,
+    *,
+    object_key_prefix: str,
+    png_only: bool = False,
+) -> tuple[str, str]:
+    content_type = upload.content_type or ""
+    allowed_types = {"image/png"} if png_only else set(IMAGE_EXTENSIONS)
+    if content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400, detail="Bitte eine passende PNG- oder JPG-Datei wählen."
+        )
+    content = await upload.read(MAX_CONFIGURATION_IMAGE_BYTES + 1)
+    if not content or len(content) > MAX_CONFIGURATION_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Die Bilddatei darf höchstens 20 MB groß sein.")
+    valid_signature = (
+        content.startswith(b"\x89PNG\r\n\x1a\n")
+        if content_type == "image/png"
+        else content.startswith(b"\xff\xd8\xff")
+    )
+    if not valid_signature:
+        raise HTTPException(status_code=400, detail="Die Bilddatei ist beschädigt oder ungültig.")
+    extension = IMAGE_EXTENSIONS[content_type]
+    object_key = f"{object_key_prefix}/{uuid.uuid4()}.{extension}"
+    try:
+        storage.put_object(object_key=object_key, content=content, content_type=content_type)
+    except StorageUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Bildspeicher ist nicht erreichbar") from exc
+    return object_key, content_type
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -435,5 +557,379 @@ def update_user(
         _flash(request, "Benutzer wurde gespeichert.")
     return RedirectResponse(
         f"/admin/dealerships/{user.dealership_id}#users",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.get("/dealerships/{dealership_id}/configuration", response_class=HTMLResponse)
+def configuration_page(
+    dealership_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    brands = list(
+        db.scalars(select(Brand).where(Brand.dealership_id == dealership.id).order_by(Brand.name))
+    )
+    locations = list(
+        db.scalars(
+            select(Location).where(Location.dealership_id == dealership.id).order_by(Location.name)
+        )
+    )
+    backgrounds = list(
+        db.scalars(
+            select(Background)
+            .options(selectinload(Background.locations))
+            .where(Background.dealership_id == dealership.id)
+            .order_by(Background.name)
+        )
+    )
+    steps = list(
+        db.scalars(
+            select(CaptureStep)
+            .where(CaptureStep.dealership_id == dealership.id)
+            .order_by(CaptureStep.capture_order, CaptureStep.name)
+        )
+    )
+    background_previews = {
+        background.id: storage.create_download_url(object_key=background.object_key)
+        for background in backgrounds
+    }
+    silhouette_previews = {
+        step.id: storage.create_download_url(object_key=step.silhouette_object_key)
+        for step in steps
+        if step.silhouette_object_key
+    }
+    return templates.TemplateResponse(
+        request,
+        "admin/configuration.html",
+        _context(
+            request,
+            admin,
+            dealership=dealership,
+            brands=brands,
+            locations=locations,
+            backgrounds=backgrounds,
+            steps=steps,
+            brand_by_id={brand.id: brand for brand in brands},
+            background_previews=background_previews,
+            silhouette_previews=silhouette_previews,
+        ),
+    )
+
+
+@router.post("/dealerships/{dealership_id}/brands")
+def create_brand(
+    dealership_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        _flash(request, "Bitte geben Sie einen Markennamen ein.", "error")
+    else:
+        db.add(Brand(dealership_id=dealership.id, name=cleaned_name))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            _flash(request, "Diese Marke ist bereits vorhanden.", "error")
+        else:
+            _flash(request, "Marke wurde angelegt.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#brands",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/brands/{brand_id}")
+def update_brand(
+    brand_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    is_active: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    brand = db.get(Brand, brand_id)
+    if brand is None:
+        raise HTTPException(status_code=404, detail="Marke wurde nicht gefunden")
+    _authorized_dealership(db, admin, brand.dealership_id)
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        _flash(request, "Bitte geben Sie einen Markennamen ein.", "error")
+    else:
+        brand.name = cleaned_name
+        brand.is_active = is_active == "on"
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            _flash(request, "Diese Marke ist bereits vorhanden.", "error")
+        else:
+            _flash(request, "Marke wurde gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{brand.dealership_id}/configuration#brands",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/dealerships/{dealership_id}/backgrounds")
+async def create_background(
+    dealership_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    brand_id: str = Form(default=""),
+    location_ids: list[uuid.UUID] = Form(default=[]),
+    image: UploadFile = File(),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        _flash(request, "Bitte geben Sie einen Hintergrundnamen ein.", "error")
+        return RedirectResponse(
+            f"/admin/dealerships/{dealership.id}/configuration#backgrounds",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
+    selected_locations = _tenant_locations(db, dealership.id, location_ids)
+    object_key, content_type = await _store_configuration_image(
+        storage,
+        image,
+        object_key_prefix=f"dealerships/{dealership.id}/configuration/backgrounds",
+    )
+    background = Background(
+        dealership_id=dealership.id,
+        brand_id=selected_brand.id if selected_brand else None,
+        name=cleaned_name,
+        object_key=object_key,
+        content_type=content_type,
+        locations=selected_locations,
+    )
+    db.add(background)
+    db.commit()
+    _flash(request, "Hintergrund wurde hochgeladen.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#backgrounds",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/backgrounds/{background_id}")
+def update_background(
+    background_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    brand_id: str = Form(default=""),
+    location_ids: list[uuid.UUID] = Form(default=[]),
+    is_active: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    background = db.get(Background, background_id)
+    if background is None:
+        raise HTTPException(status_code=404, detail="Hintergrund wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, background.dealership_id)
+    cleaned_name = name.strip()
+    if not cleaned_name:
+        _flash(request, "Bitte geben Sie einen Hintergrundnamen ein.", "error")
+    else:
+        selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
+        background.name = cleaned_name
+        background.brand_id = selected_brand.id if selected_brand else None
+        background.locations = _tenant_locations(db, dealership.id, location_ids)
+        background.is_active = is_active == "on"
+        db.commit()
+        _flash(request, "Hintergrund wurde gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#backgrounds",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/dealerships/{dealership_id}/capture-steps/defaults")
+def create_default_capture_steps(
+    dealership_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    existing_names = set(
+        db.scalars(select(CaptureStep.name).where(CaptureStep.dealership_id == dealership.id))
+    )
+    next_order = (
+        db.scalar(
+            select(func.max(CaptureStep.capture_order)).where(
+                CaptureStep.dealership_id == dealership.id
+            )
+        )
+        or 0
+    )
+    added = 0
+    for name, instruction, category, processing in STANDARD_CAPTURE_STEPS:
+        if name in existing_names:
+            continue
+        next_order += 1
+        db.add(
+            CaptureStep(
+                dealership_id=dealership.id,
+                name=name,
+                instruction=instruction,
+                category=category,
+                capture_order=next_order,
+                export_order=next_order,
+                is_required=True,
+                requires_processing=processing,
+            )
+        )
+        added += 1
+    db.commit()
+    _flash(
+        request,
+        f"{added} Standard-Fotopositionen wurden ergänzt."
+        if added
+        else "Der Standardablauf ist bereits vollständig vorhanden.",
+    )
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#capture-steps",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/dealerships/{dealership_id}/capture-steps")
+def create_capture_step(
+    dealership_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    instruction: str = Form(default=""),
+    category: str = Form(default="detail"),
+    capture_order: int = Form(),
+    export_order: int | None = Form(default=None),
+    is_required: str | None = Form(default=None),
+    requires_processing: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    if category not in {"exterior", "interior", "detail", "free"}:
+        raise HTTPException(status_code=400, detail="Ungültige Kategorie")
+    step = CaptureStep(
+        dealership_id=dealership.id,
+        name=name.strip(),
+        instruction=instruction.strip(),
+        category=category,
+        capture_order=capture_order,
+        export_order=export_order,
+        is_required=is_required == "on",
+        requires_processing=requires_processing == "on",
+    )
+    if not step.name or capture_order < 1 or (export_order is not None and export_order < 1):
+        _flash(request, "Bitte prüfen Sie Name und Reihenfolge.", "error")
+    else:
+        db.add(step)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            _flash(request, "Diese Fotoposition ist bereits vorhanden.", "error")
+        else:
+            _flash(request, "Fotoposition wurde angelegt.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#capture-steps",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/capture-steps/{step_id}")
+async def update_capture_step(
+    step_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    instruction: str = Form(default=""),
+    category: str = Form(default="detail"),
+    capture_order: int = Form(),
+    export_order: int | None = Form(default=None),
+    is_required: str | None = Form(default=None),
+    requires_processing: str | None = Form(default=None),
+    is_active: str | None = Form(default=None),
+    silhouette: UploadFile | None = File(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    step = db.get(CaptureStep, step_id)
+    if step is None:
+        raise HTTPException(status_code=404, detail="Fotoposition wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, step.dealership_id)
+    if category not in {"exterior", "interior", "detail", "free"}:
+        raise HTTPException(status_code=400, detail="Ungültige Kategorie")
+    if not name.strip() or capture_order < 1 or (export_order is not None and export_order < 1):
+        _flash(request, "Bitte prüfen Sie Name und Reihenfolge.", "error")
+    else:
+        step.name = name.strip()
+        step.instruction = instruction.strip()
+        step.category = category
+        step.capture_order = capture_order
+        step.export_order = export_order
+        step.is_required = is_required == "on"
+        step.requires_processing = requires_processing == "on"
+        step.is_active = is_active == "on"
+        if silhouette is not None and silhouette.filename:
+            object_key, content_type = await _store_configuration_image(
+                storage,
+                silhouette,
+                object_key_prefix=f"dealerships/{dealership.id}/configuration/silhouettes",
+                png_only=True,
+            )
+            step.silhouette_object_key = object_key
+            step.silhouette_content_type = content_type
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            _flash(request, "Diese Fotoposition ist bereits vorhanden.", "error")
+        else:
+            _flash(request, "Fotoposition wurde gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#capture-steps",
         status_code=status.HTTP_303_SEE_OTHER,
     )
