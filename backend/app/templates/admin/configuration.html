@@ -34,6 +34,13 @@
             <label>Name<input type="text" name="name" value="{{ background.name }}" maxlength="160" required></label>
             <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}" {% if background.brand_id == brand.id %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
             <fieldset class="choice-group"><legend>Standorte</legend>{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in background.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}{% if not locations %}<span class="muted">Noch keine Standorte vorhanden.</span>{% endif %}</fieldset>
+            <div class="form-grid">
+                <label>Fahrzeuggröße (%)<input type="number" name="vehicle_scale_percent" min="20" max="95" value="{{ background.vehicle_scale_percent }}" required></label>
+                <label>Bodenposition (%)<input type="number" name="vehicle_bottom_percent" min="55" max="98" value="{{ background.vehicle_bottom_percent }}" required></label>
+                <label>Schatten (%)<input type="number" name="shadow_opacity_percent" min="0" max="80" value="{{ background.shadow_opacity_percent }}" required></label>
+                <label>Reflexion (%)<input type="number" name="reflection_opacity_percent" min="0" max="60" value="{{ background.reflection_opacity_percent }}" required></label>
+                <label>Fahrzeughelligkeit (%)<input type="number" name="brightness_percent" min="50" max="150" value="{{ background.brightness_percent }}" required></label>
+            </div>
             <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if background.is_active %}checked{% endif %}><span>Aktiv</span></label><button class="button button-secondary" type="submit">Speichern</button></div>
         </form>
         {% endfor %}

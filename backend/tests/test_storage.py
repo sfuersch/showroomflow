@@ -1,4 +1,5 @@
 from collections.abc import Generator
+import io
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ class FakeS3Client:
         self.presign_call: dict[str, object] | None = None
         self.put_call: dict[str, object] | None = None
         self.head_object_call: dict[str, object] | None = None
+        self.get_object_call: dict[str, object] | None = None
 
     def head_bucket(self, *, Bucket: str) -> None:
         self.head_bucket_name = Bucket
@@ -32,6 +34,10 @@ class FakeS3Client:
     def head_object(self, **kwargs: object) -> dict[str, object]:
         self.head_object_call = kwargs
         return {"ContentLength": 1234, "ContentType": "image/jpeg"}
+
+    def get_object(self, **kwargs: object) -> dict[str, object]:
+        self.get_object_call = kwargs
+        return {"Body": io.BytesIO(b"stored-image")}
 
 
 class UnavailableStorage:
@@ -136,6 +142,19 @@ def test_uploaded_photo_metadata_is_verified() -> None:
 
     assert metadata == (1234, "image/jpeg")
     assert fake_client.head_object_call == {
+        "Bucket": "test-bucket",
+        "Key": "dealerships/one/jobs/job/photo.jpg",
+    }
+
+
+def test_private_object_can_be_downloaded_by_worker() -> None:
+    fake_client = FakeS3Client()
+    storage = ObjectStorage(Settings(storage_bucket="test-bucket"), client=fake_client)
+
+    content = storage.get_object(object_key="dealerships/one/jobs/job/photo.jpg")
+
+    assert content == b"stored-image"
+    assert fake_client.get_object_call == {
         "Bucket": "test-bucket",
         "Key": "dealerships/one/jobs/job/photo.jpg",
     }

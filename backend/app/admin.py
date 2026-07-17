@@ -12,17 +12,23 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.config import get_settings
 from app.database import get_db
 from app.models import (
     Background,
     Brand,
     CaptureStep,
     Dealership,
+    JobStatus,
     Location,
+    PhotoAsset,
+    ProcessingStatus,
     RefreshSession,
     User,
     UserRole,
+    VehicleJob,
 )
+from app.processing_queue import ProcessingQueueUnavailable, enqueue_photo_processing
 from app.security import hash_password, verify_password
 from app.storage import ObjectStorage, StorageUnavailableError, get_object_storage
 
@@ -561,6 +567,136 @@ def update_user(
     )
 
 
+@router.get("/dealerships/{dealership_id}/jobs", response_class=HTMLResponse)
+def jobs_page(
+    dealership_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    jobs = list(
+        db.scalars(
+            select(VehicleJob)
+            .where(VehicleJob.dealership_id == dealership.id)
+            .order_by(VehicleJob.created_at.desc())
+        )
+    )
+    locations = {
+        location.id: location
+        for location in db.scalars(select(Location).where(Location.dealership_id == dealership.id))
+    }
+    return templates.TemplateResponse(
+        request,
+        "admin/jobs.html",
+        _context(
+            request,
+            admin,
+            dealership=dealership,
+            jobs=jobs,
+            locations=locations,
+        ),
+    )
+
+
+@router.get("/jobs/{job_id}", response_class=HTMLResponse)
+def job_detail_page(
+    job_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    job = db.get(VehicleJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, job.dealership_id)
+    photos = list(
+        db.scalars(
+            select(PhotoAsset)
+            .where(
+                PhotoAsset.vehicle_job_id == job.id,
+                PhotoAsset.is_selected.is_(True),
+                PhotoAsset.uploaded_at.is_not(None),
+            )
+            .order_by(PhotoAsset.created_at)
+        )
+    )
+    steps = {
+        step.id: step
+        for step in db.scalars(
+            select(CaptureStep).where(CaptureStep.dealership_id == dealership.id)
+        )
+    }
+    return templates.TemplateResponse(
+        request,
+        "admin/job_detail.html",
+        _context(
+            request,
+            admin,
+            dealership=dealership,
+            job=job,
+            photos=photos,
+            steps=steps,
+            original_urls={
+                photo.id: storage.create_download_url(object_key=photo.original_object_key)
+                for photo in photos
+            },
+            processed_urls={
+                photo.id: storage.create_download_url(object_key=photo.processed_object_key)
+                for photo in photos
+                if photo.processed_object_key
+            },
+            processing_enabled=get_settings().processing_enabled,
+        ),
+    )
+
+
+@router.post("/photos/{photo_id}/process")
+def reprocess_photo(
+    photo_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    photo = db.get(PhotoAsset, photo_id)
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Foto wurde nicht gefunden")
+    job = db.get(VehicleJob, photo.vehicle_job_id)
+    step = db.get(CaptureStep, photo.capture_step_id)
+    if job is None or step is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    _authorized_dealership(db, admin, job.dealership_id)
+    if not step.requires_processing:
+        _flash(request, "Diese Fotoposition benötigt keine Freistellung.", "error")
+    elif not get_settings().processing_enabled:
+        _flash(request, "Es ist noch kein KI-Dienst konfiguriert.", "error")
+    else:
+        photo.processing_status = ProcessingStatus.QUEUED
+        photo.processing_error = None
+        job.status = JobStatus.PROCESSING
+        db.commit()
+        try:
+            enqueue_photo_processing(photo.id)
+        except ProcessingQueueUnavailable:
+            photo.processing_status = ProcessingStatus.FAILED
+            photo.processing_error = "Verarbeitungswarteschlange ist nicht erreichbar"
+            job.status = JobStatus.REVIEW_REQUIRED
+            db.commit()
+            _flash(request, "Die Verarbeitung konnte nicht gestartet werden.", "error")
+        else:
+            _flash(request, "Das Foto wurde zur Verarbeitung vorgemerkt.")
+    return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.get("/dealerships/{dealership_id}/configuration", response_class=HTMLResponse)
 def configuration_page(
     dealership_id: uuid.UUID,
@@ -744,6 +880,11 @@ def update_background(
     name: str = Form(),
     brand_id: str = Form(default=""),
     location_ids: list[uuid.UUID] = Form(default=[]),
+    vehicle_scale_percent: int = Form(default=78),
+    vehicle_bottom_percent: int = Form(default=90),
+    shadow_opacity_percent: int = Form(default=32),
+    reflection_opacity_percent: int = Form(default=10),
+    brightness_percent: int = Form(default=100),
     is_active: str | None = Form(default=None),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
@@ -757,13 +898,25 @@ def update_background(
         raise HTTPException(status_code=404, detail="Hintergrund wurde nicht gefunden")
     dealership = _authorized_dealership(db, admin, background.dealership_id)
     cleaned_name = name.strip()
-    if not cleaned_name:
-        _flash(request, "Bitte geben Sie einen Hintergrundnamen ein.", "error")
+    values_valid = (
+        20 <= vehicle_scale_percent <= 95
+        and 55 <= vehicle_bottom_percent <= 98
+        and 0 <= shadow_opacity_percent <= 80
+        and 0 <= reflection_opacity_percent <= 60
+        and 50 <= brightness_percent <= 150
+    )
+    if not cleaned_name or not values_valid:
+        _flash(request, "Bitte prüfen Sie Name und Showroom-Einstellungen.", "error")
     else:
         selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
         background.name = cleaned_name
         background.brand_id = selected_brand.id if selected_brand else None
         background.locations = _tenant_locations(db, dealership.id, location_ids)
+        background.vehicle_scale_percent = vehicle_scale_percent
+        background.vehicle_bottom_percent = vehicle_bottom_percent
+        background.shadow_opacity_percent = shadow_opacity_percent
+        background.reflection_opacity_percent = reflection_opacity_percent
+        background.brightness_percent = brightness_percent
         background.is_active = is_active == "on"
         db.commit()
         _flash(request, "Hintergrund wurde gespeichert.")

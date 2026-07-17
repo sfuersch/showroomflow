@@ -6,7 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select, update
 
 from app.api.dependencies import CurrentUser, DatabaseSession
-from app.models import CaptureStep, JobStatus, PhotoAsset, UserRole, VehicleJob
+from app.config import get_settings
+from app.models import (
+    CaptureStep,
+    JobStatus,
+    PhotoAsset,
+    ProcessingStatus,
+    UserRole,
+    VehicleJob,
+)
+from app.processing_queue import ProcessingQueueUnavailable, enqueue_photo_processing
 from app.schemas import (
     CaptureSessionResponse,
     CaptureStepConfigurationResponse,
@@ -44,6 +53,13 @@ def _photo_response(storage: ObjectStorage, photo: PhotoAsset) -> PhotoAssetResp
         capture_step_id=photo.capture_step_id,
         revision=photo.revision,
         image_url=storage.create_download_url(object_key=photo.original_object_key),
+        processed_image_url=(
+            storage.create_download_url(object_key=photo.processed_object_key)
+            if photo.processed_object_key
+            else None
+        ),
+        processing_status=photo.processing_status,
+        processing_error=photo.processing_error,
         uploaded_at=photo.uploaded_at,
     )
 
@@ -186,6 +202,25 @@ def complete_photo_upload(
     photo.original_size_bytes = size_bytes
     photo.uploaded_at = datetime.now(timezone.utc)
     photo.is_selected = True
+    step = db.get(CaptureStep, photo.capture_step_id)
+    settings = get_settings()
+    should_enqueue = bool(step and step.requires_processing and settings.processing_enabled)
+    if step and step.requires_processing:
+        photo.processing_status = (
+            ProcessingStatus.QUEUED if should_enqueue else ProcessingStatus.PENDING
+        )
+        job.status = JobStatus.PROCESSING if should_enqueue else JobStatus.REVIEW_REQUIRED
+    else:
+        photo.processing_status = ProcessingStatus.NOT_REQUIRED
     db.commit()
     db.refresh(photo)
+    if should_enqueue:
+        try:
+            enqueue_photo_processing(photo.id)
+        except ProcessingQueueUnavailable:
+            photo.processing_status = ProcessingStatus.FAILED
+            photo.processing_error = "Verarbeitungswarteschlange ist nicht erreichbar"
+            job.status = JobStatus.REVIEW_REQUIRED
+            db.commit()
+            db.refresh(photo)
     return _photo_response(storage, photo)

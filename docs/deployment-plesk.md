@@ -92,3 +92,28 @@ docker compose --env-file .env.production -f compose.production.yaml ps
 ## Rollback
 
 Vor jedem produktiven Update den aktuellen Commit notieren und eine Datenbanksicherung erstellen. Ein Datenbank-Rollback darf nicht allein durch Zuruecksetzen des Git-Commits erfolgen; Migrationen muessen passend zur betroffenen Version behandelt werden.
+## Bildverarbeitung aktivieren
+
+Die Verarbeitung bleibt nach dem ersten Deployment bewusst deaktiviert. Dadurch funktionieren
+Foto-Uploads weiterhin, ohne versehentlich kostenpflichtige KI-Aufrufe auszulösen. Für remove.bg
+werden in `.env.production` folgende Werte gesetzt:
+
+```dotenv
+SHOWROOMFLOW_PROCESSING_PROVIDER=remove_bg
+SHOWROOMFLOW_REMOVE_BG_API_KEY=<API-Schlüssel>
+SHOWROOMFLOW_PROCESSING_QUEUE=showroomflow-processing
+SHOWROOMFLOW_OUTPUT_WIDTH=1920
+SHOWROOMFLOW_OUTPUT_HEIGHT=1440
+```
+
+Anschließend API und Worker gemeinsam bauen und starten:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yaml build api worker
+docker compose --env-file .env.production -f compose.production.yaml up -d api worker
+docker compose --env-file .env.production -f compose.production.yaml ps
+docker compose --env-file .env.production -f compose.production.yaml logs --tail=80 worker
+```
+
+Der API-Container führt beim Start die Migration aus. Der Worker besitzt keinen öffentlichen Port
+und ist nur mit PostgreSQL, Redis, R2 und dem konfigurierten KI-Dienst verbunden.
