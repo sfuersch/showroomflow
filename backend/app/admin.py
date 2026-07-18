@@ -844,6 +844,14 @@ def job_detail_page(
                 for photo in photos
                 if photo.processed_object_key
             },
+            processed_download_urls={
+                photo.id: storage.create_download_url(
+                    object_key=photo.processed_object_key,
+                    filename=f"{job.vin}_{index:02d}_Optimiert.jpg",
+                )
+                for index, photo in enumerate(photos, start=1)
+                if photo.processed_object_key
+            },
             photoroom_variants=photoroom_variants,
             optimized_photoroom_variants=optimized_photoroom_variants,
             photoroom_urls={
@@ -859,7 +867,7 @@ def job_detail_page(
             optimized_photoroom_download_urls={
                 variant.photo_asset_id: storage.create_download_url(
                     object_key=variant.object_key,
-                    filename=f"{job.vin}_{index:02d}_Optimiert.jpg",
+                    filename=f"{job.vin}_{index:02d}_Optimiert_Vergleich.jpg",
                 )
                 for index, photo in enumerate(photos, start=1)
                 for variant in variants
