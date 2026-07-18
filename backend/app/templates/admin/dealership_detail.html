@@ -60,7 +60,22 @@
 <section class="card section-card" id="sftp">
     <div class="section-heading">
         <div><h2>SFTP-Übertragung</h2><p>Fertige ZIP-Dateien sicher an das Zielsystem dieses Autohauses senden.</p></div>
-        {% if sftp_settings and sftp_settings.last_test_successful is not none %}<span class="status {{ 'status-active' if sftp_settings.last_test_successful else 'status-inactive' }}">{{ 'Verbindung geprüft' if sftp_settings.last_test_successful else 'Prüfung fehlgeschlagen' }}</span>{% endif %}
+        <div class="section-heading-actions">
+            {% if sftp_settings and sftp_settings.last_test_successful is not none %}<span class="status {{ 'status-active' if sftp_settings.last_test_successful else 'status-inactive' }}">{{ 'Verbindung geprüft' if sftp_settings.last_test_successful else 'Prüfung fehlgeschlagen' }}</span>{% endif %}
+            <details class="info-popover">
+                <summary aria-label="Informationen zur SFTP-Konfiguration" title="Informationen zur SFTP-Konfiguration">i</summary>
+                <div class="info-popover-content">
+                    <h3>SFTP kurz erklärt</h3>
+                    <ol>
+                        <li>Server, Port, Benutzername, Passwort und Zielverzeichnis eintragen. Die Übertragung zunächst deaktiviert speichern.</li>
+                        <li><strong>Hostschlüssel abrufen</strong> wählen. Der Fingerabdruck stellt sicher, dass später derselbe Server angesprochen wird.</li>
+                        <li><strong>SFTP-Übertragung aktiv</strong> einschalten und erneut speichern.</li>
+                        <li>Mit <strong>Verbindung prüfen</strong> Zugangsdaten und Zielverzeichnis testen.</li>
+                    </ol>
+                    <p>Bei aktiviertem automatischem Export wird die fertige ZIP-Datei selbstständig übertragen. Im Fahrzeugauftrag kann sie außerdem manuell oder erneut gesendet werden. Das gespeicherte Passwort wird verschlüsselt und nicht wieder angezeigt.</p>
+                </div>
+            </details>
+        </div>
     </div>
     <form class="form-grid" method="post" action="/admin/dealerships/{{ dealership.id }}/sftp">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
