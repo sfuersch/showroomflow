@@ -6,6 +6,19 @@
 <div class="credit-inline"><strong>{{ credit_balance.available }} Fahrzeug-Credits verfügbar</strong><span>{{ credit_balance.monthly_available }} monatlich + {{ credit_balance.additional_available }} dauerhaft</span></div>
 {% if not processing_enabled %}<div class="flash flash-error">Der reguläre KI-Dienst ist noch nicht konfiguriert. Originalbilder bleiben verfügbar; Freistellungen können danach manuell gestartet werden.</div>{% endif %}
 <section class="card section-card compact-card">
+    <div class="section-heading"><div><h2>Foto manuell hochladen</h2><p>Das Ausgangsfoto wird mit derselben Pipeline wie eine App-Aufnahme verarbeitet. Ein fremdes Ergebnis kann optional als Referenz daneben angezeigt werden.</p></div></div>
+    {% if active_steps %}
+    <form method="post" action="/admin/jobs/{{ job.id }}/photos" enctype="multipart/form-data" class="manual-photo-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Fotoposition<select name="capture_step_id" required>{% for step in active_steps %}<option value="{{ step.id }}">{{ step.capture_order }} · {{ step.name }}{% if step.requires_processing %} · wird optimiert{% endif %}</option>{% endfor %}</select></label>
+        <label>Unverändertes Ausgangsfoto<input type="file" name="original_image" accept="image/jpeg,image/png" required><small>JPG oder PNG, maximal 30 MB</small></label>
+        <label>Referenzergebnis (optional)<input type="file" name="benchmark_image" accept="image/jpeg,image/png"><small>Zum Beispiel das fertige Bild von Autofox</small></label>
+        <label class="check-row"><input type="checkbox" name="start_processing" checked><span><strong>Optimierung sofort starten</strong><small>Verbraucht für dieses Fahrzeug einmalig einen Credit.</small></span></label>
+        <div class="form-actions"><button class="button button-primary" type="submit">Bild hochladen</button></div>
+    </form>
+    {% else %}<p class="empty">Es sind keine aktiven Fotopositionen konfiguriert.</p>{% endif %}
+</section>
+<section class="card section-card compact-card">
     <div class="section-heading"><div><h2>ZIP-Export</h2><p>Die Export-Nr. bestimmt den Dateinamen. Doppelt belegte Plätze verhindern die Erstellung.</p></div><form method="post" action="/admin/jobs/{{ job.id }}/exports"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary" type="submit" {% if export_runs and export_runs[0].status in ['queued', 'processing'] %}disabled{% endif %}>ZIP erstellen</button></form></div>
     <div class="stack">
         {% for export_run in export_runs %}
@@ -20,7 +33,7 @@
     {% set photoroom_optimized = optimized_photoroom_variants.get(photo.id) %}
     <article class="card photo-review-card">
         <div class="section-heading"><div><h2>{{ step.name if step else "Fotoposition" }}</h2><p>Revision {{ photo.revision }}</p></div><span class="status status-{{ 'active' if photo.processing_status.value in ['completed', 'not_required'] else 'inactive' }}">{{ photo.processing_status.value|replace('_', ' ') }}</span></div>
-        <div class="photo-variants{% if step and step.requires_processing %} {{ ('photo-variants-four' if standard_comparison_enabled else 'photo-variants-three') if comparison_mode_enabled else 'photo-variants-two' }}{% endif %}">
+        <div class="photo-variants{% if photo.id in benchmark_urls %} photo-variants-benchmark{% elif step and step.requires_processing %} {{ ('photo-variants-four' if standard_comparison_enabled else 'photo-variants-three') if comparison_mode_enabled else 'photo-variants-two' }}{% endif %}">
             <div class="photo-download-variant"><a class="photo-image-link" href="{{ original_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ original_preview_urls[photo.id] }}" loading="lazy" decoding="async" alt="Original {{ step.name if step else '' }}"></a><div class="photo-variant-caption"><span>Original</span><a class="download-icon" href="{{ original_download_urls[photo.id] }}" title="Original herunterladen" aria-label="Original herunterladen">↓</a></div></div>
             {% if step and step.requires_processing %}
                 {% if photo.id in processed_urls %}<div class="photo-download-variant"><a class="photo-image-link" href="{{ processed_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ processed_preview_urls[photo.id] }}" loading="lazy" decoding="async" alt="Optimiertes Ergebnis {{ step.name if step else '' }}"></a><div class="photo-variant-caption"><span>Optimiertes Ergebnis</span><a class="download-icon" href="{{ processed_download_urls[photo.id] }}" title="Optimiertes Ergebnis herunterladen" aria-label="Optimiertes Ergebnis herunterladen">↓</a></div></div>{% else %}<div class="photo-placeholder"><span>Noch kein optimiertes Ergebnis</span></div>{% endif %}
@@ -29,6 +42,7 @@
                     {% if photo.id in optimized_photoroom_urls %}<div class="photo-download-variant"><a class="photo-image-link" href="{{ optimized_photoroom_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ optimized_photoroom_preview_urls[photo.id] }}" loading="lazy" decoding="async" alt="Optimiert {{ step.name if step else '' }}"></a><div class="photo-variant-caption"><span>Optimiert{% if photoroom_sandbox %} · Testmodus{% endif %}</span><a class="download-icon" href="{{ optimized_photoroom_download_urls[photo.id] }}" title="Optimiertes Bild herunterladen" aria-label="Optimiertes Bild herunterladen">↓</a></div></div>{% else %}<div class="photo-placeholder"><span>{% if photoroom_optimized %}Optimiert: {{ photoroom_optimized.status|replace('_', ' ') }}{% else %}Noch kein optimierter Vergleich{% endif %}</span></div>{% endif %}
                 {% endif %}
             {% endif %}
+            {% if photo.id in benchmark_urls %}<div class="photo-download-variant benchmark-variant"><a class="photo-image-link" href="{{ benchmark_urls[photo.id] }}" target="_blank" rel="noopener"><img src="{{ benchmark_preview_urls[photo.id] }}" loading="lazy" decoding="async" alt="Referenzergebnis {{ step.name if step else '' }}"></a><div class="photo-variant-caption"><span>Referenzergebnis</span><a class="download-icon" href="{{ benchmark_download_urls[photo.id] }}" title="Referenzergebnis herunterladen" aria-label="Referenzergebnis herunterladen">↓</a></div></div>{% endif %}
         </div>
         {% if photo.processing_error %}<p class="field-error">Die Bildverarbeitung ist fehlgeschlagen. Bitte erneut starten oder den Systemadministrator informieren.</p>{% endif %}
         {% if comparison_mode_enabled and photoroom and photoroom.error %}<p class="field-error">Der Vergleich ist fehlgeschlagen.</p>{% endif %}

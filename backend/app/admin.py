@@ -63,11 +63,13 @@ from app.sftp_transfer import (
     validate_settings as validate_sftp_settings,
 )
 from app.storage import ObjectStorage, StorageUnavailableError, get_object_storage
+from app.thumbnails import ThumbnailError, create_thumbnail, thumbnail_key
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 MAX_CONFIGURATION_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_JOB_PHOTO_BYTES = 30 * 1024 * 1024
 IMAGE_EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png"}
 OVERLAY_POSITIONS = {
     "top_left": "Oben links",
@@ -397,6 +399,23 @@ async def _store_configuration_image(
     except StorageUnavailableError as exc:
         raise HTTPException(status_code=503, detail="Bildspeicher ist nicht erreichbar") from exc
     return object_key, content_type
+
+
+async def _read_job_photo(upload: UploadFile) -> tuple[bytes, str, str]:
+    content_type = upload.content_type or ""
+    if content_type not in IMAGE_EXTENSIONS:
+        raise ValueError("Bitte eine JPG- oder PNG-Datei wählen.")
+    content = await upload.read(MAX_JOB_PHOTO_BYTES + 1)
+    if not content or len(content) > MAX_JOB_PHOTO_BYTES:
+        raise ValueError("Die Bilddatei darf höchstens 30 MB groß sein.")
+    valid_signature = (
+        content.startswith(b"\x89PNG\r\n\x1a\n")
+        if content_type == "image/png"
+        else content.startswith(b"\xff\xd8\xff")
+    )
+    if not valid_signature:
+        raise ValueError("Die Bilddatei ist beschädigt oder ungültig.")
+    return content, content_type, IMAGE_EXTENSIONS[content_type]
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -1017,8 +1036,28 @@ def jobs_page(
     )
     locations = {
         location.id: location
-        for location in db.scalars(select(Location).where(Location.dealership_id == dealership.id))
+        for location in db.scalars(
+            select(Location).where(
+                Location.dealership_id == dealership.id,
+                Location.is_active.is_(True),
+            )
+        )
     }
+    brands = list(
+        db.scalars(
+            select(Brand)
+            .where(Brand.dealership_id == dealership.id, Brand.is_active.is_(True))
+            .order_by(Brand.name)
+        )
+    )
+    backgrounds = list(
+        db.scalars(
+            select(Background)
+            .options(selectinload(Background.locations))
+            .where(Background.dealership_id == dealership.id, Background.is_active.is_(True))
+            .order_by(Background.name)
+        )
+    )
     return templates.TemplateResponse(
         request,
         "admin/jobs.html",
@@ -1028,8 +1067,257 @@ def jobs_page(
             dealership=dealership,
             jobs=jobs,
             locations=locations,
+            brands=brands,
+            backgrounds=backgrounds,
         ),
     )
+
+
+@router.post("/dealerships/{dealership_id}/jobs")
+def create_job_from_admin(
+    dealership_id: uuid.UUID,
+    request: Request,
+    vin: str = Form(),
+    location_id: str = Form(),
+    brand_id: str = Form(),
+    background_id: str = Form(default=""),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    try:
+        selected_location_id = uuid.UUID(location_id)
+        selected_brand_id = uuid.UUID(brand_id)
+        selected_background_id = _optional_uuid(background_id)
+    except (ValueError, HTTPException):
+        _flash(request, "Bitte Standort, Marke und Hintergrund korrekt auswählen.", "error")
+        return RedirectResponse(
+            f"/admin/dealerships/{dealership.id}/jobs",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    location = db.get(Location, selected_location_id)
+    brand = db.get(Brand, selected_brand_id)
+    background = db.get(Background, selected_background_id) if selected_background_id else None
+    normalized_vin = vin.strip().upper()
+    error: str | None = None
+    if not normalized_vin or len(normalized_vin) > 64:
+        error = "Bitte eine Fahrgestellnummer mit höchstens 64 Zeichen eingeben."
+    elif location is None or not location.is_active or location.dealership_id != dealership.id:
+        error = "Der gewählte Standort ist nicht verfügbar."
+    elif brand is None or not brand.is_active or brand.dealership_id != dealership.id:
+        error = "Die gewählte Marke ist nicht verfügbar."
+    elif background is not None and (
+        not background.is_active
+        or background.dealership_id != dealership.id
+        or (background.brand_id is not None and background.brand_id != brand.id)
+        or (background.locations and location not in background.locations)
+    ):
+        error = "Der gewählte Hintergrund passt nicht zu Standort und Marke."
+    if error:
+        _flash(request, error, "error")
+        return RedirectResponse(
+            f"/admin/dealerships/{dealership.id}/jobs",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    db.scalar(select(Dealership).where(Dealership.id == dealership.id).with_for_update())
+    latest_version = db.scalar(
+        select(func.max(VehicleJob.version)).where(
+            VehicleJob.dealership_id == dealership.id,
+            VehicleJob.vin == normalized_vin,
+        )
+    )
+    job = VehicleJob(
+        dealership_id=dealership.id,
+        location_id=location.id,
+        created_by_id=admin.id,
+        vin=normalized_vin,
+        version=(latest_version or 0) + 1,
+        brand=brand.name,
+        brand_id=brand.id,
+        background_id=background.id if background else None,
+        status=JobStatus.DRAFT,
+        auto_export=False,
+    )
+    db.add(job)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        _flash(request, "Der Auftrag konnte wegen einer parallelen Anlage nicht erstellt werden.", "error")
+        return RedirectResponse(
+            f"/admin/dealerships/{dealership.id}/jobs",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    _flash(request, f"Testauftrag {job.vin} · Version {job.version} wurde angelegt.")
+    return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/jobs/{job_id}/photos")
+async def upload_job_photo_from_admin(
+    job_id: uuid.UUID,
+    request: Request,
+    capture_step_id: str = Form(),
+    original_image: UploadFile = File(),
+    benchmark_image: UploadFile | None = File(default=None),
+    start_processing: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    job = db.get(VehicleJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    _authorized_dealership(db, admin, job.dealership_id)
+    try:
+        selected_step_id = uuid.UUID(capture_step_id)
+    except ValueError:
+        _flash(request, "Bitte eine Fotoposition auswählen.", "error")
+        return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+    step = db.get(CaptureStep, selected_step_id)
+    if step is None or not step.is_active or step.dealership_id != job.dealership_id:
+        _flash(request, "Die gewählte Fotoposition ist nicht verfügbar.", "error")
+        return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        original, original_type, original_extension = await _read_job_photo(original_image)
+        original_thumbnail = create_thumbnail(original)
+        benchmark: bytes | None = None
+        benchmark_type: str | None = None
+        benchmark_extension: str | None = None
+        benchmark_thumbnail: bytes | None = None
+        if benchmark_image is not None and benchmark_image.filename:
+            benchmark, benchmark_type, benchmark_extension = await _read_job_photo(
+                benchmark_image
+            )
+            benchmark_thumbnail = create_thumbnail(benchmark)
+    except (ValueError, ThumbnailError) as exc:
+        _flash(request, str(exc), "error")
+        return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    latest_revision = db.scalar(
+        select(func.max(PhotoAsset.revision)).where(
+            PhotoAsset.vehicle_job_id == job.id,
+            PhotoAsset.capture_step_id == step.id,
+        )
+    )
+    photo_id = uuid.uuid4()
+    original_key = (
+        f"dealerships/{job.dealership_id}/jobs/{job.id}/originals/"
+        f"{step.id}/{photo_id}.{original_extension}"
+    )
+    original_thumbnail_key = thumbnail_key(original_key)
+    benchmark_key = (
+        f"dealerships/{job.dealership_id}/jobs/{job.id}/benchmarks/"
+        f"{step.id}/{photo_id}.{benchmark_extension}"
+        if benchmark is not None
+        else None
+    )
+    benchmark_thumbnail_key = thumbnail_key(benchmark_key) if benchmark_key else None
+    try:
+        storage.put_object(
+            object_key=original_key,
+            content=original,
+            content_type=original_type,
+        )
+        storage.put_object(
+            object_key=original_thumbnail_key,
+            content=original_thumbnail,
+            content_type="image/jpeg",
+        )
+        if benchmark is not None and benchmark_key and benchmark_thumbnail_key:
+            storage.put_object(
+                object_key=benchmark_key,
+                content=benchmark,
+                content_type=benchmark_type or "image/jpeg",
+            )
+            storage.put_object(
+                object_key=benchmark_thumbnail_key,
+                content=benchmark_thumbnail or b"",
+                content_type="image/jpeg",
+            )
+    except StorageUnavailableError:
+        _flash(request, "Der Bildspeicher ist nicht erreichbar.", "error")
+        return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    db.execute(
+        update(PhotoAsset)
+        .where(
+            PhotoAsset.vehicle_job_id == job.id,
+            PhotoAsset.capture_step_id == step.id,
+        )
+        .values(is_selected=False)
+    )
+    photo = PhotoAsset(
+        id=photo_id,
+        vehicle_job_id=job.id,
+        capture_step_id=step.id,
+        captured_by_id=admin.id,
+        revision=(latest_revision or 0) + 1,
+        original_object_key=original_key,
+        original_content_type=original_type,
+        expected_size_bytes=len(original),
+        original_size_bytes=len(original),
+        original_thumbnail_object_key=original_thumbnail_key,
+        benchmark_object_key=benchmark_key,
+        benchmark_thumbnail_object_key=benchmark_thumbnail_key,
+        benchmark_content_type=benchmark_type,
+        benchmark_size_bytes=len(benchmark) if benchmark is not None else None,
+        uploaded_at=datetime.now(timezone.utc),
+        is_selected=True,
+        processing_status=(
+            ProcessingStatus.PENDING if step.requires_processing else ProcessingStatus.NOT_REQUIRED
+        ),
+    )
+    db.add(photo)
+    job.status = JobStatus.REVIEW_REQUIRED
+    db.commit()
+
+    process_now = start_processing == "on" and step.requires_processing
+    image_settings = get_image_settings(db)
+    runtime = get_settings()
+    if process_now and job.background_id is None:
+        _flash(
+            request,
+            "Foto gespeichert. Ohne gewählten Hintergrund kann die Optimierung nicht starten.",
+            "error",
+        )
+    elif process_now and provider_is_available(image_settings, runtime):
+        try:
+            reserve_vehicle_credit(db, job, image_settings.provider)
+        except VehicleCreditsExhausted as exc:
+            photo.processing_error = str(exc)
+            db.commit()
+            _flash(request, f"Foto gespeichert. {exc}", "error")
+        else:
+            photo.processing_status = ProcessingStatus.QUEUED
+            photo.processing_error = None
+            job.status = JobStatus.PROCESSING
+            db.commit()
+            try:
+                enqueue_photo_processing(photo.id)
+            except ProcessingQueueUnavailable:
+                photo.processing_status = ProcessingStatus.FAILED
+                photo.processing_error = "Verarbeitungswarteschlange ist nicht erreichbar"
+                job.status = JobStatus.REVIEW_REQUIRED
+                db.commit()
+                _flash(request, "Foto gespeichert, aber die Verarbeitung konnte nicht starten.", "error")
+            else:
+                _flash(request, "Foto gespeichert und zur Optimierung vorgemerkt.")
+    elif process_now:
+        _flash(request, "Foto gespeichert. Der Bilddienst ist noch nicht verfügbar.", "error")
+    else:
+        _flash(request, "Foto und Referenz wurden gespeichert." if benchmark else "Foto wurde gespeichert.")
+    return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
@@ -1063,6 +1351,10 @@ def job_detail_page(
             select(CaptureStep).where(CaptureStep.dealership_id == dealership.id)
         )
     }
+    active_steps = sorted(
+        (step for step in steps.values() if step.is_active),
+        key=lambda step: (step.capture_order, step.name),
+    )
     variants = (
         list(
             db.scalars(
@@ -1101,6 +1393,7 @@ def job_detail_page(
             job=job,
             photos=photos,
             steps=steps,
+            active_steps=active_steps,
             original_urls={
                 photo.id: storage.create_download_url(object_key=photo.original_object_key)
                 for photo in photos
@@ -1117,6 +1410,26 @@ def job_detail_page(
                     filename=f"{job.vin}_{index:02d}_Original.jpg",
                 )
                 for index, photo in enumerate(photos, start=1)
+            },
+            benchmark_urls={
+                photo.id: storage.create_download_url(object_key=photo.benchmark_object_key)
+                for photo in photos
+                if photo.benchmark_object_key
+            },
+            benchmark_preview_urls={
+                photo.id: storage.create_download_url(
+                    object_key=photo.benchmark_thumbnail_object_key or photo.benchmark_object_key
+                )
+                for photo in photos
+                if photo.benchmark_object_key
+            },
+            benchmark_download_urls={
+                photo.id: storage.create_download_url(
+                    object_key=photo.benchmark_object_key,
+                    filename=f"{job.vin}_{index:02d}_Referenz.jpg",
+                )
+                for index, photo in enumerate(photos, start=1)
+                if photo.benchmark_object_key
             },
             processed_urls={
                 photo.id: storage.create_download_url(object_key=photo.processed_object_key)

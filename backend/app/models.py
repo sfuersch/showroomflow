@@ -308,6 +308,14 @@ class PhotoAsset(Timestamped, Base):
     original_thumbnail_object_key: Mapped[str | None] = mapped_column(
         String(500), nullable=True, unique=True
     )
+    benchmark_object_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, unique=True
+    )
+    benchmark_thumbnail_object_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, unique=True
+    )
+    benchmark_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    benchmark_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_selected: Mapped[bool] = mapped_column(Boolean, default=False)
     processing_status: Mapped[ProcessingStatus] = mapped_column(
