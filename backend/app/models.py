@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -59,6 +59,31 @@ class Dealership(Timestamped, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     locations: Mapped[list["Location"]] = relationship(back_populates="dealership")
+    sftp_settings: Mapped["DealershipSftpSettings | None"] = relationship(
+        back_populates="dealership", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class DealershipSftpSettings(Timestamped, Base):
+    __tablename__ = "dealership_sftp_settings"
+
+    dealership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dealerships.id", ondelete="CASCADE"), primary_key=True
+    )
+    host: Mapped[str] = mapped_column(String(255), default="")
+    port: Mapped[int] = mapped_column(Integer, default=22)
+    username: Mapped[str] = mapped_column(String(255), default="")
+    password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remote_directory: Mapped[str] = mapped_column(String(500), default="/")
+    host_key_fingerprint: Mapped[str] = mapped_column(String(128), default="")
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_tested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_test_successful: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_test_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    dealership: Mapped[Dealership] = relationship(back_populates="sftp_settings")
 
 
 class Location(Timestamped, Base):
@@ -379,3 +404,10 @@ class ExportRun(Timestamped, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     successful: Mapped[bool] = mapped_column(Boolean, default=False)
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    transfer_status: Mapped[str] = mapped_column(String(32), default="not_requested")
+    transfer_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    transferred_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    remote_path: Mapped[str | None] = mapped_column(String(700), nullable=True)
+    transfer_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)

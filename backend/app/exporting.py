@@ -4,6 +4,7 @@ import io
 import re
 import uuid
 import zipfile
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -15,6 +16,7 @@ from app.config import Settings, get_settings
 from app.database import SessionLocal
 from app.models import (
     CaptureStep,
+    DealershipSftpSettings,
     ExportRun,
     JobStatus,
     PhotoAsset,
@@ -145,10 +147,86 @@ def build_zip_bytes(
     return archive.getvalue()
 
 
+def try_enqueue_auto_export(job_id: uuid.UUID, session: Session | None = None) -> None:
+    """Queue one automatic export once every required photo is ready."""
+    session_context = SessionLocal() if session is None else nullcontext(session)
+    with session_context as db:
+        job = db.scalar(select(VehicleJob).where(VehicleJob.id == job_id).with_for_update())
+        if job is None or not job.auto_export:
+            return
+        existing = db.scalar(select(ExportRun.id).where(ExportRun.vehicle_job_id == job.id))
+        if existing is not None:
+            return
+        required_steps = list(
+            db.scalars(
+                select(CaptureStep).where(
+                    CaptureStep.dealership_id == job.dealership_id,
+                    CaptureStep.is_active.is_(True),
+                    CaptureStep.is_required.is_(True),
+                )
+            )
+        )
+        photos = {
+            photo.capture_step_id: photo
+            for photo in db.scalars(
+                select(PhotoAsset).where(
+                    PhotoAsset.vehicle_job_id == job.id,
+                    PhotoAsset.is_selected.is_(True),
+                    PhotoAsset.uploaded_at.is_not(None),
+                )
+            )
+        }
+        if any(step.id not in photos for step in required_steps):
+            return
+        if any(
+            step.requires_processing
+            and photos[step.id].processing_status != ProcessingStatus.COMPLETED
+            for step in required_steps
+        ):
+            return
+
+        export_run = ExportRun(
+            vehicle_job_id=job.id,
+            attempt=1,
+            zip_filename=f"{safe_vin(job.vin)}.zip",
+            status="queued",
+        )
+        db.add(export_run)
+        try:
+            resolve_export_items(db, job)
+        except ExportValidationError as exc:
+            export_run.status = "failed"
+            export_run.error_message = str(exc)[:1000]
+            job.status = JobStatus.REVIEW_REQUIRED
+            db.commit()
+            return
+        db.commit()
+        db.refresh(export_run)
+
+    from app.processing_queue import (  # Avoid a module import cycle.
+        ProcessingQueueUnavailable,
+        enqueue_vehicle_export,
+    )
+
+    try:
+        enqueue_vehicle_export(export_run.id)
+    except ProcessingQueueUnavailable as exc:
+        with SessionLocal() as db:
+            failed_run = db.get(ExportRun, export_run.id)
+            if failed_run is not None:
+                failed_run.status = "failed"
+                failed_run.error_message = str(exc)[:1000]
+                failed_job = db.get(VehicleJob, failed_run.vehicle_job_id)
+                if failed_job is not None:
+                    failed_job.status = JobStatus.REVIEW_REQUIRED
+                db.commit()
+
+
 def process_export_run(export_run_id: str) -> None:
     identifier = uuid.UUID(export_run_id)
     settings = get_settings()
     storage = ObjectStorage(settings)
+    queue_transfer = False
     try:
         with SessionLocal() as db:
             export_run = db.get(ExportRun, identifier)
@@ -179,7 +257,31 @@ def process_export_run(export_run_id: str) -> None:
             export_run.successful = True
             export_run.completed_at = datetime.now(timezone.utc)
             job.status = JobStatus.COMPLETED
+            sftp_config = db.get(DealershipSftpSettings, job.dealership_id)
+            queue_transfer = bool(
+                job.auto_export and sftp_config is not None and sftp_config.is_enabled
+            )
+            if queue_transfer:
+                export_run.transfer_status = "queued"
             db.commit()
+        if queue_transfer:
+            from app.processing_queue import (  # Avoid a module import cycle.
+                ProcessingQueueUnavailable,
+                enqueue_export_transfer,
+            )
+
+            try:
+                enqueue_export_transfer(identifier)
+            except ProcessingQueueUnavailable as exc:
+                with SessionLocal() as db:
+                    export_run = db.get(ExportRun, identifier)
+                    if export_run is not None:
+                        export_run.transfer_status = "failed"
+                        export_run.transfer_error = str(exc)[:1000]
+                        job = db.get(VehicleJob, export_run.vehicle_job_id)
+                        if job is not None:
+                            job.status = JobStatus.REVIEW_REQUIRED
+                        db.commit()
     except Exception as exc:
         with SessionLocal() as db:
             export_run = db.get(ExportRun, identifier)

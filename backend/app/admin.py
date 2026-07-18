@@ -30,6 +30,7 @@ from app.models import (
     Brand,
     CaptureStep,
     Dealership,
+    DealershipSftpSettings,
     ExportRun,
     ImageOverlay,
     JobStatus,
@@ -46,11 +47,20 @@ from app.models import (
 )
 from app.processing_queue import (
     ProcessingQueueUnavailable,
+    enqueue_export_transfer,
     enqueue_photo_processing,
     enqueue_photo_variant,
     enqueue_vehicle_export,
 )
 from app.security import hash_password, verify_password
+from app.sftp_transfer import (
+    SftpConfigurationError,
+    encrypt_password,
+    normalize_fingerprint,
+    normalize_remote_directory,
+    test_sftp_connection,
+    validate_settings as validate_sftp_settings,
+)
 from app.storage import ObjectStorage, StorageUnavailableError, get_object_storage
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
@@ -649,6 +659,7 @@ def dealership_detail(
         db.scalars(select(User).where(User.dealership_id == dealership.id).order_by(User.email))
     )
     balance = credit_balance(db, dealership)
+    sftp_settings = db.get(DealershipSftpSettings, dealership.id)
     return templates.TemplateResponse(
         request,
         "admin/dealership_detail.html",
@@ -660,7 +671,95 @@ def dealership_detail(
             users=users,
             user_roles=UserRole,
             credit_balance=balance,
+            sftp_settings=sftp_settings,
+            sftp_password_configured=bool(
+                sftp_settings and sftp_settings.password_encrypted
+            ),
         ),
+    )
+
+
+@router.post("/dealerships/{dealership_id}/sftp")
+def update_dealership_sftp(
+    dealership_id: uuid.UUID,
+    request: Request,
+    host: str = Form(default=""),
+    port: int = Form(default=22),
+    username: str = Form(default=""),
+    password: str = Form(default=""),
+    remote_directory: str = Form(default="/"),
+    host_key_fingerprint: str = Form(default=""),
+    is_enabled: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    config = db.get(DealershipSftpSettings, dealership.id)
+    if config is None:
+        config = DealershipSftpSettings(dealership_id=dealership.id)
+        db.add(config)
+    try:
+        config.host = host.strip()
+        config.port = port
+        config.username = username.strip()
+        config.remote_directory = normalize_remote_directory(remote_directory)
+        config.host_key_fingerprint = (
+            normalize_fingerprint(host_key_fingerprint) if host_key_fingerprint.strip() else ""
+        )
+        if password:
+            config.password_encrypted = encrypt_password(password, get_settings())
+        config.is_enabled = is_enabled == "on"
+        if config.is_enabled:
+            validate_sftp_settings(config, get_settings())
+    except SftpConfigurationError as exc:
+        db.rollback()
+        _flash(request, str(exc), "error")
+    else:
+        config.last_test_successful = None
+        config.last_test_error = None
+        db.commit()
+        _flash(request, "SFTP-Einstellungen wurden gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}#sftp", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@router.post("/dealerships/{dealership_id}/sftp/test")
+def test_dealership_sftp(
+    dealership_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    config = db.get(DealershipSftpSettings, dealership.id)
+    if config is None:
+        _flash(request, "Bitte speichern Sie zuerst die SFTP-Einstellungen.", "error")
+    else:
+        try:
+            test_sftp_connection(config, get_settings())
+        except Exception as exc:
+            config.last_tested_at = datetime.now(timezone.utc)
+            config.last_test_successful = False
+            config.last_test_error = str(exc)[:1000]
+            db.commit()
+            _flash(request, f"SFTP-Verbindung fehlgeschlagen: {exc}", "error")
+        else:
+            config.last_tested_at = datetime.now(timezone.utc)
+            config.last_test_successful = True
+            config.last_test_error = None
+            db.commit()
+            _flash(request, "SFTP-Verbindung erfolgreich geprüft.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}#sftp", status_code=status.HTTP_303_SEE_OTHER
     )
 
 
@@ -1161,6 +1260,47 @@ def create_vehicle_export(
         _flash(request, "Die ZIP-Erstellung konnte nicht gestartet werden.", "error")
     else:
         _flash(request, "Die ZIP-Datei wird im Hintergrund erstellt.")
+    return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/exports/{export_run_id}/transfer")
+def transfer_vehicle_export(
+    export_run_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    export_run = db.get(ExportRun, export_run_id)
+    if export_run is None:
+        raise HTTPException(status_code=404, detail="Export wurde nicht gefunden")
+    job = db.get(VehicleJob, export_run.vehicle_job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    _authorized_dealership(db, admin, job.dealership_id)
+    config = db.get(DealershipSftpSettings, job.dealership_id)
+    if export_run.status != "completed" or not export_run.object_key:
+        _flash(request, "Die ZIP-Datei ist noch nicht verfügbar.", "error")
+    elif export_run.transfer_status in {"queued", "processing"}:
+        _flash(request, "Diese ZIP-Datei wird bereits übertragen.", "error")
+    elif config is None or not config.is_enabled:
+        _flash(request, "Die SFTP-Übertragung ist für dieses Autohaus nicht aktiviert.", "error")
+    else:
+        export_run.transfer_status = "queued"
+        export_run.transfer_error = None
+        db.commit()
+        try:
+            enqueue_export_transfer(export_run.id)
+        except ProcessingQueueUnavailable:
+            export_run.transfer_status = "failed"
+            export_run.transfer_error = "Verarbeitungswarteschlange ist nicht erreichbar"
+            db.commit()
+            _flash(request, "Die Übertragung konnte nicht gestartet werden.", "error")
+        else:
+            _flash(request, "Die SFTP-Übertragung wurde gestartet.")
     return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 

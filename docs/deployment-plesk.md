@@ -77,7 +77,19 @@ Nach erfolgreichem Test den Befehl ueber Plesk als taegliche geplante Aufgabe au
 
 Das Skript legt Sicherungsverzeichnis und neue Dump-Dateien mit ausschliesslichem Zugriff fuer den ausfuehrenden Root-Benutzer an.
 
-## 8. Aktualisierung
+## 8. SFTP-Export
+
+Die SFTP-Zugangsdaten werden je Autohaus in der Verwaltungsoberflaeche gepflegt. Das Passwort wird mit dem produktiven `SHOWROOMFLOW_SECRET_KEY` verschluesselt gespeichert; dieser Schluessel darf nach der Einrichtung nicht unkoordiniert geaendert werden.
+
+Fuer die sichere Serverpruefung wird der SHA-256-Fingerabdruck des SFTP-Hostschluessels benoetigt. Er kann vom SFTP-Betreiber bestaetigt und beispielsweise so ausgelesen werden:
+
+```bash
+ssh-keyscan -p 22 sftp.example.de 2>/dev/null | ssh-keygen -lf - -E sha256
+```
+
+Den Wert im Format `SHA256:...` vor der Aktivierung unabhaengig mit dem Betreiber abgleichen. Ueber **Verbindung pruefen** wird das Zielverzeichnis bei Bedarf angelegt. Ist beim Auftrag der automatische Export aktiviert, folgen ZIP-Erstellung und SFTP-Uebertragung automatisch, sobald alle Pflichtfotos hochgeladen und verarbeitet sind. Fehlgeschlagene oder bereits abgeschlossene Uebertragungen koennen in der Auftragsansicht erneut gestartet werden.
+
+## 9. Aktualisierung
 
 Erst nach Datenbanksicherung aktualisieren:
 

@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated
@@ -7,6 +8,7 @@ from sqlalchemy import func, select, update
 
 from app.api.dependencies import CurrentUser, DatabaseSession
 from app.config import get_settings
+from app.exporting import try_enqueue_auto_export
 from app.image_service import (
     VehicleCreditsExhausted,
     get_image_settings,
@@ -38,6 +40,7 @@ from app.storage import (
 )
 
 router = APIRouter(prefix="/jobs/{job_id}/capture", tags=["photo capture"])
+logger = logging.getLogger(__name__)
 StorageDependency = Annotated[ObjectStorage, Depends(get_object_storage)]
 UPLOAD_URL_SECONDS = 900
 
@@ -240,4 +243,10 @@ def complete_photo_upload(
             job.status = JobStatus.REVIEW_REQUIRED
             db.commit()
             db.refresh(photo)
+    try:
+        try_enqueue_auto_export(job.id, db)
+    except Exception:
+        logger.exception("Automatic export could not be queued for job %s", job.id)
+        job.status = JobStatus.REVIEW_REQUIRED
+        db.commit()
     return _photo_response(storage, photo)
