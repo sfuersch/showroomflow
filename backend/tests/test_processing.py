@@ -1,6 +1,8 @@
 import io
+from types import SimpleNamespace
 
 import httpx
+import pytest
 from PIL import Image, ImageDraw
 
 from app.config import Settings
@@ -11,6 +13,7 @@ from app.processing import (
     apply_image_overlays,
     compose_showroom,
     create_photoroom_showroom,
+    vehicle_scale_percent_for_step,
 )
 
 
@@ -18,6 +21,33 @@ def image_bytes(image: Image.Image, format_name: str) -> bytes:
     output = io.BytesIO()
     image.save(output, format=format_name)
     return output.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("step_name", "expected"),
+    [
+        ("Front", 52),
+        ("Diagonal vorne links", 64),
+        ("Seite rechts", 72),
+        ("Heck", 54),
+        ("Spezialaufnahme", 61),
+        ("3/4 hinten rechts", 64),
+    ],
+)
+def test_vehicle_scale_profile_is_selected_from_capture_step(
+    step_name: str,
+    expected: int,
+) -> None:
+    image_settings = SimpleNamespace(
+        vehicle_scale_front_percent=52,
+        vehicle_scale_diagonal_percent=64,
+        vehicle_scale_side_percent=72,
+        vehicle_scale_rear_percent=54,
+        vehicle_scale_default_percent=61,
+    )
+    step = SimpleNamespace(name=step_name)
+
+    assert vehicle_scale_percent_for_step(image_settings, step) == expected
 
 
 def test_showroom_composition_has_configured_output_size() -> None:

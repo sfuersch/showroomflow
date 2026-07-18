@@ -27,6 +27,7 @@ from app.models import (
     PhotoAsset,
     PhotoProcessingVariant,
     ProcessingStatus,
+    SystemImageSettings,
     VehicleJob,
 )
 from app.storage import ObjectStorage
@@ -87,6 +88,23 @@ def _photoroom_api_key(settings: Settings, sandbox: bool | None = None) -> str:
     if use_sandbox and not settings.photoroom_api_key.startswith("sandbox_"):
         return f"sandbox_{settings.photoroom_api_key}"
     return settings.photoroom_api_key
+
+
+def vehicle_scale_percent_for_step(
+    image_settings: SystemImageSettings,
+    step: CaptureStep,
+) -> int:
+    """Select the centrally managed framing profile for a capture position."""
+    name = " ".join(step.name.casefold().split())
+    if any(value in name for value in ("diagonal", "schräg", "schraeg", "3/4")):
+        return image_settings.vehicle_scale_diagonal_percent
+    if any(value in name for value in ("seite", "side", "profil")):
+        return image_settings.vehicle_scale_side_percent
+    if any(value in name for value in ("heck", "hinten", "rear")):
+        return image_settings.vehicle_scale_rear_percent
+    if any(value in name for value in ("front", "vorne")):
+        return image_settings.vehicle_scale_front_percent
+    return image_settings.vehicle_scale_default_percent
 
 
 def create_photoroom_showroom(
@@ -389,13 +407,14 @@ def process_photo(photo_id: str) -> None:
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
+            vehicle_scale_percent = vehicle_scale_percent_for_step(image_settings, step)
             if image_settings.provider == "photoroom":
                 finished = create_photoroom_showroom(
                     original,
                     background_image,
                     background.content_type,
                     settings,
-                    vehicle_scale_percent=background.vehicle_scale_percent,
+                    vehicle_scale_percent=vehicle_scale_percent,
                     vehicle_bottom_percent=background.vehicle_bottom_percent,
                     photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                 )
@@ -408,7 +427,7 @@ def process_photo(photo_id: str) -> None:
                     CompositionOptions(
                         width=settings.output_width,
                         height=settings.output_height,
-                        vehicle_scale_percent=background.vehicle_scale_percent,
+                        vehicle_scale_percent=vehicle_scale_percent,
                         vehicle_bottom_percent=background.vehicle_bottom_percent,
                         shadow_opacity_percent=background.shadow_opacity_percent,
                         reflection_opacity_percent=background.reflection_opacity_percent,
@@ -508,12 +527,13 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
+            vehicle_scale_percent = vehicle_scale_percent_for_step(image_settings, step)
             finished = create_photoroom_showroom(
                 original,
                 background_image,
                 background.content_type,
                 settings,
-                vehicle_scale_percent=background.vehicle_scale_percent,
+                vehicle_scale_percent=vehicle_scale_percent,
                 vehicle_bottom_percent=background.vehicle_bottom_percent,
                 photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                 optimized=provider == "photoroom_optimized",
