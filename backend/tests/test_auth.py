@@ -740,7 +740,6 @@ def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> Non
                 "name": "Autohauslogo",
                 "brand_id": str(brand_id),
                 "location_ids": str(location_id),
-                "capture_step_ids": str(step_id),
                 "position": "bottom_right",
                 "width_percent": "18",
                 "opacity_percent": "90",

@@ -177,7 +177,8 @@ keine Credits doppelt verbrauchen.
 Nach Migration `0010_overlay_supplemental_assets` stehen in der Foto-Konfiguration zwei weitere
 Bereiche bereit. Overlays werden als transparente PNG-Dateien gespeichert und können nach Marke,
 Standort und Fotoposition eingeschränkt sowie in Position, Breite und Deckkraft konfiguriert
-werden. Ohne ausgewählte Fotoposition gelten sie für alle Außenaufnahmen. Zusatzbilder akzeptieren
+werden. Eine oder mehrere Fotopositionen sind möglich; ohne Auswahl wird automatisch die aktive
+Fotoposition mit der kleinsten Export-Nr. verwendet. Zusatzbilder akzeptieren
 PNG oder JPG und besitzen eine eigene Export-Nr.; auch sie können optional auf Marke und Standort
 begrenzt werden.
 
