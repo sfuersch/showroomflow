@@ -1,6 +1,7 @@
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -8,16 +9,20 @@ from app.api.dependencies import CurrentUser, DatabaseSession
 from app.models import (
     Background,
     Brand,
+    CaptureStep,
     Dealership,
     JobStatus,
     Location,
+    PhotoAsset,
     User,
     UserRole,
     VehicleJob,
 )
 from app.schemas import VehicleJobCreateRequest, VehicleJobResponse
+from app.storage import ObjectStorage, get_object_storage
 
 router = APIRouter(prefix="/jobs", tags=["vehicle jobs"])
+StorageDependency = Annotated[ObjectStorage, Depends(get_object_storage)]
 
 
 def _target_dealership(user: User, requested_id: uuid.UUID | None) -> uuid.UUID | None:
@@ -30,13 +35,53 @@ def _target_dealership(user: User, requested_id: uuid.UUID | None) -> uuid.UUID 
 def list_jobs(
     db: DatabaseSession,
     current_user: CurrentUser,
+    storage: StorageDependency,
     dealership_id: uuid.UUID | None = Query(default=None),
-) -> list[VehicleJob]:
+) -> list[VehicleJobResponse]:
     statement = select(VehicleJob).order_by(VehicleJob.created_at.desc())
     target_id = _target_dealership(current_user, dealership_id)
     if current_user.role != UserRole.SYSTEM_ADMIN or target_id is not None:
         statement = statement.where(VehicleJob.dealership_id == target_id)
-    return list(db.scalars(statement))
+    jobs = list(db.scalars(statement))
+    if not jobs:
+        return []
+
+    job_ids = [job.id for job in jobs]
+    photo_rows = db.execute(
+        select(PhotoAsset, CaptureStep)
+        .join(CaptureStep, CaptureStep.id == PhotoAsset.capture_step_id)
+        .where(
+            PhotoAsset.vehicle_job_id.in_(job_ids),
+            PhotoAsset.is_selected.is_(True),
+            PhotoAsset.uploaded_at.is_not(None),
+        )
+        .order_by(PhotoAsset.created_at.desc())
+    ).all()
+
+    thumbnails: dict[uuid.UUID, tuple[int, PhotoAsset]] = {}
+    for photo, step in photo_rows:
+        normalized_name = " ".join(step.name.casefold().split())
+        if "vorne" not in normalized_name or "links" not in normalized_name:
+            continue
+        priority = 0 if "diagonal" in normalized_name else 1
+        current = thumbnails.get(photo.vehicle_job_id)
+        if current is None or priority < current[0]:
+            thumbnails[photo.vehicle_job_id] = (priority, photo)
+
+    responses: list[VehicleJobResponse] = []
+    for job in jobs:
+        thumbnail = thumbnails.get(job.id)
+        thumbnail_url = None
+        if thumbnail is not None:
+            photo = thumbnail[1]
+            object_key = photo.processed_object_key or photo.original_object_key
+            thumbnail_url = storage.create_download_url(object_key=object_key)
+        responses.append(
+            VehicleJobResponse.model_validate(job).model_copy(
+                update={"thumbnail_url": thumbnail_url}
+            )
+        )
+    return responses
 
 
 @router.post("", response_model=VehicleJobResponse, status_code=status.HTTP_201_CREATED)

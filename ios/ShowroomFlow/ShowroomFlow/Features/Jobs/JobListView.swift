@@ -105,11 +105,7 @@ struct JobListView: View {
             captureJob = job
         } label: {
             HStack(spacing: 14) {
-                Image(systemName: "car.side.fill")
-                    .font(.title3)
-                    .foregroundStyle(.indigo)
-                    .frame(width: 46, height: 46)
-                    .background(Color.indigo.opacity(0.1), in: .rect(cornerRadius: 13))
+                jobThumbnail(job)
 
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
@@ -149,6 +145,40 @@ struct JobListView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func jobThumbnail(_ job: VehicleJob) -> some View {
+        if let thumbnailURL = job.thumbnailURL {
+            AsyncImage(url: thumbnailURL) { phase in
+                if case let .success(image) = phase {
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    thumbnailPlaceholder
+                }
+            }
+            .frame(width: 76, height: 57)
+            .clipShape(.rect(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.primary.opacity(0.08))
+            }
+        } else {
+            thumbnailPlaceholder
+                .frame(width: 76, height: 57)
+                .clipShape(.rect(cornerRadius: 12))
+        }
+    }
+
+    private var thumbnailPlaceholder: some View {
+        ZStack {
+            Color.indigo.opacity(0.1)
+            Image(systemName: "car.side.fill")
+                .font(.title3)
+                .foregroundStyle(.indigo)
+        }
     }
 
     private func reload() async {
