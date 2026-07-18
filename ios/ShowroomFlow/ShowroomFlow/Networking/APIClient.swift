@@ -295,6 +295,7 @@ struct VehicleJob: Decodable, Identifiable {
     let backgroundID: UUID?
     let status: String
     let autoExport: Bool
+    let thumbnailURL: URL?
 
     enum CodingKeys: String, CodingKey {
         case id, vin, version, brand, status
@@ -303,6 +304,7 @@ struct VehicleJob: Decodable, Identifiable {
         case brandID = "brand_id"
         case backgroundID = "background_id"
         case autoExport = "auto_export"
+        case thumbnailURL = "thumbnail_url"
     }
 }
 

@@ -153,6 +153,7 @@ class VehicleJobResponse(BaseModel):
     status: JobStatus
     auto_export: bool
     created_at: datetime
+    thumbnail_url: str | None = None
 
 
 class LoginRequest(BaseModel):

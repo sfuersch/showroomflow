@@ -17,6 +17,7 @@ from app.models import (
     Dealership,
     ImageOverlay,
     Location,
+    PhotoAsset,
     SupplementalImage,
     SystemImageSettings,
     User,
@@ -918,6 +919,69 @@ def test_job_stores_selected_brand_and_background() -> None:
     assert response.json()["brand"] == "Volkswagen"
     assert response.json()["brand_id"] == str(brand_id)
     assert response.json()["background_id"] == str(background_id)
+
+
+def test_job_list_uses_optimized_front_left_photo_as_thumbnail() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Diagonal vorne links",
+            instruction="Vordere linke Fahrzeugecke zeigen",
+            category="exterior",
+            capture_order=2,
+            export_order=2,
+            requires_processing=False,
+        )
+        db.add_all([location, step])
+        db.commit()
+        db.refresh(location)
+        db.refresh(step)
+        location_id = location.id
+        step_id = step.id
+
+    tokens = login()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    job_response = client.post(
+        "/api/v1/jobs",
+        headers=headers,
+        json={"location_id": str(location_id), "vin": "THUMB-VIN", "brand": "Ford"},
+    )
+    job_id = job_response.json()["id"]
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        upload = client.post(
+            f"/api/v1/jobs/{job_id}/capture/uploads",
+            headers=headers,
+            json={
+                "capture_step_id": str(step_id),
+                "content_type": "image/jpeg",
+                "size_bytes": 1234,
+            },
+        )
+        assert upload.status_code == 201
+        completed = client.post(
+            f"/api/v1/jobs/{job_id}/capture/photos/{upload.json()['photo_id']}/complete",
+            headers=headers,
+        )
+        assert completed.status_code == 200
+
+        with TestingSession() as db:
+            photo = db.get(PhotoAsset, uuid.UUID(upload.json()["photo_id"]))
+            assert photo is not None
+            photo.processed_object_key = "processed/thumbnail-optimized.jpg"
+            db.commit()
+
+        response = client.get("/api/v1/jobs", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()[0]["thumbnail_url"].startswith(
+            "https://images.example/processed/thumbnail-optimized.jpg"
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
 
 
 def test_guided_capture_upload_tracks_progress_and_revision() -> None:
