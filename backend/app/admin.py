@@ -520,11 +520,9 @@ def update_image_service(
     request: Request,
     provider: str = Form(),
     default_monthly_vehicle_credits: int = Form(),
-    vehicle_scale_front_percent: int = Form(),
-    vehicle_scale_diagonal_percent: int = Form(),
-    vehicle_scale_side_percent: int = Form(),
-    vehicle_scale_rear_percent: int = Form(),
-    vehicle_scale_default_percent: int = Form(),
+    contour_target_area_percent: int = Form(),
+    contour_max_width_percent: int = Form(),
+    contour_max_height_percent: int = Form(),
     photoroom_sandbox: str | None = Form(default=None),
     comparison_mode_enabled: str | None = Form(default=None),
     csrf_token: str = Form(),
@@ -536,21 +534,16 @@ def update_image_service(
     _validate_csrf(request, csrf_token)
     if admin.role != UserRole.SYSTEM_ADMIN:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    scale_values = (
-        vehicle_scale_front_percent,
-        vehicle_scale_diagonal_percent,
-        vehicle_scale_side_percent,
-        vehicle_scale_rear_percent,
-        vehicle_scale_default_percent,
-    )
     if (
         provider not in IMAGE_PROVIDERS
         or not 0 <= default_monthly_vehicle_credits <= 10000
-        or not all(20 <= value <= 95 for value in scale_values)
+        or not 15 <= contour_target_area_percent <= 60
+        or not 40 <= contour_max_width_percent <= 95
+        or not 40 <= contour_max_height_percent <= 90
     ):
         _flash(
             request,
-            "Bitte prüfen Sie Bilddienstleister, Standardkontingent und Skalierungsprofile.",
+            "Bitte prüfen Sie Bilddienstleister, Standardkontingent und Konturautomatik.",
             "error",
         )
     else:
@@ -559,11 +552,9 @@ def update_image_service(
         image_settings.photoroom_sandbox = photoroom_sandbox == "on"
         image_settings.comparison_mode_enabled = comparison_mode_enabled == "on"
         image_settings.default_monthly_vehicle_credits = default_monthly_vehicle_credits
-        image_settings.vehicle_scale_front_percent = vehicle_scale_front_percent
-        image_settings.vehicle_scale_diagonal_percent = vehicle_scale_diagonal_percent
-        image_settings.vehicle_scale_side_percent = vehicle_scale_side_percent
-        image_settings.vehicle_scale_rear_percent = vehicle_scale_rear_percent
-        image_settings.vehicle_scale_default_percent = vehicle_scale_default_percent
+        image_settings.contour_target_area_percent = contour_target_area_percent
+        image_settings.contour_max_width_percent = contour_max_width_percent
+        image_settings.contour_max_height_percent = contour_max_height_percent
         db.commit()
         if provider_is_available(image_settings, get_settings()) or provider == "disabled":
             _flash(request, "Bilddienstleister-Einstellungen wurden gespeichert.")

@@ -158,6 +158,14 @@ bleiben. Sie überschreibt weder das reguläre Ergebnis noch den Export. Da auch
 Relighting sichtbare Farb- oder Helligkeitsänderungen erzeugen kann, muss es vor einer produktiven
 Aktivierung anhand mehrerer heller, dunkler und farbiger Fahrzeuge geprüft werden.
 
+Für Außenaufnahmen führt Photoroom zunächst eine transparente Konturerkennung durch. ShowroomFlow
+berechnet daraus den Zielrahmen anhand des sichtbaren Fahrzeugflächenanteils und übergibt die
+automatisch bestimmten Ränder an die anschließende Showroom-Verarbeitung. Dadurch werden schmale
+Front- und Heckansichten, breite Seitenansichten und diagonale Perspektiven ohne fest zugeordnete
+Perspektivprofile optisch angeglichen. Ziel-Flächenanteil sowie maximale Breite und Höhe werden
+ausschließlich vom Systemadministrator unter `Verwaltung > Bilddienstleister` gepflegt. Dieser
+Ablauf benötigt bei Photoroom zwei API-Aufrufe pro verarbeitetem Außenfoto.
+
 Der Systemadministrator kann die zusätzlichen Bildvergleiche unter
 `Verwaltung > Bilddienstleister` zentral ein- oder ausschalten. Bei ausgeschaltetem Vergleichsmodus sehen
 Autohausbenutzer nur Original, optimiertes Ergebnis und `Verarbeitung starten`; technische

@@ -356,11 +356,9 @@ class SystemImageSettings(Timestamped, Base):
     photoroom_sandbox: Mapped[bool] = mapped_column(Boolean, default=True)
     comparison_mode_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     default_monthly_vehicle_credits: Mapped[int] = mapped_column(Integer, default=30)
-    vehicle_scale_front_percent: Mapped[int] = mapped_column(Integer, default=52)
-    vehicle_scale_diagonal_percent: Mapped[int] = mapped_column(Integer, default=64)
-    vehicle_scale_side_percent: Mapped[int] = mapped_column(Integer, default=72)
-    vehicle_scale_rear_percent: Mapped[int] = mapped_column(Integer, default=54)
-    vehicle_scale_default_percent: Mapped[int] = mapped_column(Integer, default=64)
+    contour_target_area_percent: Mapped[int] = mapped_column(Integer, default=36)
+    contour_max_width_percent: Mapped[int] = mapped_column(Integer, default=78)
+    contour_max_height_percent: Mapped[int] = mapped_column(Integer, default=72)
 
 
 class VehicleCreditUsage(Base):

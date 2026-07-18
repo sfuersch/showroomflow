@@ -1,5 +1,4 @@
 import io
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -9,11 +8,13 @@ from app.config import Settings
 from app.processing import (
     CompositionOptions,
     OverlayLayer,
+    VehicleContour,
     apply_cutout_mask_to_original,
     apply_image_overlays,
+    calculate_contour_framing,
     compose_showroom,
     create_photoroom_showroom,
-    vehicle_scale_percent_for_step,
+    measure_vehicle_contour,
 )
 
 
@@ -24,30 +25,55 @@ def image_bytes(image: Image.Image, format_name: str) -> bytes:
 
 
 @pytest.mark.parametrize(
-    ("step_name", "expected"),
+    ("contour", "expected_width", "expected_height"),
     [
-        ("Front", 52),
-        ("Diagonal vorne links", 64),
-        ("Seite rechts", 72),
-        ("Heck", 54),
-        ("Spezialaufnahme", 61),
-        ("3/4 hinten rechts", 64),
+        (VehicleContour(1000, 1000), 0.520, 0.693),
+        (VehicleContour(1400, 1000), 0.615, 0.586),
+        (VehicleContour(2000, 1000), 0.735, 0.490),
     ],
 )
-def test_vehicle_scale_profile_is_selected_from_capture_step(
-    step_name: str,
-    expected: int,
+def test_contour_framing_normalizes_visible_vehicle_area(
+    contour: VehicleContour,
+    expected_width: float,
+    expected_height: float,
 ) -> None:
-    image_settings = SimpleNamespace(
-        vehicle_scale_front_percent=52,
-        vehicle_scale_diagonal_percent=64,
-        vehicle_scale_side_percent=72,
-        vehicle_scale_rear_percent=54,
-        vehicle_scale_default_percent=61,
+    framing = calculate_contour_framing(
+        contour,
+        output_width=1920,
+        output_height=1440,
+        target_area_percent=36,
+        max_width_percent=78,
+        max_height_percent=72,
     )
-    step = SimpleNamespace(name=step_name)
 
-    assert vehicle_scale_percent_for_step(image_settings, step) == expected
+    assert framing.width_fraction == pytest.approx(expected_width, abs=0.001)
+    assert framing.height_fraction == pytest.approx(expected_height, abs=0.001)
+    assert framing.width_fraction * framing.height_fraction == pytest.approx(0.36, abs=0.001)
+
+
+def test_contour_framing_respects_maximum_dimensions() -> None:
+    framing = calculate_contour_framing(
+        VehicleContour(3000, 800),
+        output_width=1920,
+        output_height=1440,
+        target_area_percent=36,
+        max_width_percent=78,
+        max_height_percent=72,
+    )
+
+    assert framing.width_fraction == pytest.approx(0.78)
+    assert framing.height_fraction < 0.30
+
+
+def test_vehicle_contour_ignores_faint_transparent_pixels() -> None:
+    cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(cutout)
+    draw.rectangle((0, 0, 799, 599), fill=(255, 255, 255, 40))
+    draw.rectangle((180, 120, 619, 519), fill=(30, 30, 30, 255))
+
+    contour = measure_vehicle_contour(image_bytes(cutout, "PNG"))
+
+    assert contour == VehicleContour(width=440, height=400)
 
 
 def test_showroom_composition_has_configured_output_size() -> None:
@@ -142,13 +168,30 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
     api_result = image_bytes(Image.new("RGB", (1920, 1440), "gray"), "JPEG")
+    cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(cutout).rectangle((200, 100, 599, 499), fill=(20, 30, 40, 255))
+    cutout_result = image_bytes(cutout, "PNG")
+    requests = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
         assert request.url == "https://image-api.photoroom.com/v2/edit"
         assert request.headers["x-api-key"] == "sandbox_test-key"
         assert request.headers["pr-hd-background-removal"] == "auto"
         body = request.content
         assert b'name="imageFile"' in body
+        if requests == 1:
+            assert b'name="referenceBox"' in body
+            assert b"originalImage" in body
+            assert b'name="export.format"' in body
+            assert b"png" in body
+            assert b'name="background.imageFile"' not in body
+            return httpx.Response(
+                200,
+                content=cutout_result,
+                headers={"content-type": "image/png"},
+            )
         assert b'name="background.imageFile"' in body
         assert b'name="background.color"' in body
         assert b"FFFFFF" in body
@@ -157,7 +200,9 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
         assert b'name="outputSize"' in body
         assert b"1920x1440" in body
         assert b'name="paddingLeft"' in body
-        assert b"0.200" in body
+        assert b"0.240" in body
+        assert b'name="paddingTop"' in body
+        assert b"0.207" in body
         assert b'name="verticalAlignment"' in body
         assert b"bottom" in body
         assert b"lighting.mode" not in body
@@ -170,7 +215,6 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
             background,
             "image/jpeg",
             settings,
-            vehicle_scale_percent=60,
             vehicle_bottom_percent=90,
             client=client,
         )
@@ -178,15 +222,28 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
     finished = Image.open(io.BytesIO(result))
     assert finished.format == "JPEG"
     assert finished.size == (1920, 1440)
+    assert requests == 2
 
 
 def test_optimized_photoroom_request_preserves_color_and_consistent_positioning() -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
     api_result = image_bytes(Image.new("RGB", (1920, 1440), "gray"), "JPEG")
+    cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(cutout).rectangle((120, 150, 679, 449), fill=(20, 30, 40, 255))
+    cutout_result = image_bytes(cutout, "PNG")
+    requests = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
         body = request.content
+        if requests == 1:
+            return httpx.Response(
+                200,
+                content=cutout_result,
+                headers={"content-type": "image/png"},
+            )
         assert b'name="lighting.mode"' in body
         assert b"ai.preserve-hue-and-saturation" in body
         assert b'name="ignorePaddingAndSnapOnCroppedSides"' in body
@@ -206,3 +263,4 @@ def test_optimized_photoroom_request_preserves_color_and_consistent_positioning(
         )
 
     assert Image.open(io.BytesIO(result)).size == (1920, 1440)
+    assert requests == 2
