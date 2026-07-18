@@ -87,7 +87,7 @@ Fuer die sichere Serverpruefung wird der SHA-256-Fingerabdruck des SFTP-Hostschl
 ssh-keyscan -p 22 sftp.example.de 2>/dev/null | ssh-keygen -lf - -E sha256
 ```
 
-Den Wert im Format `SHA256:...` vor der Aktivierung unabhaengig mit dem Betreiber abgleichen. Ueber **Verbindung pruefen** wird das Zielverzeichnis bei Bedarf angelegt. Ist beim Auftrag der automatische Export aktiviert, folgen ZIP-Erstellung und SFTP-Uebertragung automatisch, sobald alle Pflichtfotos hochgeladen und verarbeitet sind. Fehlgeschlagene oder bereits abgeschlossene Uebertragungen koennen in der Auftragsansicht erneut gestartet werden.
+Nach dem Speichern von Server und Port kann der Wert ueber **Hostschluessel abrufen** direkt vom SFTP-Server uebernommen werden. Bei der erstmaligen Einrichtung oder einer unerwarteten Aenderung sollte der angezeigte Wert im Format `SHA256:...` unabhaengig mit dem Betreiber abgeglichen werden. Ueber **Verbindung pruefen** wird das Zielverzeichnis bei Bedarf angelegt. Ist beim Auftrag der automatische Export aktiviert, folgen ZIP-Erstellung und SFTP-Uebertragung automatisch, sobald alle Pflichtfotos hochgeladen und verarbeitet sind. Fehlgeschlagene oder bereits abgeschlossene Uebertragungen koennen in der Auftragsansicht erneut gestartet werden.
 
 ## 9. Aktualisierung
 
