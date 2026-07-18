@@ -56,6 +56,7 @@ from app.security import hash_password, verify_password
 from app.sftp_transfer import (
     SftpConfigurationError,
     encrypt_password,
+    fetch_host_key_fingerprint,
     normalize_fingerprint,
     normalize_remote_directory,
     test_sftp_connection,
@@ -758,6 +759,37 @@ def test_dealership_sftp(
             config.last_test_error = None
             db.commit()
             _flash(request, "SFTP-Verbindung erfolgreich geprüft.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}#sftp", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
+@router.post("/dealerships/{dealership_id}/sftp/fingerprint")
+def fetch_dealership_sftp_fingerprint(
+    dealership_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    config = db.get(DealershipSftpSettings, dealership.id)
+    if config is None or not config.host.strip():
+        _flash(request, "Bitte speichern Sie zuerst SFTP-Server und Port.", "error")
+    else:
+        try:
+            fingerprint = fetch_host_key_fingerprint(config.host, config.port)
+        except Exception as exc:
+            _flash(request, str(exc), "error")
+        else:
+            config.host_key_fingerprint = fingerprint
+            config.last_test_successful = None
+            config.last_test_error = None
+            db.commit()
+            _flash(request, f"Hostschlüssel wurde abgerufen: {fingerprint}")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}#sftp", status_code=status.HTTP_303_SEE_OTHER
     )

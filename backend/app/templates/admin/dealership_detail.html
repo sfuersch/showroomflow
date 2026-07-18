@@ -81,7 +81,7 @@
         </label>
         <label class="span-2">SHA-256-Hostschlüssel
             <input type="text" name="host_key_fingerprint" value="{{ sftp_settings.host_key_fingerprint if sftp_settings else '' }}" maxlength="128" placeholder="SHA256:…">
-            <small>Der Fingerabdruck schützt vor einer Verbindung zum falschen Server. Er ist beim Betreiber des SFTP-Servers erhältlich.</small>
+            <small>Der Fingerabdruck schützt vor einer Verbindung zum falschen Server. Server und Port zunächst speichern, dann den Schlüssel unten abrufen.</small>
         </label>
         <label class="check-row span-2">
             <input type="checkbox" name="is_enabled" {% if sftp_settings and sftp_settings.is_enabled %}checked{% endif %}>
@@ -90,11 +90,19 @@
         {% if sftp_settings and sftp_settings.last_test_error %}<p class="field-error span-2">{{ sftp_settings.last_test_error }}</p>{% endif %}
         <div class="form-actions span-2"><button class="button button-primary" type="submit">SFTP-Einstellungen speichern</button></div>
     </form>
-    {% if sftp_settings and sftp_password_configured %}
-    <form method="post" action="/admin/dealerships/{{ dealership.id }}/sftp/test">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button class="button button-secondary" type="submit">Verbindung prüfen</button>
-    </form>
+    {% if sftp_settings and sftp_settings.host %}
+    <div class="form-actions">
+        <form method="post" action="/admin/dealerships/{{ dealership.id }}/sftp/fingerprint">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="button button-secondary" type="submit">Hostschlüssel abrufen</button>
+        </form>
+        {% if sftp_password_configured %}
+        <form method="post" action="/admin/dealerships/{{ dealership.id }}/sftp/test">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="button button-secondary" type="submit">Verbindung prüfen</button>
+        </form>
+        {% endif %}
+    </div>
     {% endif %}
 </section>
 

@@ -10,6 +10,7 @@ from app.sftp_transfer import (
     SftpConfigurationError,
     decrypt_password,
     encrypt_password,
+    fetch_host_key_fingerprint,
     key_fingerprint,
     normalize_fingerprint,
     normalize_remote_directory,
@@ -36,6 +37,32 @@ def test_sha256_fingerprint_is_normalized_and_matches_paramiko_key() -> None:
 
     assert fingerprint.startswith("SHA256:")
     assert normalize_fingerprint(f"{fingerprint}===") == fingerprint
+
+
+def test_host_fingerprint_can_be_fetched_without_credentials(monkeypatch) -> None:
+    key = paramiko.RSAKey.generate(1024)
+
+    class FakeSocket:
+        def settimeout(self, _timeout: int) -> None:
+            pass
+
+    class FakeTransport:
+        def __init__(self, _socket) -> None:
+            pass
+
+        def start_client(self, timeout: int) -> None:
+            assert timeout == 15
+
+        def get_remote_server_key(self):
+            return key
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.sftp_transfer.socket.create_connection", lambda *_args, **_kw: FakeSocket())
+    monkeypatch.setattr("app.sftp_transfer.paramiko.Transport", FakeTransport)
+
+    assert fetch_host_key_fingerprint("sftp.example.de", 22) == key_fingerprint(key)
 
 
 def test_sftp_configuration_requires_password_and_fingerprint() -> None:

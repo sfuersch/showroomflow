@@ -71,6 +71,29 @@ def key_fingerprint(key: paramiko.PKey) -> str:
     return "SHA256:" + base64.b64encode(digest).decode().rstrip("=")
 
 
+def fetch_host_key_fingerprint(host: str, port: int) -> str:
+    cleaned_host = host.strip()
+    if not cleaned_host:
+        raise SftpConfigurationError("Bitte tragen Sie zuerst einen SFTP-Server ein.")
+    if port < 1 or port > 65535:
+        raise SftpConfigurationError("Der SFTP-Port ist ungültig.")
+    sock: socket.socket | None = None
+    transport: paramiko.Transport | None = None
+    try:
+        sock = socket.create_connection((cleaned_host, port), timeout=15)
+        sock.settimeout(30)
+        transport = paramiko.Transport(sock)
+        transport.start_client(timeout=15)
+        return key_fingerprint(transport.get_remote_server_key())
+    except (OSError, paramiko.SSHException) as exc:
+        raise SftpTransferError(f"SFTP-Hostschlüssel konnte nicht abgerufen werden: {exc}") from exc
+    finally:
+        if transport is not None:
+            transport.close()
+        elif sock is not None:
+            sock.close()
+
+
 def validate_settings(config: DealershipSftpSettings, runtime: Settings) -> str:
     if not config.host.strip() or not config.username.strip():
         raise SftpConfigurationError("SFTP-Server und Benutzername sind erforderlich.")
