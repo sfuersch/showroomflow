@@ -1,9 +1,11 @@
+import io
 import uuid
 from collections.abc import Generator
 import re
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -51,6 +53,11 @@ class ConfigurationStorage:
 
     def put_object(self, **values: object) -> None:
         self.uploads.append(values)
+
+    def get_object(self, *, object_key: str) -> bytes:
+        output = io.BytesIO()
+        Image.new("RGB", (1920, 1440), "navy").save(output, format="JPEG")
+        return output.getvalue()
 
     def create_download_url(
         self,
@@ -981,13 +988,14 @@ def test_job_list_uses_optimized_front_left_photo_as_thumbnail() -> None:
             photo = db.get(PhotoAsset, uuid.UUID(upload.json()["photo_id"]))
             assert photo is not None
             photo.processed_object_key = "processed/thumbnail-optimized.jpg"
+            photo.processed_thumbnail_object_key = "processed/thumbnail-optimized.thumbnail.jpg"
             db.commit()
 
         response = client.get("/api/v1/jobs", headers=headers)
 
         assert response.status_code == 200
         assert response.json()[0]["thumbnail_url"].startswith(
-            "https://images.example/processed/thumbnail-optimized.jpg"
+            "https://images.example/processed/thumbnail-optimized.thumbnail.jpg"
         )
     finally:
         app.dependency_overrides.pop(get_object_storage, None)
@@ -1060,10 +1068,17 @@ def test_guided_capture_upload_tracks_progress_and_revision() -> None:
     assert first_upload.status_code == 201
     assert first_upload.json()["revision"] == 1
     assert first_complete.status_code == 200
+    assert first_complete.json()["thumbnail_url"].endswith(".thumbnail.jpg?expires=900")
     assert second_upload.json()["revision"] == 2
     assert second_complete.status_code == 200
     assert len(final_session.json()["photos"]) == 1
     assert final_session.json()["photos"][0]["revision"] == 2
+    assert final_session.json()["photos"][0]["thumbnail_url"].endswith(
+        ".thumbnail.jpg?expires=900"
+    )
+    assert any(
+        str(upload["object_key"]).endswith(".thumbnail.jpg") for upload in storage.uploads
+    )
 
 
 def test_guided_capture_is_tenant_scoped() -> None:

@@ -1105,6 +1105,12 @@ def job_detail_page(
                 photo.id: storage.create_download_url(object_key=photo.original_object_key)
                 for photo in photos
             },
+            original_preview_urls={
+                photo.id: storage.create_download_url(
+                    object_key=photo.original_thumbnail_object_key or photo.original_object_key
+                )
+                for photo in photos
+            },
             original_download_urls={
                 photo.id: storage.create_download_url(
                     object_key=photo.original_object_key,
@@ -1114,6 +1120,14 @@ def job_detail_page(
             },
             processed_urls={
                 photo.id: storage.create_download_url(object_key=photo.processed_object_key)
+                for photo in photos
+                if photo.processed_object_key
+            },
+            processed_preview_urls={
+                photo.id: storage.create_download_url(
+                    object_key=photo.processed_thumbnail_object_key
+                    or photo.processed_object_key
+                )
                 for photo in photos
                 if photo.processed_object_key
             },
@@ -1132,8 +1146,22 @@ def job_detail_page(
                 for variant in variants
                 if variant.provider == "photoroom" and variant.object_key
             },
+            photoroom_preview_urls={
+                variant.photo_asset_id: storage.create_download_url(
+                    object_key=variant.thumbnail_object_key or variant.object_key
+                )
+                for variant in variants
+                if variant.provider == "photoroom" and variant.object_key
+            },
             optimized_photoroom_urls={
                 variant.photo_asset_id: storage.create_download_url(object_key=variant.object_key)
+                for variant in variants
+                if variant.provider == "photoroom_optimized" and variant.object_key
+            },
+            optimized_photoroom_preview_urls={
+                variant.photo_asset_id: storage.create_download_url(
+                    object_key=variant.thumbnail_object_key or variant.object_key
+                )
                 for variant in variants
                 if variant.provider == "photoroom_optimized" and variant.object_key
             },

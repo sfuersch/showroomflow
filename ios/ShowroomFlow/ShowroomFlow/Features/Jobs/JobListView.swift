@@ -150,7 +150,7 @@ struct JobListView: View {
     @ViewBuilder
     private func jobThumbnail(_ job: VehicleJob) -> some View {
         if let thumbnailURL = job.thumbnailURL {
-            AsyncImage(url: thumbnailURL) { phase in
+            CachedAsyncImage(url: thumbnailURL) { phase in
                 if case let .success(image) = phase {
                     image
                         .resizable()

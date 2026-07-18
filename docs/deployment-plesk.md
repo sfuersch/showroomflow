@@ -173,6 +173,20 @@ Dienstleisternamen werden in der Auftragsansicht nicht angezeigt. Original und `
 bei aktivem Vergleichsmodus über das Download-Symbol mit einem eindeutigen Dateinamen geladen
 werden.
 
+## Foto-Thumbnails
+
+Ab Migration `0015_photo_thumbnails` werden für neue Originale, optimierte Ergebnisse und
+Vergleichsbilder automatisch JPEG-Vorschauen mit maximal 480 × 360 Pixeln in R2 gespeichert.
+Auftragsansicht und App verwenden diese kleinen Dateien; Vollbilder werden erst beim Öffnen oder
+Herunterladen angefordert. Bestehende Bilder können nach dem Deployment einmalig ergänzt werden:
+
+```bash
+docker compose --env-file .env.production -f compose.production.yaml \
+  exec -T api python -m app.thumbnail_backfill
+```
+
+Der Backfill ist wiederholbar und überspringt bereits vorhandene Vorschaubilder.
+
 Nach der Migration `0007_image_service_credits` wird der reguläre Bilddienstleister unter
 `Verwaltung > Bilddienstleister` durch den Systemadministrator gewählt. Die API-Schlüssel bleiben
 weiterhin als VPS-Secrets in `.env.production`; die Oberfläche zeigt nur ihren Status. Ein dort

@@ -302,6 +302,9 @@ class PhotoAsset(Timestamped, Base):
     original_content_type: Mapped[str] = mapped_column(String(100))
     expected_size_bytes: Mapped[int] = mapped_column(Integer)
     original_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    original_thumbnail_object_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, unique=True
+    )
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_selected: Mapped[bool] = mapped_column(Boolean, default=False)
     processing_status: Mapped[ProcessingStatus] = mapped_column(
@@ -312,6 +315,9 @@ class PhotoAsset(Timestamped, Base):
     )
     processed_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     processed_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    processed_thumbnail_object_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, unique=True
+    )
     processed_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     processing_attempts: Mapped[int] = mapped_column(Integer, default=0)
     processing_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
@@ -342,6 +348,9 @@ class PhotoProcessingVariant(Timestamped, Base):
     object_key: Mapped[str | None] = mapped_column(String(500), nullable=True, unique=True)
     content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thumbnail_object_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, unique=True
+    )
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

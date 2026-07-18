@@ -1,4 +1,74 @@
 import Foundation
+import SwiftUI
+import UIKit
+
+@MainActor
+private final class RemoteImageCache {
+    static let shared = RemoteImageCache()
+    let images = NSCache<NSString, UIImage>()
+
+    private init() {
+        images.countLimit = 160
+        images.totalCostLimit = 80 * 1024 * 1024
+    }
+}
+
+struct CachedAsyncImage<Content: View>: View {
+    let url: URL?
+    private let content: (AsyncImagePhase) -> Content
+    @State private var phase: AsyncImagePhase = .empty
+
+    init(url: URL?, @ViewBuilder content: @escaping (AsyncImagePhase) -> Content) {
+        self.url = url
+        self.content = content
+    }
+
+    var body: some View {
+        content(phase)
+            .task(id: cacheKey) {
+                await loadImage()
+            }
+    }
+
+    private var cacheKey: String {
+        guard let url else { return "" }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.query = nil
+        components?.fragment = nil
+        return components?.url?.absoluteString ?? url.absoluteString
+    }
+
+    @MainActor
+    private func loadImage() async {
+        guard let url else {
+            phase = .empty
+            return
+        }
+        if let cached = RemoteImageCache.shared.images.object(forKey: cacheKey as NSString) {
+            phase = .success(Image(uiImage: cached))
+            return
+        }
+        phase = .empty
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  200..<300 ~= httpResponse.statusCode,
+                  let image = UIImage(data: data) else {
+                throw URLError(.cannotDecodeContentData)
+            }
+            RemoteImageCache.shared.images.setObject(
+                image,
+                forKey: cacheKey as NSString,
+                cost: data.count
+            )
+            phase = .success(Image(uiImage: image))
+        } catch is CancellationError {
+            return
+        } catch {
+            phase = .failure(error)
+        }
+    }
+}
 
 struct APIClient {
     var baseURL: URL
@@ -376,11 +446,17 @@ struct CapturedPhoto: Decodable, Identifiable {
     let captureStepID: UUID
     let revision: Int
     let imageURL: URL
+    let thumbnailURL: URL?
     let processedImageURL: URL?
+    let processedThumbnailURL: URL?
     let uploadedAt: String
 
     var displayImageURL: URL {
         processedImageURL ?? imageURL
+    }
+
+    var displayThumbnailURL: URL {
+        processedThumbnailURL ?? processedImageURL ?? thumbnailURL ?? imageURL
     }
 
     var isOptimized: Bool {
@@ -391,7 +467,9 @@ struct CapturedPhoto: Decodable, Identifiable {
         case id, revision
         case captureStepID = "capture_step_id"
         case imageURL = "image_url"
+        case thumbnailURL = "thumbnail_url"
         case processedImageURL = "processed_image_url"
+        case processedThumbnailURL = "processed_thumbnail_url"
         case uploadedAt = "uploaded_at"
     }
 }

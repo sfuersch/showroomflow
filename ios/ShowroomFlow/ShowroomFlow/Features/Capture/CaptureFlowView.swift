@@ -186,7 +186,7 @@ struct CaptureFlowView: View {
         width: CGFloat,
         height: CGFloat
     ) -> some View {
-        AsyncImage(url: photo.displayImageURL) { phase in
+        CachedAsyncImage(url: photo.displayImageURL) { phase in
             switch phase {
             case let .success(image):
                 image
@@ -360,7 +360,7 @@ struct CaptureFlowView: View {
     @ViewBuilder
     private func stepThumbnail(_ step: ConfiguredCaptureStep) -> some View {
         if let photo = existingPhoto(for: step.id) {
-            AsyncImage(url: photo.displayImageURL) { phase in
+            CachedAsyncImage(url: photo.displayThumbnailURL) { phase in
                 if case let .success(image) = phase {
                     image.resizable().scaledToFill()
                 } else {
