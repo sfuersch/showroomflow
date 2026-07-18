@@ -6,7 +6,9 @@ from PIL import Image, ImageDraw
 from app.config import Settings
 from app.processing import (
     CompositionOptions,
+    OverlayLayer,
     apply_cutout_mask_to_original,
+    apply_image_overlays,
     compose_showroom,
     create_photoroom_showroom,
 )
@@ -49,6 +51,43 @@ def test_showroom_composition_rejects_empty_cutout() -> None:
         assert "kein Fahrzeug" in str(exc)
     else:
         raise AssertionError("An empty cutout must not be accepted")
+
+
+def test_overlay_is_scaled_and_placed_on_optimized_image() -> None:
+    base = Image.new("RGB", (400, 300), "white")
+    logo = Image.new("RGBA", (100, 50), (210, 20, 30, 255))
+
+    result = apply_image_overlays(
+        image_bytes(base, "JPEG"),
+        [
+            OverlayLayer(
+                content=image_bytes(logo, "PNG"),
+                position="bottom_right",
+                width_percent=20,
+                opacity_percent=100,
+            )
+        ],
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    assert finished.size == (400, 300)
+    assert finished.getpixel((330, 255))[0] > 180
+    assert finished.getpixel((20, 20))[0] > 240
+
+
+def test_overlay_opacity_is_applied_without_changing_canvas_size() -> None:
+    base = Image.new("RGB", (400, 300), "white")
+    logo = Image.new("RGBA", (100, 100), (0, 0, 0, 255))
+
+    result = apply_image_overlays(
+        image_bytes(base, "JPEG"),
+        [OverlayLayer(image_bytes(logo, "PNG"), "center", 25, 50)],
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    center = finished.getpixel((200, 150))[0]
+    assert 110 <= center <= 145
+    assert finished.size == (400, 300)
 
 
 def test_preview_mask_preserves_original_resolution_and_pixels() -> None:

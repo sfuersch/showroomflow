@@ -186,3 +186,10 @@ Die Konfiguration ist ausschließlich für Systemadministratoren und Autohausadm
 erreichbar. Autohausadministratoren bleiben auf das eigene Autohaus begrenzt. Fotografen können
 sich nicht an der Verwaltungsoberfläche anmelden und haben weder lesenden noch schreibenden Zugriff
 auf diese Medien.
+
+Der Worker legt passende aktive Overlays nach der regulären KI-Verarbeitung auf das optimierte
+Ergebnis. Er prüft dabei Autohaus, Marke, Standort und Fotoposition erneut. Breite und Deckkraft
+werden begrenzt, die Proportionen bleiben erhalten und zum Bildrand wird ein Sicherheitsabstand
+eingehalten. Originale und manuelle Vergleichsvarianten werden nicht verändert. Nach einer
+Overlay-Änderung müssen bereits verarbeitete Bilder erneut über `Verarbeitung starten` erzeugt
+werden.
