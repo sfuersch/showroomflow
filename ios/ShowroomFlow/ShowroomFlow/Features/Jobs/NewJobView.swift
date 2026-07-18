@@ -95,7 +95,8 @@ struct NewJobView: View {
                     }
                 }
             }
-            .navigationTitle("Neuer Auftrag")
+            .scrollContentBackground(.hidden)
+            .background(Color(.systemGroupedBackground))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -107,6 +108,9 @@ struct NewJobView: View {
                         Task { await save() }
                     }
                     .disabled(!canSave)
+                }
+                ToolbarItem(placement: .principal) {
+                    ShowroomFlowCompactHeader(subtitle: "Neuer Auftrag")
                 }
             }
             .task {

@@ -19,58 +19,64 @@ struct JobListView: View {
         NavigationStack {
             Group {
                 if isLoading && jobs.isEmpty {
-                    ProgressView("Fahrzeuge werden geladen …")
+                    VStack(spacing: 14) {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text("Fahrzeuge werden geladen …")
+                            .foregroundStyle(.secondary)
+                    }
                 } else if jobs.isEmpty {
-                    ContentUnavailableView(
-                        "Noch keine Fahrzeuge",
-                        systemImage: "car.side",
-                        description: Text(errorMessage ?? "Erstellen Sie den ersten Fotoauftrag.")
-                    )
-                } else {
-                    List(jobs) { job in
-                        Button {
-                            captureJob = job
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 5) {
-                                    HStack {
-                                        Text(job.brand)
-                                            .font(.headline)
-                                        Text("Version \(job.version)")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Text(job.vin)
-                                        .font(.subheadline.monospaced())
-                                    Text(job.localizedStatus)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "camera.fill")
-                                    .foregroundStyle(.tint)
-                            }
-                            .contentShape(.rect)
+                    ContentUnavailableView {
+                        Label("Noch keine Fahrzeuge", systemImage: "car.side")
+                    } description: {
+                        Text(errorMessage ?? "Erstellen Sie den ersten Fotoauftrag.")
+                    } actions: {
+                        Button("Ersten Auftrag anlegen", systemImage: "plus") {
+                            isCreatingJob = true
                         }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 3)
+                        .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            if let errorMessage {
+                                Label(errorMessage, systemImage: "wifi.exclamationmark")
+                                    .font(.footnote)
+                                    .foregroundStyle(.red)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(13)
+                                    .background(Color.red.opacity(0.08), in: .rect(cornerRadius: 13))
+                            }
+
+                            ForEach(jobs) { job in
+                                jobCard(job)
+                            }
+                        }
+                        .padding(16)
                     }
                     .refreshable { await reload() }
                 }
             }
-            .navigationTitle("Fahrzeuge")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(.systemGroupedBackground))
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(
-                        "Abmelden",
-                        systemImage: "rectangle.portrait.and.arrow.right",
-                        action: onLogout
-                    )
+                    Button(action: onLogout) {
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                    }
+                    .accessibilityLabel("Abmelden")
+                }
+                ToolbarItem(placement: .principal) {
+                    ShowroomFlowCompactHeader(subtitle: "Fahrzeuge")
                 }
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Neuer Auftrag", systemImage: "plus") {
+                    Button {
                         isCreatingJob = true
+                    } label: {
+                        Image(systemName: "plus")
                     }
+                    .accessibilityLabel("Neuer Auftrag")
                 }
             }
             .sheet(isPresented: $isCreatingJob) {
@@ -92,6 +98,57 @@ struct JobListView: View {
             }
             .task { await reload() }
         }
+    }
+
+    private func jobCard(_ job: VehicleJob) -> some View {
+        Button {
+            captureJob = job
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "car.side.fill")
+                    .font(.title3)
+                    .foregroundStyle(.indigo)
+                    .frame(width: 46, height: 46)
+                    .background(Color.indigo.opacity(0.1), in: .rect(cornerRadius: 13))
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 8) {
+                        Text(job.brand)
+                            .font(.headline)
+                        Text("V\(job.version)")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.secondary.opacity(0.1), in: .capsule)
+                    }
+                    Text(job.vin)
+                        .font(.subheadline.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Label(job.localizedStatus, systemImage: job.statusIcon)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(job.statusColor)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "camera.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(.indigo, in: .circle)
+            }
+            .padding(15)
+            .background(.background, in: .rect(cornerRadius: 18))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color.primary.opacity(0.06))
+            }
+            .shadow(color: Color.black.opacity(0.045), radius: 10, y: 5)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 
     private func reload() async {
@@ -118,6 +175,25 @@ private extension VehicleJob {
         case "completed": "Abgeschlossen"
         case "failed": "Fehlgeschlagen"
         default: status
+        }
+    }
+
+    var statusIcon: String {
+        switch status {
+        case "completed": "checkmark.circle.fill"
+        case "failed", "review_required": "exclamationmark.circle.fill"
+        case "processing", "uploading", "exporting": "arrow.triangle.2.circlepath"
+        case "capturing": "camera.fill"
+        default: "circle.dashed"
+        }
+    }
+
+    var statusColor: Color {
+        switch status {
+        case "completed": .green
+        case "failed", "review_required": .red
+        case "processing", "uploading", "exporting": .orange
+        default: .indigo
         }
     }
 }
