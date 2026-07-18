@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import httpx
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
@@ -19,6 +20,7 @@ from app.image_service import (
 from app.models import (
     Background,
     CaptureStep,
+    ImageOverlay,
     JobStatus,
     PhotoAsset,
     PhotoProcessingVariant,
@@ -41,6 +43,14 @@ class CompositionOptions:
     shadow_opacity_percent: int = 32
     reflection_opacity_percent: int = 10
     brightness_percent: int = 100
+
+
+@dataclass(frozen=True)
+class OverlayLayer:
+    content: bytes
+    position: str = "bottom_right"
+    width_percent: int = 18
+    opacity_percent: int = 100
 
 
 def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
@@ -249,6 +259,102 @@ def compose_showroom(
     return output.getvalue()
 
 
+def apply_image_overlays(image_bytes: bytes, layers: list[OverlayLayer]) -> bytes:
+    if not layers:
+        return image_bytes
+    try:
+        canvas = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGBA")
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Das optimierte Bild ist ungültig") from exc
+
+    margin = max(24, round(min(canvas.size) * 0.025))
+    for layer in layers:
+        try:
+            overlay = Image.open(io.BytesIO(layer.content)).convert("RGBA")
+        except (OSError, ValueError) as exc:
+            raise ImageProcessingError("Eine Overlay-Datei ist ungültig") from exc
+        alpha_box = overlay.getchannel("A").getbbox()
+        if alpha_box is None:
+            raise ImageProcessingError("Ein Overlay enthält keine sichtbaren Pixel")
+        overlay = overlay.crop(alpha_box)
+        target_width = max(1, round(canvas.width * max(5, min(60, layer.width_percent)) / 100))
+        scale = target_width / overlay.width
+        target_size = (target_width, max(1, round(overlay.height * scale)))
+        max_height = max(1, canvas.height - 2 * margin)
+        if target_size[1] > max_height:
+            height_scale = max_height / target_size[1]
+            target_size = (max(1, round(target_size[0] * height_scale)), max_height)
+        overlay = overlay.resize(target_size, Image.Resampling.LANCZOS)
+        opacity = max(10, min(100, layer.opacity_percent))
+        if opacity < 100:
+            overlay.putalpha(
+                overlay.getchannel("A").point(lambda value: round(value * opacity / 100))
+            )
+
+        positions = {
+            "top_left": (margin, margin),
+            "top_right": (canvas.width - overlay.width - margin, margin),
+            "bottom_left": (margin, canvas.height - overlay.height - margin),
+            "bottom_right": (
+                canvas.width - overlay.width - margin,
+                canvas.height - overlay.height - margin,
+            ),
+            "center": (
+                (canvas.width - overlay.width) // 2,
+                (canvas.height - overlay.height) // 2,
+            ),
+        }
+        if layer.position not in positions:
+            raise ImageProcessingError("Eine Overlay-Position ist ungültig")
+        canvas.alpha_composite(overlay, positions[layer.position])
+
+    output = io.BytesIO()
+    canvas.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
+    return output.getvalue()
+
+
+def _matching_overlays(db: Session, job: VehicleJob, step: CaptureStep) -> list[ImageOverlay]:
+    overlays = list(
+        db.scalars(
+            select(ImageOverlay)
+            .options(
+                selectinload(ImageOverlay.locations),
+                selectinload(ImageOverlay.capture_steps),
+            )
+            .where(
+                ImageOverlay.dealership_id == job.dealership_id,
+                ImageOverlay.is_active.is_(True),
+            )
+            .order_by(ImageOverlay.created_at, ImageOverlay.name)
+        )
+    )
+    first_export_step_id = db.scalar(
+        select(CaptureStep.id)
+        .where(
+            CaptureStep.dealership_id == job.dealership_id,
+            CaptureStep.export_order.is_not(None),
+            CaptureStep.is_active.is_(True),
+        )
+        .order_by(CaptureStep.export_order, CaptureStep.capture_order, CaptureStep.name)
+        .limit(1)
+    )
+    matching: list[ImageOverlay] = []
+    for overlay in overlays:
+        if overlay.brand_id is not None and overlay.brand_id != job.brand_id:
+            continue
+        if overlay.locations and all(
+            location.id != job.location_id for location in overlay.locations
+        ):
+            continue
+        if overlay.capture_steps:
+            if all(selected_step.id != step.id for selected_step in overlay.capture_steps):
+                continue
+        elif step.id != first_export_step_id:
+            continue
+        matching.append(overlay)
+    return matching
+
+
 def process_photo(photo_id: str) -> None:
     identifier = uuid.UUID(photo_id)
     settings = get_settings()
@@ -306,6 +412,20 @@ def process_photo(photo_id: str) -> None:
                 )
             else:
                 raise ImageProcessingError("Die Bildverarbeitung ist deaktiviert")
+            matching_overlays = _matching_overlays(db, job, step)
+            if matching_overlays:
+                finished = apply_image_overlays(
+                    finished,
+                    [
+                        OverlayLayer(
+                            content=storage.get_object(object_key=overlay.object_key),
+                            position=overlay.position,
+                            width_percent=overlay.width_percent,
+                            opacity_percent=overlay.opacity_percent,
+                        )
+                        for overlay in matching_overlays
+                    ],
+                )
             processed_key = (
                 f"dealerships/{job.dealership_id}/jobs/{job.id}/processed/{step.id}/{photo.id}.jpg"
             )
