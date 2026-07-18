@@ -7,6 +7,7 @@ from rq import Queue, Retry
 from app.config import get_settings
 from app.exporting import process_export_run
 from app.processing import process_photo, process_photo_variant
+from app.sftp_transfer import transfer_export_run
 
 
 class ProcessingQueueUnavailable(RuntimeError):
@@ -61,6 +62,24 @@ def enqueue_vehicle_export(export_run_id: uuid.UUID) -> None:
             job_id=f"export-{export_run_id}-{uuid.uuid4()}",
             job_timeout=600,
             retry=Retry(max=2, interval=[60, 300]),
+            result_ttl=86400,
+            failure_ttl=604800,
+        )
+    except RedisError as exc:
+        raise ProcessingQueueUnavailable("Processing queue is unavailable") from exc
+
+
+def enqueue_export_transfer(export_run_id: uuid.UUID) -> None:
+    settings = get_settings()
+    try:
+        connection = Redis.from_url(settings.redis_url)
+        queue = Queue(settings.processing_queue, connection=connection)
+        queue.enqueue(
+            transfer_export_run,
+            str(export_run_id),
+            job_id=f"transfer-{export_run_id}-{uuid.uuid4()}",
+            job_timeout=600,
+            retry=Retry(max=3, interval=[60, 300, 900]),
             result_ttl=86400,
             failure_ttl=604800,
         )

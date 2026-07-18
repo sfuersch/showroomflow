@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
+from app.exporting import try_enqueue_auto_export
 from app.image_service import (
     get_image_settings,
     photoroom_sandbox_active,
@@ -28,6 +30,8 @@ from app.models import (
     VehicleJob,
 )
 from app.storage import ObjectStorage
+
+logger = logging.getLogger(__name__)
 
 
 class ImageProcessingError(RuntimeError):
@@ -359,6 +363,7 @@ def process_photo(photo_id: str) -> None:
     identifier = uuid.UUID(photo_id)
     settings = get_settings()
     storage = ObjectStorage(settings)
+    completed_job_id: uuid.UUID | None = None
     try:
         with SessionLocal() as db:
             photo = db.get(PhotoAsset, identifier)
@@ -442,6 +447,7 @@ def process_photo(photo_id: str) -> None:
             photo.processing_completed_at = datetime.now(timezone.utc)
             job.status = _next_job_status(db, job.id)
             db.commit()
+            completed_job_id = job.id
     except Exception as exc:
         with SessionLocal() as db:
             photo = db.get(PhotoAsset, identifier)
@@ -453,6 +459,16 @@ def process_photo(photo_id: str) -> None:
                     job.status = JobStatus.REVIEW_REQUIRED
                 db.commit()
         raise
+    if completed_job_id is not None:
+        try:
+            try_enqueue_auto_export(completed_job_id)
+        except Exception:
+            logger.exception("Automatic export could not be queued for job %s", completed_job_id)
+            with SessionLocal() as db:
+                job = db.get(VehicleJob, completed_job_id)
+                if job is not None:
+                    job.status = JobStatus.REVIEW_REQUIRED
+                    db.commit()
 
 
 def process_photo_variant(photo_id: str, provider: str) -> None:
