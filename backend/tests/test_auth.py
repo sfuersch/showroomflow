@@ -15,7 +15,9 @@ from app.models import (
     Brand,
     CaptureStep,
     Dealership,
+    ImageOverlay,
     Location,
+    SupplementalImage,
     SystemImageSettings,
     User,
     UserRole,
@@ -698,6 +700,98 @@ def test_admin_uploads_background_with_location_assignment() -> None:
         assert background is not None
         assert background.brand_id == brand_id
         assert [item.id for item in background.locations] == [location_id]
+
+
+def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        brand = Brand(dealership_id=dealership.id, name="Ford")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Front",
+            instruction="Gerade aufnehmen",
+            category="exterior",
+            capture_order=1,
+            export_order=1,
+            requires_processing=True,
+        )
+        db.add_all([location, brand, step])
+        db.commit()
+        location_id = location.id
+        brand_id = brand.id
+        step_id = step.id
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        login_page = client.get("/admin/login")
+        client.post(
+            "/admin/login",
+            data={
+                "email": "admin@example.com",
+                "password": "a-secure-test-password",
+                "csrf_token": csrf_from(login_page.text),
+            },
+        )
+        configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+        overlay_response = client.post(
+            f"/admin/dealerships/{dealership.id}/overlays",
+            data={
+                "name": "Autohauslogo",
+                "brand_id": str(brand_id),
+                "location_ids": str(location_id),
+                "capture_step_ids": str(step_id),
+                "position": "bottom_right",
+                "width_percent": "18",
+                "opacity_percent": "90",
+                "csrf_token": csrf_from(configuration_page.text),
+            },
+            files={"image": ("logo.png", b"\x89PNG\r\n\x1a\ncontent", "image/png")},
+            follow_redirects=True,
+        )
+        supplemental_response = client.post(
+            f"/admin/dealerships/{dealership.id}/supplemental-images",
+            data={
+                "name": "Garantie",
+                "export_order": "20",
+                "brand_id": str(brand_id),
+                "location_ids": str(location_id),
+                "csrf_token": csrf_from(overlay_response.text),
+            },
+            files={"image": ("garantie.jpg", b"\xff\xd8\xffcontent", "image/jpeg")},
+            follow_redirects=True,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert overlay_response.status_code == 200
+    assert "Overlay wurde hochgeladen" in overlay_response.text
+    assert supplemental_response.status_code == 200
+    assert "Zusatzbild wurde hochgeladen" in supplemental_response.text
+    assert len(storage.uploads) == 2
+    with TestingSession() as db:
+        overlay = db.scalar(
+            select(ImageOverlay).options(
+                selectinload(ImageOverlay.locations),
+                selectinload(ImageOverlay.capture_steps),
+            )
+        )
+        supplemental = db.scalar(
+            select(SupplementalImage).options(selectinload(SupplementalImage.locations))
+        )
+        assert overlay is not None
+        assert overlay.dealership_id == dealership.id
+        assert overlay.brand_id == brand_id
+        assert overlay.position == "bottom_right"
+        assert overlay.width_percent == 18
+        assert overlay.opacity_percent == 90
+        assert [item.id for item in overlay.locations] == [location_id]
+        assert [item.id for item in overlay.capture_steps] == [step_id]
+        assert supplemental is not None
+        assert supplemental.dealership_id == dealership.id
+        assert supplemental.brand_id == brand_id
+        assert supplemental.export_order == 20
+        assert [item.id for item in supplemental.locations] == [location_id]
 
 
 def test_app_configuration_is_location_and_tenant_scoped() -> None:

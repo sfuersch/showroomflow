@@ -29,12 +29,14 @@ from app.models import (
     Brand,
     CaptureStep,
     Dealership,
+    ImageOverlay,
     JobStatus,
     Location,
     PhotoAsset,
     PhotoProcessingVariant,
     ProcessingStatus,
     RefreshSession,
+    SupplementalImage,
     User,
     UserRole,
     VehicleCreditGrant,
@@ -53,6 +55,13 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 MAX_CONFIGURATION_IMAGE_BYTES = 20 * 1024 * 1024
 IMAGE_EXTENSIONS = {"image/jpeg": "jpg", "image/png": "png"}
+OVERLAY_POSITIONS = {
+    "top_left": "Oben links",
+    "top_right": "Oben rechts",
+    "bottom_left": "Unten links",
+    "bottom_right": "Unten rechts",
+    "center": "Mittig",
+}
 STANDARD_CAPTURE_STEPS = [
     ("Front", "Fahrzeug gerade und vollständig von vorne aufnehmen.", "exterior", True),
     ("Diagonal vorne links", "Vordere linke Fahrzeugecke vollständig zeigen.", "exterior", True),
@@ -224,6 +233,25 @@ def _tenant_locations(
     if len(locations) != len(unique_ids):
         raise HTTPException(status_code=400, detail="Ungültige Standortauswahl")
     return locations
+
+
+def _tenant_capture_steps(
+    db: Session, dealership_id: uuid.UUID, ids: list[uuid.UUID]
+) -> list[CaptureStep]:
+    if not ids:
+        return []
+    unique_ids = set(ids)
+    steps = list(
+        db.scalars(
+            select(CaptureStep).where(
+                CaptureStep.dealership_id == dealership_id,
+                CaptureStep.id.in_(unique_ids),
+            )
+        )
+    )
+    if len(steps) != len(unique_ids):
+        raise HTTPException(status_code=400, detail="Ungültige Fotopositionsauswahl")
+    return steps
 
 
 def _tenant_brand(
@@ -1000,6 +1028,25 @@ def configuration_page(
             .order_by(Background.name)
         )
     )
+    overlays = list(
+        db.scalars(
+            select(ImageOverlay)
+            .options(
+                selectinload(ImageOverlay.locations),
+                selectinload(ImageOverlay.capture_steps),
+            )
+            .where(ImageOverlay.dealership_id == dealership.id)
+            .order_by(ImageOverlay.name)
+        )
+    )
+    supplemental_images = list(
+        db.scalars(
+            select(SupplementalImage)
+            .options(selectinload(SupplementalImage.locations))
+            .where(SupplementalImage.dealership_id == dealership.id)
+            .order_by(SupplementalImage.export_order, SupplementalImage.name)
+        )
+    )
     steps = list(
         db.scalars(
             select(CaptureStep)
@@ -1010,6 +1057,14 @@ def configuration_page(
     background_previews = {
         background.id: storage.create_download_url(object_key=background.object_key)
         for background in backgrounds
+    }
+    overlay_previews = {
+        overlay.id: storage.create_download_url(object_key=overlay.object_key)
+        for overlay in overlays
+    }
+    supplemental_previews = {
+        item.id: storage.create_download_url(object_key=item.object_key)
+        for item in supplemental_images
     }
     silhouette_previews = {
         step.id: storage.create_download_url(object_key=step.silhouette_object_key)
@@ -1026,10 +1081,15 @@ def configuration_page(
             brands=brands,
             locations=locations,
             backgrounds=backgrounds,
+            overlays=overlays,
+            supplemental_images=supplemental_images,
             steps=steps,
             brand_by_id={brand.id: brand for brand in brands},
             background_previews=background_previews,
+            overlay_previews=overlay_previews,
+            supplemental_previews=supplemental_previews,
             silhouette_previews=silhouette_previews,
+            overlay_positions=OVERLAY_POSITIONS,
         ),
     )
 
@@ -1198,6 +1258,208 @@ def update_background(
         _flash(request, "Hintergrund wurde gespeichert.")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}/configuration#backgrounds",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/dealerships/{dealership_id}/overlays")
+async def create_overlay(
+    dealership_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    brand_id: str = Form(default=""),
+    location_ids: list[uuid.UUID] = Form(default=[]),
+    capture_step_ids: list[uuid.UUID] = Form(default=[]),
+    position: str = Form(default="bottom_right"),
+    width_percent: int = Form(default=18),
+    opacity_percent: int = Form(default=100),
+    image: UploadFile = File(),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    cleaned_name = name.strip()
+    if (
+        not cleaned_name
+        or position not in OVERLAY_POSITIONS
+        or not 5 <= width_percent <= 60
+        or not 10 <= opacity_percent <= 100
+    ):
+        _flash(request, "Bitte prüfen Sie Name, Position, Größe und Deckkraft.", "error")
+        return RedirectResponse(
+            f"/admin/dealerships/{dealership.id}/configuration#overlays",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
+    selected_locations = _tenant_locations(db, dealership.id, location_ids)
+    selected_steps = _tenant_capture_steps(db, dealership.id, capture_step_ids)
+    object_key, content_type = await _store_configuration_image(
+        storage,
+        image,
+        object_key_prefix=f"dealerships/{dealership.id}/configuration/overlays",
+        png_only=True,
+    )
+    db.add(
+        ImageOverlay(
+            dealership_id=dealership.id,
+            brand_id=selected_brand.id if selected_brand else None,
+            name=cleaned_name,
+            object_key=object_key,
+            content_type=content_type,
+            position=position,
+            width_percent=width_percent,
+            opacity_percent=opacity_percent,
+            locations=selected_locations,
+            capture_steps=selected_steps,
+        )
+    )
+    db.commit()
+    _flash(request, "Overlay wurde hochgeladen.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#overlays",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/overlays/{overlay_id}")
+def update_overlay(
+    overlay_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    brand_id: str = Form(default=""),
+    location_ids: list[uuid.UUID] = Form(default=[]),
+    capture_step_ids: list[uuid.UUID] = Form(default=[]),
+    position: str = Form(default="bottom_right"),
+    width_percent: int = Form(default=18),
+    opacity_percent: int = Form(default=100),
+    is_active: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    overlay = db.get(ImageOverlay, overlay_id)
+    if overlay is None:
+        raise HTTPException(status_code=404, detail="Overlay wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, overlay.dealership_id)
+    cleaned_name = name.strip()
+    if (
+        not cleaned_name
+        or position not in OVERLAY_POSITIONS
+        or not 5 <= width_percent <= 60
+        or not 10 <= opacity_percent <= 100
+    ):
+        _flash(request, "Bitte prüfen Sie Name, Position, Größe und Deckkraft.", "error")
+    else:
+        selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
+        overlay.name = cleaned_name
+        overlay.brand_id = selected_brand.id if selected_brand else None
+        overlay.locations = _tenant_locations(db, dealership.id, location_ids)
+        overlay.capture_steps = _tenant_capture_steps(db, dealership.id, capture_step_ids)
+        overlay.position = position
+        overlay.width_percent = width_percent
+        overlay.opacity_percent = opacity_percent
+        overlay.is_active = is_active == "on"
+        db.commit()
+        _flash(request, "Overlay wurde gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#overlays",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/dealerships/{dealership_id}/supplemental-images")
+async def create_supplemental_image(
+    dealership_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    export_order: int = Form(),
+    brand_id: str = Form(default=""),
+    location_ids: list[uuid.UUID] = Form(default=[]),
+    image: UploadFile = File(),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    cleaned_name = name.strip()
+    if not cleaned_name or export_order < 1:
+        _flash(request, "Bitte prüfen Sie Name und Export-Nr.", "error")
+        return RedirectResponse(
+            f"/admin/dealerships/{dealership.id}/configuration#supplemental-images",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
+    selected_locations = _tenant_locations(db, dealership.id, location_ids)
+    object_key, content_type = await _store_configuration_image(
+        storage,
+        image,
+        object_key_prefix=f"dealerships/{dealership.id}/configuration/supplemental-images",
+    )
+    db.add(
+        SupplementalImage(
+            dealership_id=dealership.id,
+            brand_id=selected_brand.id if selected_brand else None,
+            name=cleaned_name,
+            object_key=object_key,
+            content_type=content_type,
+            export_order=export_order,
+            locations=selected_locations,
+        )
+    )
+    db.commit()
+    _flash(request, "Zusatzbild wurde hochgeladen.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#supplemental-images",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/supplemental-images/{image_id}")
+def update_supplemental_image(
+    image_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    export_order: int = Form(),
+    brand_id: str = Form(default=""),
+    location_ids: list[uuid.UUID] = Form(default=[]),
+    is_active: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    supplemental_image = db.get(SupplementalImage, image_id)
+    if supplemental_image is None:
+        raise HTTPException(status_code=404, detail="Zusatzbild wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, supplemental_image.dealership_id)
+    cleaned_name = name.strip()
+    if not cleaned_name or export_order < 1:
+        _flash(request, "Bitte prüfen Sie Name und Export-Nr.", "error")
+    else:
+        selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
+        supplemental_image.name = cleaned_name
+        supplemental_image.export_order = export_order
+        supplemental_image.brand_id = selected_brand.id if selected_brand else None
+        supplemental_image.locations = _tenant_locations(db, dealership.id, location_ids)
+        supplemental_image.is_active = is_active == "on"
+        db.commit()
+        _flash(request, "Zusatzbild wurde gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#supplemental-images",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
