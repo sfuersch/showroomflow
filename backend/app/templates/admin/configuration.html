@@ -25,7 +25,7 @@
 </section>
 
 <section class="card section-card" id="backgrounds">
-    <div class="section-heading"><div><h2>Hintergründe</h2><p>Ohne Standortauswahl gilt ein Hintergrund an allen Standorten. Die Fahrzeuggröße wird zentral durch den Superadmin je Perspektive gesteuert.</p></div><span class="count">{{ backgrounds|length }}</span></div>
+    <div class="section-heading"><div><h2>Hintergründe</h2><p>Ohne Standortauswahl gilt ein Hintergrund an allen Standorten. Die Fahrzeuggröße wird automatisch aus der erkannten Kontur berechnet und zentral durch den Superadmin abgestimmt.</p></div><span class="count">{{ backgrounds|length }}</span></div>
     <div class="background-grid">
         {% for background in backgrounds %}
         <form class="asset-card" method="post" action="/admin/backgrounds/{{ background.id }}">
