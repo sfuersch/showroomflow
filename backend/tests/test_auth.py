@@ -160,6 +160,11 @@ def test_system_admin_configures_image_service_and_dealership_credits() -> None:
         data={
             "provider": "photoroom",
             "default_monthly_vehicle_credits": "40",
+            "vehicle_scale_front_percent": "51",
+            "vehicle_scale_diagonal_percent": "63",
+            "vehicle_scale_side_percent": "73",
+            "vehicle_scale_rear_percent": "53",
+            "vehicle_scale_default_percent": "62",
             "photoroom_sandbox": "on",
             "comparison_mode_enabled": "on",
             "csrf_token": csrf_from(settings_page.text),
@@ -194,6 +199,11 @@ def test_system_admin_configures_image_service_and_dealership_credits() -> None:
         assert image_settings.photoroom_sandbox is True
         assert image_settings.comparison_mode_enabled is True
         assert image_settings.default_monthly_vehicle_credits == 40
+        assert image_settings.vehicle_scale_front_percent == 51
+        assert image_settings.vehicle_scale_diagonal_percent == 63
+        assert image_settings.vehicle_scale_side_percent == 73
+        assert image_settings.vehicle_scale_rear_percent == 53
+        assert image_settings.vehicle_scale_default_percent == 62
         assert dealership is not None
         assert dealership.monthly_vehicle_credits == 25
         assert dealership.additional_vehicle_credits == 7
@@ -238,6 +248,11 @@ def test_system_admin_can_disable_comparison_mode() -> None:
         data={
             "provider": "disabled",
             "default_monthly_vehicle_credits": "30",
+            "vehicle_scale_front_percent": "52",
+            "vehicle_scale_diagonal_percent": "64",
+            "vehicle_scale_side_percent": "72",
+            "vehicle_scale_rear_percent": "54",
+            "vehicle_scale_default_percent": "64",
             "csrf_token": csrf_from(settings_page.text),
         },
         follow_redirects=True,

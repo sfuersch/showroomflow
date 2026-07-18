@@ -520,6 +520,11 @@ def update_image_service(
     request: Request,
     provider: str = Form(),
     default_monthly_vehicle_credits: int = Form(),
+    vehicle_scale_front_percent: int = Form(),
+    vehicle_scale_diagonal_percent: int = Form(),
+    vehicle_scale_side_percent: int = Form(),
+    vehicle_scale_rear_percent: int = Form(),
+    vehicle_scale_default_percent: int = Form(),
     photoroom_sandbox: str | None = Form(default=None),
     comparison_mode_enabled: str | None = Form(default=None),
     csrf_token: str = Form(),
@@ -531,14 +536,34 @@ def update_image_service(
     _validate_csrf(request, csrf_token)
     if admin.role != UserRole.SYSTEM_ADMIN:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
-    if provider not in IMAGE_PROVIDERS or not 0 <= default_monthly_vehicle_credits <= 10000:
-        _flash(request, "Bitte prüfen Sie Bilddienstleister und Standardkontingent.", "error")
+    scale_values = (
+        vehicle_scale_front_percent,
+        vehicle_scale_diagonal_percent,
+        vehicle_scale_side_percent,
+        vehicle_scale_rear_percent,
+        vehicle_scale_default_percent,
+    )
+    if (
+        provider not in IMAGE_PROVIDERS
+        or not 0 <= default_monthly_vehicle_credits <= 10000
+        or not all(20 <= value <= 95 for value in scale_values)
+    ):
+        _flash(
+            request,
+            "Bitte prüfen Sie Bilddienstleister, Standardkontingent und Skalierungsprofile.",
+            "error",
+        )
     else:
         image_settings = get_image_settings(db)
         image_settings.provider = provider
         image_settings.photoroom_sandbox = photoroom_sandbox == "on"
         image_settings.comparison_mode_enabled = comparison_mode_enabled == "on"
         image_settings.default_monthly_vehicle_credits = default_monthly_vehicle_credits
+        image_settings.vehicle_scale_front_percent = vehicle_scale_front_percent
+        image_settings.vehicle_scale_diagonal_percent = vehicle_scale_diagonal_percent
+        image_settings.vehicle_scale_side_percent = vehicle_scale_side_percent
+        image_settings.vehicle_scale_rear_percent = vehicle_scale_rear_percent
+        image_settings.vehicle_scale_default_percent = vehicle_scale_default_percent
         db.commit()
         if provider_is_available(image_settings, get_settings()) or provider == "disabled":
             _flash(request, "Bilddienstleister-Einstellungen wurden gespeichert.")
@@ -1557,7 +1582,6 @@ def update_background(
     name: str = Form(),
     brand_id: str = Form(default=""),
     location_ids: list[uuid.UUID] = Form(default=[]),
-    vehicle_scale_percent: int = Form(default=78),
     vehicle_bottom_percent: int = Form(default=90),
     shadow_opacity_percent: int = Form(default=32),
     reflection_opacity_percent: int = Form(default=10),
@@ -1576,8 +1600,7 @@ def update_background(
     dealership = _authorized_dealership(db, admin, background.dealership_id)
     cleaned_name = name.strip()
     values_valid = (
-        20 <= vehicle_scale_percent <= 95
-        and 55 <= vehicle_bottom_percent <= 98
+        55 <= vehicle_bottom_percent <= 98
         and 0 <= shadow_opacity_percent <= 80
         and 0 <= reflection_opacity_percent <= 60
         and 50 <= brightness_percent <= 150
@@ -1589,7 +1612,6 @@ def update_background(
         background.name = cleaned_name
         background.brand_id = selected_brand.id if selected_brand else None
         background.locations = _tenant_locations(db, dealership.id, location_ids)
-        background.vehicle_scale_percent = vehicle_scale_percent
         background.vehicle_bottom_percent = vehicle_bottom_percent
         background.shadow_opacity_percent = shadow_opacity_percent
         background.reflection_opacity_percent = reflection_opacity_percent

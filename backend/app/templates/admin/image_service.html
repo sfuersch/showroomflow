@@ -23,6 +23,18 @@
         <label>Standard-Credits für neue Autohäuser
             <input type="number" name="default_monthly_vehicle_credits" min="0" max="10000" value="{{ image_settings.default_monthly_vehicle_credits }}" required>
         </label>
+        <fieldset class="choice-group span-2">
+            <legend>Zentrale Fahrzeuggröße nach Perspektive</legend>
+            <p class="muted">Die Fotoposition wird automatisch anhand ihres Namens zugeordnet. Diese Werte gelten für alle Autohäuser und Hintergründe.</p>
+            <div class="form-grid">
+                <label>Front (%)<input type="number" name="vehicle_scale_front_percent" min="20" max="95" value="{{ image_settings.vehicle_scale_front_percent }}" required></label>
+                <label>Diagonal (%)<input type="number" name="vehicle_scale_diagonal_percent" min="20" max="95" value="{{ image_settings.vehicle_scale_diagonal_percent }}" required></label>
+                <label>Seite (%)<input type="number" name="vehicle_scale_side_percent" min="20" max="95" value="{{ image_settings.vehicle_scale_side_percent }}" required></label>
+                <label>Heck (%)<input type="number" name="vehicle_scale_rear_percent" min="20" max="95" value="{{ image_settings.vehicle_scale_rear_percent }}" required></label>
+                <label>Sonstige (%)<input type="number" name="vehicle_scale_default_percent" min="20" max="95" value="{{ image_settings.vehicle_scale_default_percent }}" required></label>
+            </div>
+            <small class="muted">Diagonal umfasst alle schrägen Front- und Heckansichten. Sonstige gilt als Rückfallwert für frei benannte Außenaufnahmen.</small>
+        </fieldset>
         <label class="check-row span-2">
             <input type="checkbox" name="photoroom_sandbox" {% if image_settings.photoroom_sandbox %}checked{% endif %}>
             <span><strong>Photoroom Sandbox</strong><small>Kostenlose Tests mit Wasserzeichen. Für produktive Verkaufsbilder deaktivieren.</small></span>

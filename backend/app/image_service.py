@@ -64,6 +64,11 @@ def get_image_settings(db: Session) -> SystemImageSettings:
             photoroom_sandbox=runtime.photoroom_sandbox,
             comparison_mode_enabled=True,
             default_monthly_vehicle_credits=30,
+            vehicle_scale_front_percent=52,
+            vehicle_scale_diagonal_percent=64,
+            vehicle_scale_side_percent=72,
+            vehicle_scale_rear_percent=54,
+            vehicle_scale_default_percent=64,
         )
         db.add(image_settings)
         db.flush()

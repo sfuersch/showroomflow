@@ -25,7 +25,7 @@
 </section>
 
 <section class="card section-card" id="backgrounds">
-    <div class="section-heading"><div><h2>Hintergründe</h2><p>Ohne Standortauswahl gilt ein Hintergrund an allen Standorten.</p></div><span class="count">{{ backgrounds|length }}</span></div>
+    <div class="section-heading"><div><h2>Hintergründe</h2><p>Ohne Standortauswahl gilt ein Hintergrund an allen Standorten. Die Fahrzeuggröße wird zentral durch den Superadmin je Perspektive gesteuert.</p></div><span class="count">{{ backgrounds|length }}</span></div>
     <div class="background-grid">
         {% for background in backgrounds %}
         <form class="asset-card" method="post" action="/admin/backgrounds/{{ background.id }}">
@@ -35,7 +35,6 @@
             <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}" {% if background.brand_id == brand.id %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
             <fieldset class="choice-group"><legend>Standorte</legend>{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in background.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}{% if not locations %}<span class="muted">Noch keine Standorte vorhanden.</span>{% endif %}</fieldset>
             <div class="form-grid">
-                <label>Fahrzeuggröße (%)<input type="number" name="vehicle_scale_percent" min="20" max="95" value="{{ background.vehicle_scale_percent }}" required></label>
                 <label>Bodenposition (%)<input type="number" name="vehicle_bottom_percent" min="55" max="98" value="{{ background.vehicle_bottom_percent }}" required></label>
                 <label>Schatten (%)<input type="number" name="shadow_opacity_percent" min="0" max="80" value="{{ background.shadow_opacity_percent }}" required></label>
                 <label>Reflexion (%)<input type="number" name="reflection_opacity_percent" min="0" max="60" value="{{ background.reflection_opacity_percent }}" required></label>
