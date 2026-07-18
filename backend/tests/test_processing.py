@@ -230,7 +230,7 @@ def test_optimized_photoroom_request_preserves_color_and_consistent_positioning(
     background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
     api_result = image_bytes(Image.new("RGB", (1920, 1440), "gray"), "JPEG")
     cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
-    ImageDraw.Draw(cutout).rectangle((120, 150, 679, 449), fill=(20, 30, 40, 255))
+    ImageDraw.Draw(cutout).rectangle((20, 250, 779, 349), fill=(20, 30, 40, 255))
     cutout_result = image_bytes(cutout, "PNG")
     requests = 0
 
@@ -246,6 +246,8 @@ def test_optimized_photoroom_request_preserves_color_and_consistent_positioning(
             )
         assert b'name="lighting.mode"' in body
         assert b"ai.preserve-hue-and-saturation" in body
+        assert b'name="paddingTop"' in body
+        assert b"0.490" in body
         assert b'name="ignorePaddingAndSnapOnCroppedSides"' in body
         assert b"false" in body
         assert b"ai.auto" not in body

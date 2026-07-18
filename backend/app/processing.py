@@ -227,7 +227,7 @@ def create_photoroom_showroom(
     )
     horizontal_padding = max(0.02, (1 - framing.width_fraction) / 2)
     bottom_padding = max(0.02, 1 - vehicle_bottom_percent / 100)
-    top_padding = max(0.02, 1 - framing.height_fraction - bottom_padding)
+    top_padding = min(0.49, max(0.02, 1 - framing.height_fraction - bottom_padding))
     background_extension = "png" if background_content_type == "image/png" else "jpg"
     edit_options = {
         "removeBackground": "true",
