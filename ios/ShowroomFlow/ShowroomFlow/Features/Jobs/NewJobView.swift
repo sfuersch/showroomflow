@@ -1,4 +1,6 @@
+import AVFoundation
 import SwiftUI
+import VisionKit
 
 struct NewJobView: View {
     @Environment(\.dismiss) private var dismiss
@@ -11,6 +13,8 @@ struct NewJobView: View {
     @State private var isLoadingLocations = true
     @State private var isLoadingConfiguration = false
     @State private var isSaving = false
+    @State private var isShowingVINScanner = false
+    @State private var scannerErrorMessage: String?
     @State private var errorMessage: String?
 
     let loadLocations: () async throws -> [LocationSummary]
@@ -45,9 +49,10 @@ struct NewJobView: View {
                             .textInputAutocapitalization(.characters)
                             .autocorrectionDisabled()
                         Button("Scannen", systemImage: "viewfinder") {
-                            // VIN camera recognition follows in the camera milestone.
+                            Task { await openVINScanner() }
                         }
                         .labelStyle(.iconOnly)
+                        .accessibilityHint("Öffnet die Kamera und erkennt die Fahrgestellnummer")
                     }
                     if isLoadingConfiguration {
                         ProgressView("Konfiguration wird geladen …")
@@ -122,6 +127,32 @@ struct NewJobView: View {
             .onChange(of: selectedBrandID) {
                 selectedBackgroundID = availableBackgrounds.first?.id
             }
+            .fullScreenCover(isPresented: $isShowingVINScanner) {
+                VINScannerView(
+                    onRecognized: { recognizedVIN in
+                        vin = recognizedVIN
+                        isShowingVINScanner = false
+                    },
+                    onCancel: {
+                        isShowingVINScanner = false
+                    },
+                    onError: { message in
+                        isShowingVINScanner = false
+                        scannerErrorMessage = message
+                    }
+                )
+            }
+            .alert(
+                "Scanner nicht verfügbar",
+                isPresented: Binding(
+                    get: { scannerErrorMessage != nil },
+                    set: { if !$0 { scannerErrorMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(scannerErrorMessage ?? "Die Fahrgestellnummer kann manuell eingegeben werden.")
+            }
         }
         .interactiveDismissDisabled(isSaving)
     }
@@ -142,6 +173,37 @@ struct NewJobView: View {
 
     private var selectedBackground: ConfiguredBackground? {
         availableBackgrounds.first { $0.id == selectedBackgroundID }
+    }
+
+    @MainActor
+    private func openVINScanner() async {
+        guard DataScannerViewController.isSupported else {
+            scannerErrorMessage = "Dieses Gerät unterstützt den Live-Scanner nicht. Bitte geben Sie die Fahrgestellnummer manuell ein."
+            return
+        }
+
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            break
+        case .notDetermined:
+            guard await AVCaptureDevice.requestAccess(for: .video) else {
+                scannerErrorMessage = "Der Kamerazugriff wurde nicht erlaubt. Sie können ihn in den iOS-Einstellungen für ShowroomFlow aktivieren."
+                return
+            }
+        case .denied, .restricted:
+            scannerErrorMessage = "ShowroomFlow darf nicht auf die Kamera zugreifen. Bitte erlauben Sie den Zugriff in den iOS-Einstellungen."
+            return
+        @unknown default:
+            scannerErrorMessage = "Der Kamerazugriff konnte nicht geprüft werden."
+            return
+        }
+
+        guard DataScannerViewController.isAvailable else {
+            scannerErrorMessage = "Der Live-Scanner ist momentan nicht verfügbar. Bitte schließen Sie andere Kamera-Apps und versuchen Sie es erneut."
+            return
+        }
+
+        isShowingVINScanner = true
     }
 
     private func fetchLocations() async {
@@ -199,6 +261,187 @@ struct NewJobView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+private struct VINScannerView: View {
+    let onRecognized: (String) -> Void
+    let onCancel: () -> Void
+    let onError: (String) -> Void
+
+    var body: some View {
+        ZStack {
+            VINDataScanner(
+                onRecognized: onRecognized,
+                onError: onError
+            )
+            .ignoresSafeArea()
+
+            VStack {
+                HStack(spacing: 12) {
+                    Button(action: onCancel) {
+                        Label("Zurück", systemImage: "chevron.left")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .frame(height: 46)
+                            .background(.ultraThinMaterial, in: .capsule)
+                    }
+
+                    Spacer()
+
+                    HStack(spacing: 9) {
+                        ShowroomFlowBrandMark(size: 34)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("VIN scannen")
+                                .font(.subheadline.bold())
+                            Text("Nummer in den Rahmen halten")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.72))
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 13)
+                    .frame(height: 50)
+                    .background(.ultraThinMaterial, in: .capsule)
+                }
+                .padding()
+
+                Spacer()
+
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(
+                        Color.mint,
+                        style: StrokeStyle(lineWidth: 3, dash: [14, 8])
+                    )
+                    .frame(maxWidth: 520, maxHeight: 118)
+                    .overlay {
+                        Image(systemName: "viewfinder")
+                            .font(.system(size: 48, weight: .light))
+                            .foregroundStyle(.mint.opacity(0.9))
+                    }
+                    .shadow(color: .black.opacity(0.55), radius: 10)
+                    .padding(.horizontal, 28)
+
+                Spacer()
+
+                Label(
+                    "Eine erkannte Fahrgestellnummer antippen",
+                    systemImage: "hand.tap.fill"
+                )
+                .font(.subheadline.bold())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .frame(height: 48)
+                .background(.ultraThinMaterial, in: .capsule)
+                .padding(.bottom, 28)
+            }
+        }
+        .background(.black)
+    }
+}
+
+private struct VINDataScanner: UIViewControllerRepresentable {
+    let onRecognized: (String) -> Void
+    let onError: (String) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onRecognized: onRecognized)
+    }
+
+    func makeUIViewController(context: Context) -> DataScannerViewController {
+        let scanner = DataScannerViewController(
+            recognizedDataTypes: [.text(languages: ["de-DE", "en-US"])],
+            qualityLevel: .accurate,
+            recognizesMultipleItems: true,
+            isHighFrameRateTrackingEnabled: false,
+            isPinchToZoomEnabled: true,
+            isGuidanceEnabled: true,
+            isHighlightingEnabled: true
+        )
+        scanner.delegate = context.coordinator
+        do {
+            try scanner.startScanning()
+        } catch {
+            Task { @MainActor in
+                onError("Die Kamera konnte nicht gestartet werden: \(error.localizedDescription)")
+            }
+        }
+        return scanner
+    }
+
+    func updateUIViewController(
+        _ uiViewController: DataScannerViewController,
+        context: Context
+    ) {}
+
+    static func dismantleUIViewController(
+        _ uiViewController: DataScannerViewController,
+        coordinator: Coordinator
+    ) {
+        uiViewController.stopScanning()
+    }
+
+    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+        private let onRecognized: (String) -> Void
+        private var didFinish = false
+
+        init(onRecognized: @escaping (String) -> Void) {
+            self.onRecognized = onRecognized
+        }
+
+        func dataScanner(
+            _ dataScanner: DataScannerViewController,
+            didTapOn item: RecognizedItem
+        ) {
+            guard case let .text(text) = item,
+                  let candidate = VINCandidate.from(text.transcript) else { return }
+            finish(with: candidate)
+        }
+
+        func dataScanner(
+            _ dataScanner: DataScannerViewController,
+            didAdd addedItems: [RecognizedItem],
+            allItems: [RecognizedItem]
+        ) {
+            for item in addedItems {
+                guard case let .text(text) = item,
+                      let candidate = VINCandidate.from(text.transcript),
+                      candidate.count == 17 else { continue }
+                finish(with: candidate)
+                return
+            }
+        }
+
+        private func finish(with candidate: String) {
+            guard !didFinish else { return }
+            didFinish = true
+            Task { @MainActor in
+                onRecognized(candidate)
+            }
+        }
+    }
+}
+
+private enum VINCandidate {
+    static func from(_ text: String) -> String? {
+        let candidates = text
+            .uppercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+
+        if let exactVIN = candidates.first(where: { $0.count == 17 }) {
+            return exactVIN
+        }
+
+        let combined = candidates.joined()
+        if combined.count == 17 {
+            return combined
+        }
+
+        return candidates
+            .filter { $0.count >= 8 }
+            .max(by: { $0.count < $1.count })
     }
 }
 
