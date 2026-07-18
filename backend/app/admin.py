@@ -254,6 +254,25 @@ def _tenant_capture_steps(
     return steps
 
 
+def _overlay_capture_steps(
+    db: Session, dealership_id: uuid.UUID, ids: list[uuid.UUID]
+) -> list[CaptureStep]:
+    selected_steps = _tenant_capture_steps(db, dealership_id, ids)
+    if selected_steps:
+        return selected_steps
+    first_export_step = db.scalar(
+        select(CaptureStep)
+        .where(
+            CaptureStep.dealership_id == dealership_id,
+            CaptureStep.export_order.is_not(None),
+            CaptureStep.is_active.is_(True),
+        )
+        .order_by(CaptureStep.export_order, CaptureStep.capture_order, CaptureStep.name)
+        .limit(1)
+    )
+    return [first_export_step] if first_export_step else []
+
+
 def _tenant_brand(
     db: Session, dealership_id: uuid.UUID, brand_id: uuid.UUID | None
 ) -> Brand | None:
@@ -1054,6 +1073,11 @@ def configuration_page(
             .order_by(CaptureStep.capture_order, CaptureStep.name)
         )
     )
+    default_overlay_step = min(
+        (step for step in steps if step.export_order is not None and step.is_active),
+        key=lambda step: (step.export_order, step.capture_order, step.name),
+        default=None,
+    )
     background_previews = {
         background.id: storage.create_download_url(object_key=background.object_key)
         for background in backgrounds
@@ -1090,6 +1114,7 @@ def configuration_page(
             supplemental_previews=supplemental_previews,
             silhouette_previews=silhouette_previews,
             overlay_positions=OVERLAY_POSITIONS,
+            default_overlay_step=default_overlay_step,
         ),
     )
 
@@ -1297,7 +1322,7 @@ async def create_overlay(
         )
     selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
     selected_locations = _tenant_locations(db, dealership.id, location_ids)
-    selected_steps = _tenant_capture_steps(db, dealership.id, capture_step_ids)
+    selected_steps = _overlay_capture_steps(db, dealership.id, capture_step_ids)
     object_key, content_type = await _store_configuration_image(
         storage,
         image,
@@ -1362,7 +1387,7 @@ def update_overlay(
         overlay.name = cleaned_name
         overlay.brand_id = selected_brand.id if selected_brand else None
         overlay.locations = _tenant_locations(db, dealership.id, location_ids)
-        overlay.capture_steps = _tenant_capture_steps(db, dealership.id, capture_step_ids)
+        overlay.capture_steps = _overlay_capture_steps(db, dealership.id, capture_step_ids)
         overlay.position = position
         overlay.width_percent = width_percent
         overlay.opacity_percent = opacity_percent

@@ -56,7 +56,7 @@
 </section>
 
 <section class="card section-card" id="overlays">
-    <div class="section-heading"><div><h2>Overlays</h2><p>Transparente PNG-Dateien wie Autohauslogos. Leere Standort-, Marken- oder Fotopositionsauswahl gilt allgemein; ohne Fotoposition werden alle Außenaufnahmen verwendet.</p></div><span class="count">{{ overlays|length }}</span></div>
+    <div class="section-heading"><div><h2>Overlays</h2><p>Transparente PNG-Dateien wie Autohauslogos. Marke und Standort sind optional. Eine oder mehrere Fotopositionen können ausgewählt werden; Standard ist das erste Foto des Exports.</p></div><span class="count">{{ overlays|length }}</span></div>
     <div class="background-grid">
         {% for overlay in overlays %}
         <form class="asset-card" method="post" action="/admin/overlays/{{ overlay.id }}">
@@ -66,7 +66,7 @@
             <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}" {% if overlay.brand_id == brand.id %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
             <div class="form-grid"><label>Position<select name="position">{% for value, label in overlay_positions.items() %}<option value="{{ value }}" {% if overlay.position == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><label>Breite (%)<input type="number" name="width_percent" min="5" max="60" value="{{ overlay.width_percent }}" required></label><label>Deckkraft (%)<input type="number" name="opacity_percent" min="10" max="100" value="{{ overlay.opacity_percent }}" required></label></div>
             <fieldset class="choice-group"><legend>Standorte (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in overlay.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
-            <fieldset class="choice-group"><legend>Fotopositionen (leer = alle Außenaufnahmen)</legend><div class="choice-row">{% for step in steps %}<label class="toggle"><input type="checkbox" name="capture_step_ids" value="{{ step.id }}" {% if step in overlay.capture_steps %}checked{% endif %}><span>{{ step.name }}</span></label>{% endfor %}</div></fieldset>
+            <fieldset class="choice-group"><legend>Overlay auf diesen Fotos</legend><div class="choice-row">{% for step in steps %}<label class="toggle"><input type="checkbox" name="capture_step_ids" value="{{ step.id }}" {% if step in overlay.capture_steps or (not overlay.capture_steps and default_overlay_step and step.id == default_overlay_step.id) %}checked{% endif %}><span>{{ step.export_order or '–' }} · {{ step.name }}</span></label>{% endfor %}</div><small class="muted">Ohne Auswahl wird automatisch das erste Exportfoto verwendet.</small></fieldset>
             <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if overlay.is_active %}checked{% endif %}><span>Aktiv</span></label><button class="button button-secondary" type="submit">Speichern</button></div>
         </form>
         {% endfor %}
@@ -80,7 +80,7 @@
         <label>Deckkraft (%)<input type="number" name="opacity_percent" min="10" max="100" value="100" required></label>
         <label>Overlay (transparentes PNG, maximal 20 MB)<input type="file" name="image" accept="image/png" required></label>
         <fieldset class="choice-group span-2"><legend>Standorte (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}"><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
-        <fieldset class="choice-group span-2"><legend>Fotopositionen (leer = alle Außenaufnahmen)</legend><div class="choice-row">{% for step in steps %}<label class="toggle"><input type="checkbox" name="capture_step_ids" value="{{ step.id }}"><span>{{ step.name }}</span></label>{% endfor %}</div></fieldset>
+        <fieldset class="choice-group span-2"><legend>Overlay auf diesen Fotos</legend><div class="choice-row">{% for step in steps %}<label class="toggle"><input type="checkbox" name="capture_step_ids" value="{{ step.id }}" {% if default_overlay_step and step.id == default_overlay_step.id %}checked{% endif %}><span>{{ step.export_order or '–' }} · {{ step.name }}</span></label>{% endfor %}</div><small class="muted">Standardmäßig ist das erste Foto des Exports ausgewählt; mehrere Positionen sind möglich.</small></fieldset>
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Overlay hochladen</button></div>
     </form>
 </section>
