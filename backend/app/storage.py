@@ -1,4 +1,5 @@
 from functools import lru_cache
+import re
 from typing import Any
 
 import boto3
@@ -59,14 +60,26 @@ class ObjectStorage:
             HttpMethod="PUT",
         )
 
-    def create_download_url(self, *, object_key: str, expires_in: int = 900) -> str:
+    def create_download_url(
+        self,
+        *,
+        object_key: str,
+        expires_in: int = 900,
+        filename: str | None = None,
+    ) -> str:
         if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
             raise ValueError("Invalid object key")
         if expires_in < 1 or expires_in > 3600:
             raise ValueError("Download URL expiry must be between 1 and 3600 seconds")
+        params = {"Bucket": self.bucket, "Key": object_key}
+        if filename:
+            safe_filename = re.sub(r"[^A-Za-z0-9._-]", "_", filename)
+            params["ResponseContentDisposition"] = (
+                f'attachment; filename="{safe_filename or "download"}"'
+            )
         return self._client.generate_presigned_url(
             "get_object",
-            Params={"Bucket": self.bucket, "Key": object_key},
+            Params=params,
             ExpiresIn=expires_in,
             HttpMethod="GET",
         )

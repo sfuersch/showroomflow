@@ -253,6 +253,7 @@ class SystemImageSettings(Timestamped, Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     provider: Mapped[str] = mapped_column(String(32), default="remove_bg")
     photoroom_sandbox: Mapped[bool] = mapped_column(Boolean, default=True)
+    comparison_mode_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     default_monthly_vehicle_credits: Mapped[int] = mapped_column(Integer, default=30)
 
 

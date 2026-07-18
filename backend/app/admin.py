@@ -391,6 +391,7 @@ def update_image_service(
     provider: str = Form(),
     default_monthly_vehicle_credits: int = Form(),
     photoroom_sandbox: str | None = Form(default=None),
+    comparison_mode_enabled: str | None = Form(default=None),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
@@ -406,6 +407,7 @@ def update_image_service(
         image_settings = get_image_settings(db)
         image_settings.provider = provider
         image_settings.photoroom_sandbox = photoroom_sandbox == "on"
+        image_settings.comparison_mode_enabled = comparison_mode_enabled == "on"
         image_settings.default_monthly_vehicle_credits = default_monthly_vehicle_credits
         db.commit()
         if provider_is_available(image_settings, get_settings()) or provider == "disabled":
@@ -830,6 +832,13 @@ def job_detail_page(
                 photo.id: storage.create_download_url(object_key=photo.original_object_key)
                 for photo in photos
             },
+            original_download_urls={
+                photo.id: storage.create_download_url(
+                    object_key=photo.original_object_key,
+                    filename=f"{job.vin}_{index:02d}_Original.jpg",
+                )
+                for index, photo in enumerate(photos, start=1)
+            },
             processed_urls={
                 photo.id: storage.create_download_url(object_key=photo.processed_object_key)
                 for photo in photos
@@ -847,8 +856,20 @@ def job_detail_page(
                 for variant in variants
                 if variant.provider == "photoroom_optimized" and variant.object_key
             },
+            optimized_photoroom_download_urls={
+                variant.photo_asset_id: storage.create_download_url(
+                    object_key=variant.object_key,
+                    filename=f"{job.vin}_{index:02d}_Optimiert.jpg",
+                )
+                for index, photo in enumerate(photos, start=1)
+                for variant in variants
+                if variant.photo_asset_id == photo.id
+                and variant.provider == "photoroom_optimized"
+                and variant.object_key
+            },
             processing_enabled=provider_is_available(image_settings, runtime),
-            active_provider=image_settings.provider,
+            comparison_mode_enabled=image_settings.comparison_mode_enabled,
+            standard_comparison_enabled=image_settings.provider != "photoroom",
             photoroom_enabled=runtime.photoroom_enabled,
             photoroom_sandbox=photoroom_sandbox_active(image_settings, runtime),
             credit_balance=credit_balance(db, dealership),
@@ -884,8 +905,10 @@ def reprocess_photo(
     }.get(provider)
     if not step.requires_processing:
         _flash(request, "Diese Fotoposition benötigt keine Freistellung.", "error")
+    elif comparison_provider and not image_settings.comparison_mode_enabled:
+        _flash(request, "Der Vergleichsmodus ist deaktiviert.", "error")
     elif comparison_provider and not runtime.photoroom_enabled:
-        _flash(request, "Photoroom ist noch nicht konfiguriert.", "error")
+        _flash(request, "Der Vergleichsdienst ist noch nicht konfiguriert.", "error")
     elif comparison_provider:
         variant = db.scalar(
             select(PhotoProcessingVariant).where(
@@ -908,11 +931,9 @@ def reprocess_photo(
             variant.status = ProcessingStatus.FAILED.value
             variant.error = "Verarbeitungswarteschlange ist nicht erreichbar"
             db.commit()
-            _flash(request, "Der Photoroom-Test konnte nicht gestartet werden.", "error")
+            _flash(request, "Der Vergleich konnte nicht gestartet werden.", "error")
         else:
-            label = (
-                "Photoroom Optimiert" if comparison_provider.endswith("optimized") else "Photoroom"
-            )
+            label = "Optimierter" if comparison_provider.endswith("optimized") else "Standard"
             _flash(request, f"{label}-Vergleich wurde zur Verarbeitung vorgemerkt.")
     elif provider != "primary":
         _flash(request, "Unbekannter Bildverarbeitungsdienst.", "error")

@@ -62,6 +62,7 @@ def get_image_settings(db: Session) -> SystemImageSettings:
             id=SYSTEM_IMAGE_SETTINGS_ID,
             provider=fallback_provider,
             photoroom_sandbox=runtime.photoroom_sandbox,
+            comparison_mode_enabled=True,
             default_monthly_vehicle_credits=30,
         )
         db.add(image_settings)

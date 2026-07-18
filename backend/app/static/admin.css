@@ -124,12 +124,20 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .photo-review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 18px; }
 .photo-review-card { padding: 18px; }
 .photo-variants { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 14px; }
+.photo-variants-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .photo-variants-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .photo-variants-four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .photo-variants a { color: var(--ink); text-decoration: none; font-size: .8rem; font-weight: 700; }
 .photo-variants img, .photo-placeholder { width: 100%; aspect-ratio: 4/3; object-fit: contain; background: #e9ebf4; border-radius: 10px; }
 .photo-variants a span { display: block; margin-top: 5px; }
+.photo-download-variant { min-width: 0; }
+.photo-image-link { display: block; }
+.photo-variant-caption { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; }
+.photo-variant-caption > span { font-size: .8rem; font-weight: 700; }
+.download-icon { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 999px; background: #eef0ff; color: var(--brand) !important; font-size: 1.1rem !important; line-height: 1; text-decoration: none; }
+.download-icon:hover { background: #dfe3ff; }
 .processing-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.processing-actions-single { grid-template-columns: 1fr; }
 .processing-actions form { margin: 0; }
 .photo-placeholder { display: grid; place-items: center; padding: 16px; color: var(--muted); text-align: center; }
 button:disabled { cursor: not-allowed; opacity: .5; }
@@ -158,6 +166,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
     .job-row { grid-template-columns: 1fr; }
     .photo-review-grid { grid-template-columns: 1fr; }
     .photo-variants-three { grid-template-columns: 1fr; }
+    .photo-variants-two { grid-template-columns: 1fr; }
     .photo-variants-four { grid-template-columns: 1fr; }
     .processing-actions { grid-template-columns: 1fr; }
 }
