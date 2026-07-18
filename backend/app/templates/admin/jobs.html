@@ -3,6 +3,19 @@
 {% block content %}
 <nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><span>Fahrzeugaufträge</span></nav>
 <div class="page-heading"><div><span class="eyebrow">Fahrzeugaufträge</span><h1>{{ dealership.name }}</h1><p class="muted">Aufnahmen, Verarbeitung und spätere Exporte kontrollieren.</p></div><span class="count">{{ jobs|length }}</span></div>
+<section class="card section-card compact-card">
+    <div class="section-heading"><div><h2>Testauftrag manuell anlegen</h2><p>Ausgangsbilder ohne App hochladen und später direkt mit einem Referenzergebnis vergleichen.</p></div></div>
+    {% if locations and brands %}
+    <form method="post" action="/admin/dealerships/{{ dealership.id }}/jobs" class="form-grid">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Fahrgestellnummer<input type="text" name="vin" maxlength="64" required placeholder="z. B. WF0…"></label>
+        <label>Standort<select name="location_id" required>{% for location in locations.values() %}<option value="{{ location.id }}">{{ location.name }}</option>{% endfor %}</select></label>
+        <label>Marke<select name="brand_id" required>{% for brand in brands %}<option value="{{ brand.id }}">{{ brand.name }}</option>{% endfor %}</select></label>
+        <label>Hintergrund<select name="background_id"><option value="">Kein Hintergrund</option>{% for background in backgrounds %}<option value="{{ background.id }}">{{ background.name }}</option>{% endfor %}</select></label>
+        <div class="span-2 form-actions"><button class="button button-primary" type="submit">Testauftrag anlegen</button></div>
+    </form>
+    {% else %}<p class="empty">Für die manuelle Anlage werden mindestens ein aktiver Standort und eine aktive Marke benötigt.</p>{% endif %}
+</section>
 <section class="card section-card">
     <div class="job-list">
         {% for job in jobs %}

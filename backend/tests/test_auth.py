@@ -144,6 +144,12 @@ def csrf_from(response_text: str) -> str:
     return match.group(1)
 
 
+def jpeg_bytes(color: str = "navy") -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (1920, 1440), color).save(output, format="JPEG")
+    return output.getvalue()
+
+
 def test_system_admin_configures_image_service_and_dealership_credits() -> None:
     create_system_admin()
     with TestingSession() as db:
@@ -939,6 +945,104 @@ def test_job_stores_selected_brand_and_background() -> None:
     assert response.json()["brand"] == "Volkswagen"
     assert response.json()["brand_id"] == str(brand_id)
     assert response.json()["background_id"] == str(background_id)
+
+
+def test_admin_creates_manual_job_and_uploads_benchmark_photo() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        brand = Brand(dealership_id=dealership.id, name="Ford")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Diagonal vorne links",
+            instruction="Vordere linke Fahrzeugecke zeigen",
+            category="exterior",
+            capture_order=2,
+            export_order=2,
+            requires_processing=True,
+        )
+        db.add_all([location, brand, step])
+        db.flush()
+        background = Background(
+            dealership_id=dealership.id,
+            brand_id=brand.id,
+            name="Showroom",
+            object_key="backgrounds/manual-showroom.jpg",
+            content_type="image/jpeg",
+            locations=[location],
+        )
+        db.add(background)
+        db.commit()
+        db.refresh(location)
+        db.refresh(brand)
+        db.refresh(background)
+        db.refresh(step)
+        location_id = location.id
+        brand_id = brand.id
+        background_id = background.id
+        step_id = step.id
+
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    jobs_page = client.get(f"/admin/dealerships/{dealership.id}/jobs")
+    created = client.post(
+        f"/admin/dealerships/{dealership.id}/jobs",
+        data={
+            "vin": " manual-test-vin ",
+            "location_id": str(location_id),
+            "brand_id": str(brand_id),
+            "background_id": str(background_id),
+            "csrf_token": csrf_from(jobs_page.text),
+        },
+        follow_redirects=False,
+    )
+
+    assert created.status_code == 303
+    with TestingSession() as db:
+        job = db.scalar(select(VehicleJob).where(VehicleJob.vin == "MANUAL-TEST-VIN"))
+        assert job is not None
+        assert job.auto_export is False
+        assert job.brand == "Ford"
+        assert job.background_id == background_id
+        job_id = job.id
+
+    detail_page = client.get(f"/admin/jobs/{job_id}")
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        uploaded = client.post(
+            f"/admin/jobs/{job_id}/photos",
+            data={
+                "capture_step_id": str(step_id),
+                "csrf_token": csrf_from(detail_page.text),
+            },
+            files={
+                "original_image": ("original.jpg", jpeg_bytes("navy"), "image/jpeg"),
+                "benchmark_image": ("reference.jpg", jpeg_bytes("silver"), "image/jpeg"),
+            },
+            follow_redirects=False,
+        )
+        rendered = client.get(f"/admin/jobs/{job_id}")
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert uploaded.status_code == 303
+    assert len(storage.uploads) == 4
+    assert "Referenzergebnis" in rendered.text
+    with TestingSession() as db:
+        photo = db.scalar(select(PhotoAsset).where(PhotoAsset.vehicle_job_id == job_id))
+        assert photo is not None
+        assert photo.original_thumbnail_object_key is not None
+        assert photo.benchmark_object_key is not None
+        assert photo.benchmark_thumbnail_object_key is not None
+        assert photo.processing_status == ProcessingStatus.PENDING
 
 
 def test_job_list_uses_optimized_front_left_photo_as_thumbnail() -> None:
