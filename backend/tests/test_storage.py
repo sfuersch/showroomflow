@@ -134,6 +134,27 @@ def test_private_configuration_image_can_be_uploaded_and_read_with_signed_url() 
     }
 
 
+def test_download_url_can_force_a_safe_attachment_filename() -> None:
+    fake_client = FakeS3Client()
+    storage = ObjectStorage(Settings(storage_bucket="test-bucket"), client=fake_client)
+
+    storage.create_download_url(
+        object_key="dealerships/one/jobs/job/photo.jpg",
+        filename='VIN 01 "Original".jpg',
+    )
+
+    assert fake_client.presign_call == {
+        "operation": "get_object",
+        "Params": {
+            "Bucket": "test-bucket",
+            "Key": "dealerships/one/jobs/job/photo.jpg",
+            "ResponseContentDisposition": 'attachment; filename="VIN_01__Original_.jpg"',
+        },
+        "ExpiresIn": 900,
+        "HttpMethod": "GET",
+    }
+
+
 def test_uploaded_photo_metadata_is_verified() -> None:
     fake_client = FakeS3Client()
     storage = ObjectStorage(Settings(storage_bucket="test-bucket"), client=fake_client)

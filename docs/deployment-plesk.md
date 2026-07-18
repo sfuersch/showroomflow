@@ -146,6 +146,13 @@ bleiben. Sie überschreibt weder das reguläre Ergebnis noch den Export. Da auch
 Relighting sichtbare Farb- oder Helligkeitsänderungen erzeugen kann, muss es vor einer produktiven
 Aktivierung anhand mehrerer heller, dunkler und farbiger Fahrzeuge geprüft werden.
 
+Der Systemadministrator kann die zusätzlichen Bildvergleiche unter
+`Verwaltung > Bilddienstleister` zentral ein- oder ausschalten. Bei ausgeschaltetem Vergleichsmodus sehen
+Autohausbenutzer nur Original, reguläres Ergebnis und `Verarbeitung starten`; technische
+Dienstleisternamen werden in der Auftragsansicht nicht angezeigt. Original und `Optimiert` können
+bei aktivem Vergleichsmodus über das Download-Symbol mit einem eindeutigen Dateinamen geladen
+werden.
+
 Nach der Migration `0007_image_service_credits` wird der reguläre Bilddienstleister unter
 `Verwaltung > Bilddienstleister` durch den Systemadministrator gewählt. Die API-Schlüssel bleiben
 weiterhin als VPS-Secrets in `.env.production`; die Oberfläche zeigt nur ihren Status. Ein dort

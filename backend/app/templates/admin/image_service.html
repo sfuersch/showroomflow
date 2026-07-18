@@ -27,6 +27,10 @@
             <input type="checkbox" name="photoroom_sandbox" {% if image_settings.photoroom_sandbox %}checked{% endif %}>
             <span><strong>Photoroom Sandbox</strong><small>Kostenlose Tests mit Wasserzeichen. Für produktive Verkaufsbilder deaktivieren.</small></span>
         </label>
+        <label class="check-row span-2">
+            <input type="checkbox" name="comparison_mode_enabled" {% if image_settings.comparison_mode_enabled %}checked{% endif %}>
+            <span><strong>Bildvergleiche aktivieren</strong><small>Zeigt zusätzliche Testvarianten in der Auftragsansicht. Bei Deaktivierung ist nur die reguläre Verarbeitung verfügbar.</small></span>
+        </label>
         {% if photoroom_key_is_sandbox %}<p class="muted span-2">Der VPS verwendet derzeit einen Sandbox-Schlüssel. Für Verkaufsbilder muss dort später ein Live-Schlüssel hinterlegt und die Sandbox hier deaktiviert werden.</p>{% endif %}
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Grundeinstellungen speichern</button></div>
     </form>

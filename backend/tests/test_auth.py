@@ -49,7 +49,13 @@ class ConfigurationStorage:
     def put_object(self, **values: object) -> None:
         self.uploads.append(values)
 
-    def create_download_url(self, *, object_key: str, expires_in: int = 900) -> str:
+    def create_download_url(
+        self,
+        *,
+        object_key: str,
+        expires_in: int = 900,
+        filename: str | None = None,
+    ) -> str:
         return f"https://images.example/{object_key}?expires={expires_in}"
 
     def create_upload_url(
@@ -152,6 +158,7 @@ def test_system_admin_configures_image_service_and_dealership_credits() -> None:
             "provider": "photoroom",
             "default_monthly_vehicle_credits": "40",
             "photoroom_sandbox": "on",
+            "comparison_mode_enabled": "on",
             "csrf_token": csrf_from(settings_page.text),
         },
         follow_redirects=True,
@@ -182,6 +189,7 @@ def test_system_admin_configures_image_service_and_dealership_credits() -> None:
         assert image_settings is not None
         assert image_settings.provider == "photoroom"
         assert image_settings.photoroom_sandbox is True
+        assert image_settings.comparison_mode_enabled is True
         assert image_settings.default_monthly_vehicle_credits == 40
         assert dealership is not None
         assert dealership.monthly_vehicle_credits == 25
@@ -207,6 +215,36 @@ def test_dealership_admin_cannot_open_system_image_service_settings() -> None:
     response = client.get("/admin/image-service")
 
     assert response.status_code == 403
+
+
+def test_system_admin_can_disable_comparison_mode() -> None:
+    create_system_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    settings_page = client.get("/admin/image-service")
+
+    response = client.post(
+        "/admin/image-service",
+        data={
+            "provider": "disabled",
+            "default_monthly_vehicle_credits": "30",
+            "csrf_token": csrf_from(settings_page.text),
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    with TestingSession() as db:
+        image_settings = db.get(SystemImageSettings, 1)
+        assert image_settings is not None
+        assert image_settings.comparison_mode_enabled is False
 
 
 def test_login_and_current_user() -> None:
