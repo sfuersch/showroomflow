@@ -31,6 +31,7 @@ from app.models import (
     VehicleJob,
 )
 from app.storage import ObjectStorage
+from app.thumbnails import create_thumbnail, thumbnail_key
 
 logger = logging.getLogger(__name__)
 
@@ -577,9 +578,16 @@ def process_photo(photo_id: str) -> None:
                 content=finished,
                 content_type="image/jpeg",
             )
+            processed_thumbnail_key = thumbnail_key(processed_key)
+            storage.put_object(
+                object_key=processed_thumbnail_key,
+                content=create_thumbnail(finished),
+                content_type="image/jpeg",
+            )
             photo.processed_object_key = processed_key
             photo.processed_content_type = "image/jpeg"
             photo.processed_size_bytes = len(finished)
+            photo.processed_thumbnail_object_key = processed_thumbnail_key
             photo.processed_provider = image_settings.provider
             photo.processing_status = ProcessingStatus.COMPLETED
             photo.processing_completed_at = datetime.now(timezone.utc)
@@ -667,9 +675,16 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 content=finished,
                 content_type="image/jpeg",
             )
+            variant_thumbnail_key = thumbnail_key(object_key)
+            storage.put_object(
+                object_key=variant_thumbnail_key,
+                content=create_thumbnail(finished),
+                content_type="image/jpeg",
+            )
             variant.object_key = object_key
             variant.content_type = "image/jpeg"
             variant.size_bytes = len(finished)
+            variant.thumbnail_object_key = variant_thumbnail_key
             variant.status = ProcessingStatus.COMPLETED.value
             variant.completed_at = datetime.now(timezone.utc)
             db.commit()

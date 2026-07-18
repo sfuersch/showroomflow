@@ -38,6 +38,7 @@ from app.storage import (
     StorageUnavailableError,
     get_object_storage,
 )
+from app.thumbnails import ThumbnailError, create_thumbnail, thumbnail_key
 
 router = APIRouter(prefix="/jobs/{job_id}/capture", tags=["photo capture"])
 logger = logging.getLogger(__name__)
@@ -62,9 +63,19 @@ def _photo_response(storage: ObjectStorage, photo: PhotoAsset) -> PhotoAssetResp
         capture_step_id=photo.capture_step_id,
         revision=photo.revision,
         image_url=storage.create_download_url(object_key=photo.original_object_key),
+        thumbnail_url=(
+            storage.create_download_url(object_key=photo.original_thumbnail_object_key)
+            if photo.original_thumbnail_object_key
+            else None
+        ),
         processed_image_url=(
             storage.create_download_url(object_key=photo.processed_object_key)
             if photo.processed_object_key
+            else None
+        ),
+        processed_thumbnail_url=(
+            storage.create_download_url(object_key=photo.processed_thumbnail_object_key)
+            if photo.processed_thumbnail_object_key
             else None
         ),
         processing_status=photo.processing_status,
@@ -199,6 +210,20 @@ def complete_photo_upload(
     if content_type != photo.original_content_type or size_bytes != photo.expected_size_bytes:
         raise HTTPException(status_code=409, detail="Das hochgeladene Foto ist unvollständig")
 
+    try:
+        original = storage.get_object(object_key=photo.original_object_key)
+        original_thumbnail = create_thumbnail(original)
+        original_thumbnail_key = thumbnail_key(photo.original_object_key)
+        storage.put_object(
+            object_key=original_thumbnail_key,
+            content=original_thumbnail,
+            content_type="image/jpeg",
+        )
+    except ThumbnailError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except StorageUnavailableError as exc:
+        raise HTTPException(status_code=503, detail="Bildspeicher ist nicht erreichbar") from exc
+
     db.execute(
         update(PhotoAsset)
         .where(
@@ -209,6 +234,7 @@ def complete_photo_upload(
         .values(is_selected=False)
     )
     photo.original_size_bytes = size_bytes
+    photo.original_thumbnail_object_key = original_thumbnail_key
     photo.uploaded_at = datetime.now(timezone.utc)
     photo.is_selected = True
     step = db.get(CaptureStep, photo.capture_step_id)

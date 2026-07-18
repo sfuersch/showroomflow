@@ -103,7 +103,9 @@ class PhotoAssetResponse(BaseModel):
     capture_step_id: uuid.UUID
     revision: int
     image_url: str
+    thumbnail_url: str | None = None
     processed_image_url: str | None = None
+    processed_thumbnail_url: str | None = None
     processing_status: ProcessingStatus
     processing_error: str | None = None
     uploaded_at: datetime
