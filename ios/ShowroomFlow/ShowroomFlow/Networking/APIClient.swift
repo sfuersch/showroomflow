@@ -228,6 +228,15 @@ struct APIClient {
         return try JSONDecoder().decode(CapturedPhoto.self, from: data)
     }
 
+    func completeCapture(jobID: UUID, accessToken: String) async throws -> VehicleJob {
+        let data = try await authorizedRequest(
+            path: "jobs/\(jobID.uuidString)/capture/complete",
+            method: "POST",
+            accessToken: accessToken
+        )
+        return try JSONDecoder().decode(VehicleJob.self, from: data)
+    }
+
     private func authorizedRequest(
         path: String,
         method: String = "GET",
@@ -365,6 +374,7 @@ struct VehicleJob: Decodable, Identifiable {
     let backgroundID: UUID?
     let status: String
     let autoExport: Bool
+    let captureCompletedAt: String?
     let thumbnailURL: URL?
 
     enum CodingKeys: String, CodingKey {
@@ -374,6 +384,7 @@ struct VehicleJob: Decodable, Identifiable {
         case brandID = "brand_id"
         case backgroundID = "background_id"
         case autoExport = "auto_export"
+        case captureCompletedAt = "capture_completed_at"
         case thumbnailURL = "thumbnail_url"
     }
 }

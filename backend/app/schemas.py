@@ -154,6 +154,7 @@ class VehicleJobResponse(BaseModel):
     background_id: uuid.UUID | None
     status: JobStatus
     auto_export: bool
+    capture_completed_at: datetime | None
     created_at: datetime
     thumbnail_url: str | None = None
 

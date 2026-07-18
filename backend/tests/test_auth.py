@@ -1,6 +1,7 @@
 import io
 import uuid
 from collections.abc import Generator
+from datetime import datetime, timezone
 import re
 
 import pytest
@@ -12,14 +13,17 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
+from app.exporting import try_enqueue_auto_export
 from app.models import (
     Background,
     Brand,
     CaptureStep,
     Dealership,
+    ExportRun,
     ImageOverlay,
     Location,
     PhotoAsset,
+    ProcessingStatus,
     SupplementalImage,
     SystemImageSettings,
     User,
@@ -1079,6 +1083,152 @@ def test_guided_capture_upload_tracks_progress_and_revision() -> None:
     assert any(
         str(upload["object_key"]).endswith(".thumbnail.jpg") for upload in storage.uploads
     )
+
+
+def test_capture_must_be_completed_and_is_locked_afterwards() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        required_step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Front",
+            instruction="Gerade aufnehmen",
+            category="exterior",
+            capture_order=1,
+            export_order=1,
+            is_required=True,
+            requires_processing=False,
+        )
+        optional_step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Detail",
+            instruction="Optionales Detail",
+            category="detail",
+            capture_order=2,
+            export_order=2,
+            is_required=False,
+            requires_processing=False,
+        )
+        db.add_all([location, required_step, optional_step])
+        db.commit()
+        db.refresh(location)
+        db.refresh(required_step)
+        db.refresh(optional_step)
+        location_id = location.id
+        required_step_id = required_step.id
+        optional_step_id = optional_step.id
+
+    tokens = login()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    job_response = client.post(
+        "/api/v1/jobs",
+        headers=headers,
+        json={"location_id": str(location_id), "vin": "FINISH-VIN", "brand": "Ford"},
+    )
+    job_id = job_response.json()["id"]
+
+    missing = client.post(f"/api/v1/jobs/{job_id}/capture/complete", headers=headers)
+    assert missing.status_code == 409
+    assert missing.json()["detail"] == "Pflichtfotos fehlen: Front"
+
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        upload = client.post(
+            f"/api/v1/jobs/{job_id}/capture/uploads",
+            headers=headers,
+            json={
+                "capture_step_id": str(required_step_id),
+                "content_type": "image/jpeg",
+                "size_bytes": 1234,
+            },
+        )
+        completed_photo = client.post(
+            f"/api/v1/jobs/{job_id}/capture/photos/{upload.json()['photo_id']}/complete",
+            headers=headers,
+        )
+        completed_capture = client.post(
+            f"/api/v1/jobs/{job_id}/capture/complete", headers=headers
+        )
+        blocked_upload = client.post(
+            f"/api/v1/jobs/{job_id}/capture/uploads",
+            headers=headers,
+            json={
+                "capture_step_id": str(optional_step_id),
+                "content_type": "image/jpeg",
+                "size_bytes": 1234,
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert completed_photo.status_code == 200
+    assert completed_capture.status_code == 200
+    assert completed_capture.json()["capture_completed_at"] is not None
+    assert blocked_upload.status_code == 409
+    assert blocked_upload.json()["detail"] == "Die Aufnahme wurde bereits abgeschlossen"
+
+
+def test_auto_export_waits_for_explicit_capture_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    dealership, user = create_dealership_admin()
+    queued_exports: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        "app.processing_queue.enqueue_vehicle_export",
+        lambda export_run_id: queued_exports.append(export_run_id),
+    )
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Front",
+            instruction="Gerade aufnehmen",
+            category="exterior",
+            capture_order=1,
+            export_order=1,
+            is_required=True,
+            requires_processing=False,
+        )
+        db.add_all([location, step])
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=user.id,
+            vin="AUTO-EXPORT-VIN",
+            version=1,
+            brand="Ford",
+            auto_export=True,
+        )
+        db.add(job)
+        db.flush()
+        db.add(
+            PhotoAsset(
+                vehicle_job_id=job.id,
+                capture_step_id=step.id,
+                captured_by_id=user.id,
+                revision=1,
+                original_object_key="originals/auto-export.jpg",
+                original_content_type="image/jpeg",
+                expected_size_bytes=1234,
+                original_size_bytes=1234,
+                uploaded_at=datetime.now(timezone.utc),
+                is_selected=True,
+                processing_status=ProcessingStatus.NOT_REQUIRED,
+            )
+        )
+        db.commit()
+
+        try_enqueue_auto_export(job.id, db)
+        assert db.scalar(select(ExportRun)) is None
+        assert queued_exports == []
+
+        job.capture_completed_at = datetime.now(timezone.utc)
+        db.commit()
+        try_enqueue_auto_export(job.id, db)
+
+        export_run = db.scalar(select(ExportRun))
+        assert export_run is not None
+        assert queued_exports == [export_run.id]
 
 
 def test_guided_capture_is_tenant_scoped() -> None:

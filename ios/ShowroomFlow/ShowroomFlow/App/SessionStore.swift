@@ -115,6 +115,12 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    func completeCapture(jobID: UUID) async throws -> VehicleJob {
+        try await withAccessToken { token in
+            try await apiClient.completeCapture(jobID: jobID, accessToken: token)
+        }
+    }
+
     private func withAccessToken<Value>(
         _ operation: (String) async throws -> Value
     ) async throws -> Value {
