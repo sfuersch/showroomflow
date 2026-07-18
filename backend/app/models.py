@@ -280,6 +280,9 @@ class VehicleJob(Timestamped, Base):
     )
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.DRAFT)
     auto_export: Mapped[bool] = mapped_column(Boolean, default=False)
+    capture_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class PhotoAsset(Timestamped, Base):

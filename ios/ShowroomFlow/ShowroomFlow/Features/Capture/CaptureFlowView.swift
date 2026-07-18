@@ -10,12 +10,15 @@ struct CaptureFlowView: View {
     @State private var isLoading = true
     @State private var isCapturing = false
     @State private var isUploading = false
+    @State private var isCompletingCapture = false
+    @State private var showCompletionConfirmation = false
     @State private var isRetakingExistingPhoto = false
     @State private var errorMessage: String?
 
     let job: VehicleJob
     let loadCaptureSession: (UUID) async throws -> CaptureSession
     let uploadCapturedPhoto: (UUID, UUID, Data) async throws -> CapturedPhoto
+    let completeCapture: (UUID) async throws -> VehicleJob
 
     var body: some View {
         NavigationStack {
@@ -46,31 +49,77 @@ struct CaptureFlowView: View {
         }
         .task { await prepare() }
         .onDisappear { camera.stop() }
+        .confirmationDialog(
+            "Aufnahme abschließen?",
+            isPresented: $showCompletionConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Verbindlich abschließen") {
+                Task { await finishCapture() }
+            }
+        } message: {
+            Text(
+                "Danach können keine weiteren Fotos aufgenommen werden. "
+                    + "Sobald alle Bilder verarbeitet sind, startet der automatische Export."
+            )
+        }
     }
 
     @ViewBuilder
     private func captureContent(_ data: CaptureSession) -> some View {
-        let step = data.captureSteps[currentIndex]
-        GeometryReader { proxy in
-            if !camera.isLandscape && camera.errorMessage == nil {
-                ZStack {
-                    captureBackground.ignoresSafeArea()
-                    landscapeHint
+        if data.job.captureCompletedAt != nil {
+            completedCaptureView
+        } else {
+            let step = data.captureSteps[currentIndex]
+            GeometryReader { proxy in
+                if !camera.isLandscape && camera.errorMessage == nil {
+                    ZStack {
+                        captureBackground.ignoresSafeArea()
+                        landscapeHint
+                    }
+                } else {
+                    HStack(spacing: 12) {
+                        stepRail(data)
+                            .frame(width: 108)
+                        viewfinder(step: step, data: data)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        controlRail(step: step, data: data)
+                            .frame(width: 136)
+                    }
+                    .padding(10)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .background(captureBackground.ignoresSafeArea())
                 }
-            } else {
-                HStack(spacing: 12) {
-                    stepRail(data)
-                        .frame(width: 108)
-                    viewfinder(step: step, data: data)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    controlRail(step: step, data: data)
-                        .frame(width: 136)
-                }
-                .padding(10)
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .background(captureBackground.ignoresSafeArea())
             }
         }
+    }
+
+    private var completedCaptureView: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 64))
+                .foregroundStyle(.mint)
+            Text("Aufnahme abgeschlossen")
+                .font(.title.bold())
+            Text(
+                job.autoExport
+                    ? "Der Export startet automatisch, sobald alle Bilder verarbeitet sind."
+                    : "Die Bilder stehen jetzt zur Prüfung und manuellen Weiterverarbeitung bereit."
+            )
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.white.opacity(0.75))
+            Button("Zur Fahrzeugübersicht", systemImage: "chevron.left") {
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.mint)
+        }
+        .foregroundStyle(.white)
+        .padding(30)
+        .frame(maxWidth: 480)
+        .background(.ultraThinMaterial, in: .rect(cornerRadius: 28))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(30)
     }
 
     private var captureBackground: LinearGradient {
@@ -412,6 +461,28 @@ struct CaptureFlowView: View {
                 .foregroundStyle(.white.opacity(0.8))
             ProgressView(value: Double(completedCount), total: Double(data.captureSteps.count))
                 .tint(.mint)
+            Button {
+                showCompletionConfirmation = true
+            } label: {
+                if isCompletingCapture {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Label("Abschließen", systemImage: "checkmark.seal.fill")
+                        .font(.caption.bold())
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.mint)
+            .disabled(!requiredPhotosComplete || isUploading || isCompletingCapture)
+            .accessibilityHint(
+                requiredPhotosComplete
+                    ? "Beendet die Aufnahme verbindlich"
+                    : "Zuerst müssen alle Pflichtfotos aufgenommen werden"
+            )
         }
         .padding(12)
         .background(.ultraThinMaterial, in: .rect(cornerRadius: 20))
@@ -492,6 +563,14 @@ struct CaptureFlowView: View {
         return captureSession.photos.count { activeStepIDs.contains($0.captureStepID) }
     }
 
+    private var requiredPhotosComplete: Bool {
+        guard let captureSession else { return false }
+        let photographedStepIDs = Set(captureSession.photos.map(\.captureStepID))
+        return captureSession.captureSteps
+            .filter(\.isRequired)
+            .allSatisfy { photographedStepIDs.contains($0.id) }
+    }
+
     private func isCompleted(_ stepID: UUID) -> Bool {
         captureSession?.photos.contains(where: { $0.captureStepID == stepID }) == true
     }
@@ -542,6 +621,18 @@ struct CaptureFlowView: View {
             pendingPhotoData = nil
             isRetakingExistingPhoto = false
             moveToNextIncompleteStep(in: updatedSession)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func finishCapture() async {
+        isCompletingCapture = true
+        errorMessage = nil
+        defer { isCompletingCapture = false }
+        do {
+            _ = try await completeCapture(job.id)
+            dismiss()
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -148,11 +148,11 @@ def build_zip_bytes(
 
 
 def try_enqueue_auto_export(job_id: uuid.UUID, session: Session | None = None) -> None:
-    """Queue one automatic export once every required photo is ready."""
+    """Queue one automatic export after capture and selected photos are ready."""
     session_context = SessionLocal() if session is None else nullcontext(session)
     with session_context as db:
         job = db.scalar(select(VehicleJob).where(VehicleJob.id == job_id).with_for_update())
-        if job is None or not job.auto_export:
+        if job is None or not job.auto_export or job.capture_completed_at is None:
             return
         existing = db.scalar(select(ExportRun.id).where(ExportRun.vehicle_job_id == job.id))
         if existing is not None:
@@ -178,10 +178,20 @@ def try_enqueue_auto_export(job_id: uuid.UUID, session: Session | None = None) -
         }
         if any(step.id not in photos for step in required_steps):
             return
+        active_steps = {
+            step.id: step
+            for step in db.scalars(
+                select(CaptureStep).where(
+                    CaptureStep.dealership_id == job.dealership_id,
+                    CaptureStep.is_active.is_(True),
+                )
+            )
+        }
         if any(
-            step.requires_processing
-            and photos[step.id].processing_status != ProcessingStatus.COMPLETED
-            for step in required_steps
+            active_steps.get(photo.capture_step_id)
+            and active_steps[photo.capture_step_id].requires_processing
+            and photo.processing_status != ProcessingStatus.COMPLETED
+            for photo in photos.values()
         ):
             return
 

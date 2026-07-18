@@ -13,6 +13,7 @@ struct JobListView: View {
     let createJob: (UUID, String, UUID, String, UUID?) async throws -> VehicleJob
     let loadCaptureSession: (UUID) async throws -> CaptureSession
     let uploadCapturedPhoto: (UUID, UUID, Data) async throws -> CapturedPhoto
+    let completeCapture: (UUID) async throws -> VehicleJob
     let onLogout: () -> Void
 
     var body: some View {
@@ -93,7 +94,8 @@ struct JobListView: View {
                 CaptureFlowView(
                     job: job,
                     loadCaptureSession: loadCaptureSession,
-                    uploadCapturedPhoto: uploadCapturedPhoto
+                    uploadCapturedPhoto: uploadCapturedPhoto,
+                    completeCapture: completeCapture
                 )
             }
             .task { await reload() }
@@ -129,11 +131,15 @@ struct JobListView: View {
 
                 Spacer(minLength: 8)
 
-                Image(systemName: "camera.fill")
+                Image(
+                    systemName: job.captureCompletedAt == nil
+                        ? "camera.fill"
+                        : "checkmark.seal.fill"
+                )
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(width: 38, height: 38)
-                    .background(.indigo, in: .circle)
+                    .background(job.captureCompletedAt == nil ? Color.indigo : Color.green, in: .circle)
             }
             .padding(15)
             .background(.background, in: .rect(cornerRadius: 18))
@@ -238,6 +244,7 @@ private extension VehicleJob {
         createJob: { _, _, _, _, _ in throw APIError.invalidResponse },
         loadCaptureSession: { _ in throw APIError.invalidResponse },
         uploadCapturedPhoto: { _, _, _ in throw APIError.invalidResponse },
+        completeCapture: { _ in throw APIError.invalidResponse },
         onLogout: {}
     )
 }

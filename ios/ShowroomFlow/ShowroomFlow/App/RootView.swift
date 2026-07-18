@@ -15,6 +15,7 @@ struct RootView: View {
                     createJob: session.createJob,
                     loadCaptureSession: session.loadCaptureSession,
                     uploadCapturedPhoto: session.uploadCapturedPhoto,
+                    completeCapture: session.completeCapture,
                     onLogout: session.logout
                 )
             } else {

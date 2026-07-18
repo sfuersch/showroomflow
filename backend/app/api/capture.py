@@ -146,6 +146,8 @@ def create_photo_upload(
     storage: StorageDependency,
 ) -> PhotoUploadResponse:
     job = _authorized_job(db, current_user, job_id)
+    if job.capture_completed_at is not None:
+        raise HTTPException(status_code=409, detail="Die Aufnahme wurde bereits abgeschlossen")
     if job.status in {JobStatus.EXPORTING, JobStatus.COMPLETED}:
         raise HTTPException(status_code=409, detail="Der Auftrag kann nicht mehr bearbeitet werden")
     step = db.get(CaptureStep, payload.capture_step_id)
@@ -155,6 +157,8 @@ def create_photo_upload(
     locked_job = db.get(VehicleJob, job.id, with_for_update=True)
     if locked_job is None:
         raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    if locked_job.capture_completed_at is not None:
+        raise HTTPException(status_code=409, detail="Die Aufnahme wurde bereits abgeschlossen")
     latest_revision = db.scalar(
         select(func.max(PhotoAsset.revision)).where(
             PhotoAsset.vehicle_job_id == job.id,
@@ -189,6 +193,61 @@ def create_photo_upload(
     )
 
 
+@router.post("/complete", response_model=VehicleJobResponse)
+def complete_capture(
+    job_id: uuid.UUID,
+    db: DatabaseSession,
+    current_user: CurrentUser,
+) -> VehicleJobResponse:
+    _authorized_job(db, current_user, job_id)
+    job = db.scalar(select(VehicleJob).where(VehicleJob.id == job_id).with_for_update())
+    if job is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    if job.capture_completed_at is not None:
+        return VehicleJobResponse.model_validate(job)
+
+    required_steps = list(
+        db.scalars(
+            select(CaptureStep)
+            .where(
+                CaptureStep.dealership_id == job.dealership_id,
+                CaptureStep.is_active.is_(True),
+                CaptureStep.is_required.is_(True),
+            )
+            .order_by(CaptureStep.capture_order, CaptureStep.name)
+        )
+    )
+    photographed_step_ids = set(
+        db.scalars(
+            select(PhotoAsset.capture_step_id).where(
+                PhotoAsset.vehicle_job_id == job.id,
+                PhotoAsset.is_selected.is_(True),
+                PhotoAsset.uploaded_at.is_not(None),
+            )
+        )
+    )
+    missing_steps = [step.name for step in required_steps if step.id not in photographed_step_ids]
+    if missing_steps:
+        raise HTTPException(
+            status_code=409,
+            detail="Pflichtfotos fehlen: " + ", ".join(missing_steps),
+        )
+
+    job.capture_completed_at = datetime.now(timezone.utc)
+    if job.status != JobStatus.PROCESSING:
+        job.status = JobStatus.REVIEW_REQUIRED
+    db.commit()
+    db.refresh(job)
+    try:
+        try_enqueue_auto_export(job.id, db)
+    except Exception:
+        logger.exception("Automatic export could not be queued for job %s", job.id)
+        job.status = JobStatus.REVIEW_REQUIRED
+        db.commit()
+        db.refresh(job)
+    return VehicleJobResponse.model_validate(job)
+
+
 @router.post("/photos/{photo_id}/complete", response_model=PhotoAssetResponse)
 def complete_photo_upload(
     job_id: uuid.UUID,
@@ -198,6 +257,12 @@ def complete_photo_upload(
     storage: StorageDependency,
 ) -> PhotoAssetResponse:
     job = _authorized_job(db, current_user, job_id)
+    locked_job = db.scalar(select(VehicleJob).where(VehicleJob.id == job.id).with_for_update())
+    if locked_job is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    if locked_job.capture_completed_at is not None:
+        raise HTTPException(status_code=409, detail="Die Aufnahme wurde bereits abgeschlossen")
+    job = locked_job
     photo = db.get(PhotoAsset, photo_id)
     if photo is None or photo.vehicle_job_id != job.id:
         raise HTTPException(status_code=404, detail="Foto wurde nicht gefunden")
