@@ -21,7 +21,15 @@ struct CaptureFlowView: View {
         NavigationStack {
             Group {
                 if isLoading {
-                    ProgressView("Fotoablauf wird geladen …")
+                    VStack(spacing: 14) {
+                        ShowroomFlowBrandMark(size: 76)
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(.white)
+                        Text("Fotoablauf wird geladen …")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
                 } else if let captureSession, !captureSession.captureSteps.isEmpty {
                     captureContent(captureSession)
                 } else {
@@ -32,7 +40,8 @@ struct CaptureFlowView: View {
                     )
                 }
             }
-            .background(.black)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(captureBackground.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
         }
         .task { await prepare() }
@@ -45,23 +54,35 @@ struct CaptureFlowView: View {
         GeometryReader { proxy in
             if !camera.isLandscape && camera.errorMessage == nil {
                 ZStack {
-                    Color.black.ignoresSafeArea()
+                    captureBackground.ignoresSafeArea()
                     landscapeHint
                 }
             } else {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     stepRail(data)
-                        .frame(width: 104)
+                        .frame(width: 108)
                     viewfinder(step: step, data: data)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     controlRail(step: step, data: data)
-                        .frame(width: 128)
+                        .frame(width: 136)
                 }
-                .padding(8)
+                .padding(10)
                 .frame(width: proxy.size.width, height: proxy.size.height)
-                .background(Color(white: 0.12).ignoresSafeArea())
+                .background(captureBackground.ignoresSafeArea())
             }
         }
+    }
+
+    private var captureBackground: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.055, green: 0.065, blue: 0.11),
+                Color(red: 0.10, green: 0.09, blue: 0.22),
+                Color(red: 0.045, green: 0.05, blue: 0.085),
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 
     private func viewfinder(
@@ -100,7 +121,19 @@ struct CaptureFlowView: View {
                 }
             }
             .frame(width: width, height: height)
-            .clipShape(.rect(cornerRadius: 16))
+            .clipShape(.rect(cornerRadius: 20))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(
+                        LinearGradient(
+                            colors: [.white.opacity(0.32), .indigo.opacity(0.55)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.5
+                    )
+            }
+            .shadow(color: .black.opacity(0.42), radius: 18, y: 10)
             .overlay(alignment: .top) {
                 VStack(spacing: 5) {
                     Text(step.name)
@@ -111,7 +144,7 @@ struct CaptureFlowView: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
-                .background(.black.opacity(0.64), in: .rect(cornerRadius: 12))
+                .background(.ultraThinMaterial, in: .rect(cornerRadius: 12))
                 .padding(10)
             }
             .overlay(alignment: .bottom) {
@@ -122,7 +155,7 @@ struct CaptureFlowView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
-                        .background(.black.opacity(0.64), in: .capsule)
+                        .background(.ultraThinMaterial, in: .capsule)
                         .padding(10)
                 }
             }
@@ -131,7 +164,7 @@ struct CaptureFlowView: View {
                     .font(.caption.monospaced().bold())
                     .foregroundStyle(.white)
                     .padding(8)
-                    .background(.black.opacity(0.64), in: .rect(cornerRadius: 9))
+                    .background(.ultraThinMaterial, in: .rect(cornerRadius: 9))
                     .padding(10)
             }
             .overlay(alignment: .bottomTrailing) {
@@ -153,7 +186,7 @@ struct CaptureFlowView: View {
         width: CGFloat,
         height: CGFloat
     ) -> some View {
-        AsyncImage(url: photo.imageURL) { phase in
+        AsyncImage(url: photo.displayImageURL) { phase in
             switch phase {
             case let .success(image):
                 image
@@ -176,29 +209,66 @@ struct CaptureFlowView: View {
         .background(.black)
         .clipShape(.rect(cornerRadius: 18))
         .overlay(alignment: .topTrailing) {
-            Label("Aufnahme vorhanden", systemImage: "checkmark.circle.fill")
+            Label(
+                photo.isOptimized ? "Optimiertes Bild" : "Aufnahme vorhanden",
+                systemImage: photo.isOptimized ? "sparkles" : "checkmark.circle.fill"
+            )
                 .font(.caption.bold())
                 .foregroundStyle(.white)
                 .padding(9)
-                .background(.green.opacity(0.85), in: .capsule)
+                .background(
+                    photo.isOptimized ? Color.indigo.opacity(0.9) : Color.green.opacity(0.85),
+                    in: .capsule
+                )
                 .padding(10)
         }
     }
 
     private var landscapeHint: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "rotate.right")
-                .font(.system(size: 44, weight: .semibold))
-            Text("Für Fahrzeugfotos bitte quer halten")
-                .font(.headline)
-            Text("Die Aufnahme wird erst im Querformat freigegeben.")
-                .font(.subheadline)
+        ZStack(alignment: .topLeading) {
+            Button {
+                dismiss()
+            } label: {
+                Label("Zurück", systemImage: "chevron.left")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .frame(height: 48)
+                    .background(.ultraThinMaterial, in: .capsule)
+            }
+            .disabled(isUploading)
+            .padding(20)
+
+            VStack(spacing: 18) {
+                ShowroomFlowBrandMark(size: 82)
+                Image(systemName: "iphone.gen3.landscape")
+                    .font(.system(size: 58, weight: .semibold))
+                    .symbolEffect(.pulse)
+                    .foregroundStyle(.mint)
+                VStack(spacing: 7) {
+                    Text("Bitte ins Querformat drehen")
+                        .font(.title2.bold())
+                    Text("Die Bedienelemente werden eingeblendet, sobald das Gerät quer gehalten wird.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                }
+                Text("\(job.vin) · V\(job.version)")
+                    .font(.caption.monospaced().bold())
+                    .foregroundStyle(.white.opacity(0.62))
+            }
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.white)
+            .padding(28)
+            .frame(maxWidth: 440)
+            .background(.ultraThinMaterial, in: .rect(cornerRadius: 28))
+            .overlay {
+                RoundedRectangle(cornerRadius: 28)
+                    .stroke(Color.white.opacity(0.12))
+            }
+            .shadow(color: .black.opacity(0.28), radius: 24, y: 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(30)
         }
-        .multilineTextAlignment(.center)
-        .foregroundStyle(.white)
-        .padding(24)
-        .background(.black.opacity(0.78), in: .rect(cornerRadius: 20))
-        .padding(32)
     }
 
     @ViewBuilder
@@ -280,13 +350,17 @@ struct CaptureFlowView: View {
                 .background(.black.opacity(0.5), in: .capsule)
         }
         .padding(.vertical, 6)
-        .background(Color(white: 0.19), in: .rect(cornerRadius: 18))
+        .background(.ultraThinMaterial, in: .rect(cornerRadius: 20))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(Color.white.opacity(0.1))
+        }
     }
 
     @ViewBuilder
     private func stepThumbnail(_ step: ConfiguredCaptureStep) -> some View {
         if let photo = existingPhoto(for: step.id) {
-            AsyncImage(url: photo.imageURL) { phase in
+            AsyncImage(url: photo.displayImageURL) { phase in
                 if case let .success(image) = phase {
                     image.resizable().scaledToFill()
                 } else {
@@ -324,6 +398,7 @@ struct CaptureFlowView: View {
         data: CaptureSession
     ) -> some View {
         VStack(spacing: 12) {
+            ShowroomFlowBrandMark(size: 38)
             MotionLevelIndicator(
                 horizonAngle: camera.horizonAngle,
                 verticalAngle: camera.verticalAngle,
@@ -339,7 +414,11 @@ struct CaptureFlowView: View {
                 .tint(.mint)
         }
         .padding(12)
-        .background(Color(white: 0.19), in: .rect(cornerRadius: 18))
+        .background(.ultraThinMaterial, in: .rect(cornerRadius: 20))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(Color.white.opacity(0.1))
+        }
     }
 
     @ViewBuilder
@@ -400,7 +479,11 @@ struct CaptureFlowView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 9)
-        .background(.black.opacity(0.42), in: .rect(cornerRadius: 12))
+        .background(Color.indigo.opacity(0.28), in: .rect(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.white.opacity(0.1))
+        }
     }
 
     private var completedCount: Int {

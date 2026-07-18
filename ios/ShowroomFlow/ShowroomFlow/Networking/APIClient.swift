@@ -374,12 +374,22 @@ struct CapturedPhoto: Decodable, Identifiable {
     let captureStepID: UUID
     let revision: Int
     let imageURL: URL
+    let processedImageURL: URL?
     let uploadedAt: String
+
+    var displayImageURL: URL {
+        processedImageURL ?? imageURL
+    }
+
+    var isOptimized: Bool {
+        processedImageURL != nil
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, revision
         case captureStepID = "capture_step_id"
         case imageURL = "image_url"
+        case processedImageURL = "processed_image_url"
         case uploadedAt = "uploaded_at"
     }
 }
