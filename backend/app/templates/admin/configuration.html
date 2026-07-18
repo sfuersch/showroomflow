@@ -2,8 +2,8 @@
 {% block title %}Foto-Konfiguration · {{ dealership.name }}{% endblock %}
 {% block content %}
 <nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><span>Foto-Konfiguration</span></nav>
-<div class="page-heading"><div><span class="eyebrow">Foto-Konfiguration</span><h1>{{ dealership.name }}</h1><p class="muted">Markenauswahl, virtuelle Showrooms und die Reihenfolge der Aufnahmen steuern.</p></div></div>
-<div class="subnav"><a href="#brands">Marken</a><a href="#backgrounds">Hintergründe</a><a href="#capture-steps">Fotoablauf</a></div>
+<div class="page-heading"><div><span class="eyebrow">Foto-Konfiguration</span><h1>{{ dealership.name }}</h1><p class="muted">Markenauswahl, virtuelle Showrooms, Overlays und die Reihenfolge des Exports steuern.</p></div></div>
+<div class="subnav"><a href="#brands">Marken</a><a href="#backgrounds">Hintergründe</a><a href="#overlays">Overlays</a><a href="#supplemental-images">Zusatzbilder</a><a href="#capture-steps">Fotoablauf</a></div>
 
 <section class="card section-card" id="brands">
     <div class="section-heading"><div><h2>Marken</h2><p>Diese Marken stehen dem Fotografen in der App zur Auswahl.</p></div><span class="count">{{ brands|length }}</span></div>
@@ -52,6 +52,62 @@
         <label class="span-2">Hintergrundbild (PNG oder JPG, maximal 20 MB)<input type="file" name="image" accept="image/png,image/jpeg" required></label>
         <fieldset class="choice-group span-2"><legend>Nur an diesen Standorten (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}"><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Hintergrund hochladen</button></div>
+    </form>
+</section>
+
+<section class="card section-card" id="overlays">
+    <div class="section-heading"><div><h2>Overlays</h2><p>Transparente PNG-Dateien wie Autohauslogos. Leere Standort-, Marken- oder Fotopositionsauswahl gilt allgemein; ohne Fotoposition werden alle Außenaufnahmen verwendet.</p></div><span class="count">{{ overlays|length }}</span></div>
+    <div class="background-grid">
+        {% for overlay in overlays %}
+        <form class="asset-card" method="post" action="/admin/overlays/{{ overlay.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <img class="transparent-preview" src="{{ overlay_previews[overlay.id] }}" alt="Vorschau {{ overlay.name }}">
+            <label>Name<input type="text" name="name" value="{{ overlay.name }}" maxlength="160" required></label>
+            <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}" {% if overlay.brand_id == brand.id %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
+            <div class="form-grid"><label>Position<select name="position">{% for value, label in overlay_positions.items() %}<option value="{{ value }}" {% if overlay.position == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><label>Breite (%)<input type="number" name="width_percent" min="5" max="60" value="{{ overlay.width_percent }}" required></label><label>Deckkraft (%)<input type="number" name="opacity_percent" min="10" max="100" value="{{ overlay.opacity_percent }}" required></label></div>
+            <fieldset class="choice-group"><legend>Standorte (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in overlay.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
+            <fieldset class="choice-group"><legend>Fotopositionen (leer = alle Außenaufnahmen)</legend><div class="choice-row">{% for step in steps %}<label class="toggle"><input type="checkbox" name="capture_step_ids" value="{{ step.id }}" {% if step in overlay.capture_steps %}checked{% endif %}><span>{{ step.name }}</span></label>{% endfor %}</div></fieldset>
+            <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if overlay.is_active %}checked{% endif %}><span>Aktiv</span></label><button class="button button-secondary" type="submit">Speichern</button></div>
+        </form>
+        {% endfor %}
+    </div>
+    <form class="form-grid add-panel" method="post" action="/admin/dealerships/{{ dealership.id }}/overlays" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Name<input type="text" name="name" maxlength="160" required placeholder="z. B. Autohauslogo"></label>
+        <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}">{{ brand.name }}</option>{% endfor %}</select></label>
+        <label>Position<select name="position">{% for value, label in overlay_positions.items() %}<option value="{{ value }}" {% if value == 'bottom_right' %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+        <label>Breite (%)<input type="number" name="width_percent" min="5" max="60" value="18" required></label>
+        <label>Deckkraft (%)<input type="number" name="opacity_percent" min="10" max="100" value="100" required></label>
+        <label>Overlay (transparentes PNG, maximal 20 MB)<input type="file" name="image" accept="image/png" required></label>
+        <fieldset class="choice-group span-2"><legend>Standorte (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}"><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
+        <fieldset class="choice-group span-2"><legend>Fotopositionen (leer = alle Außenaufnahmen)</legend><div class="choice-row">{% for step in steps %}<label class="toggle"><input type="checkbox" name="capture_step_ids" value="{{ step.id }}"><span>{{ step.name }}</span></label>{% endfor %}</div></fieldset>
+        <div class="form-actions span-2"><button class="button button-primary" type="submit">Overlay hochladen</button></div>
+    </form>
+</section>
+
+<section class="card section-card" id="supplemental-images">
+    <div class="section-heading"><div><h2>Zusatzbilder</h2><p>Werbung, Leistungsversprechen oder andere feste Motive werden später anhand ihrer Export-Nr. in die Fahrzeugserie eingefügt.</p></div><span class="count">{{ supplemental_images|length }}</span></div>
+    <div class="background-grid">
+        {% for item in supplemental_images %}
+        <form class="asset-card" method="post" action="/admin/supplemental-images/{{ item.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <img src="{{ supplemental_previews[item.id] }}" alt="Vorschau {{ item.name }}">
+            <label>Name<input type="text" name="name" value="{{ item.name }}" maxlength="160" required></label>
+            <label>Export-Nr.<input type="number" name="export_order" min="1" value="{{ item.export_order }}" required></label>
+            <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}" {% if item.brand_id == brand.id %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
+            <fieldset class="choice-group"><legend>Standorte (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in item.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
+            <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if item.is_active %}checked{% endif %}><span>Aktiv</span></label><button class="button button-secondary" type="submit">Speichern</button></div>
+        </form>
+        {% endfor %}
+    </div>
+    <form class="form-grid add-panel" method="post" action="/admin/dealerships/{{ dealership.id }}/supplemental-images" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Name<input type="text" name="name" maxlength="160" required placeholder="z. B. Garantiehinweis"></label>
+        <label>Export-Nr.<input type="number" name="export_order" min="1" required></label>
+        <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}">{{ brand.name }}</option>{% endfor %}</select></label>
+        <label>Bild (PNG oder JPG, maximal 20 MB)<input type="file" name="image" accept="image/png,image/jpeg" required></label>
+        <fieldset class="choice-group span-2"><legend>Standorte (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}"><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
+        <div class="form-actions span-2"><button class="button button-primary" type="submit">Zusatzbild hochladen</button></div>
     </form>
 </section>
 

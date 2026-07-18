@@ -114,6 +114,82 @@ class Background(Timestamped, Base):
     locations: Mapped[list[Location]] = relationship(secondary="background_locations")
 
 
+class ImageOverlayLocation(Base):
+    __tablename__ = "image_overlay_locations"
+
+    overlay_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("image_overlays.id", ondelete="CASCADE"), primary_key=True
+    )
+    location_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("locations.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class ImageOverlayCaptureStep(Base):
+    __tablename__ = "image_overlay_capture_steps"
+
+    overlay_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("image_overlays.id", ondelete="CASCADE"), primary_key=True
+    )
+    capture_step_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("capture_steps.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class ImageOverlay(Timestamped, Base):
+    __tablename__ = "image_overlays"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dealership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dealerships.id", ondelete="CASCADE"), index=True
+    )
+    brand_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("brands.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    object_key: Mapped[str] = mapped_column(String(500), unique=True)
+    content_type: Mapped[str] = mapped_column(String(100), default="image/png")
+    position: Mapped[str] = mapped_column(String(32), default="bottom_right")
+    width_percent: Mapped[int] = mapped_column(Integer, default=18)
+    opacity_percent: Mapped[int] = mapped_column(Integer, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    locations: Mapped[list[Location]] = relationship(secondary="image_overlay_locations")
+    capture_steps: Mapped[list["CaptureStep"]] = relationship(
+        secondary="image_overlay_capture_steps"
+    )
+
+
+class SupplementalImageLocation(Base):
+    __tablename__ = "supplemental_image_locations"
+
+    supplemental_image_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("supplemental_images.id", ondelete="CASCADE"), primary_key=True
+    )
+    location_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("locations.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class SupplementalImage(Timestamped, Base):
+    __tablename__ = "supplemental_images"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    dealership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dealerships.id", ondelete="CASCADE"), index=True
+    )
+    brand_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("brands.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    object_key: Mapped[str] = mapped_column(String(500), unique=True)
+    content_type: Mapped[str] = mapped_column(String(100))
+    export_order: Mapped[int] = mapped_column(Integer)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    locations: Mapped[list[Location]] = relationship(secondary="supplemental_image_locations")
+
+
 class CaptureStep(Timestamped, Base):
     __tablename__ = "capture_steps"
     __table_args__ = (

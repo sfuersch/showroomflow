@@ -171,3 +171,17 @@ werden erst verwendet, wenn das Monatskontingent aufgebraucht ist, und verfallen
 nicht. Jede Gutschrift wird mit Betrag, Systemadministrator, Zeitpunkt und optionaler Notiz
 protokolliert. Der aktuelle Zusatzsaldo wird atomar geführt, damit parallele Bildverarbeitungen
 keine Credits doppelt verbrauchen.
+
+### Overlays und Zusatzbilder verwalten
+
+Nach Migration `0010_overlay_supplemental_assets` stehen in der Foto-Konfiguration zwei weitere
+Bereiche bereit. Overlays werden als transparente PNG-Dateien gespeichert und können nach Marke,
+Standort und Fotoposition eingeschränkt sowie in Position, Breite und Deckkraft konfiguriert
+werden. Ohne ausgewählte Fotoposition gelten sie für alle Außenaufnahmen. Zusatzbilder akzeptieren
+PNG oder JPG und besitzen eine eigene Export-Nr.; auch sie können optional auf Marke und Standort
+begrenzt werden.
+
+Die Konfiguration ist ausschließlich für Systemadministratoren und Autohausadministratoren
+erreichbar. Autohausadministratoren bleiben auf das eigene Autohaus begrenzt. Fotografen können
+sich nicht an der Verwaltungsoberfläche anmelden und haben weder lesenden noch schreibenden Zugriff
+auf diese Medien.
