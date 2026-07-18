@@ -148,7 +148,7 @@ Aktivierung anhand mehrerer heller, dunkler und farbiger Fahrzeuge geprüft werd
 
 Der Systemadministrator kann die zusätzlichen Bildvergleiche unter
 `Verwaltung > Bilddienstleister` zentral ein- oder ausschalten. Bei ausgeschaltetem Vergleichsmodus sehen
-Autohausbenutzer nur Original, reguläres Ergebnis und `Verarbeitung starten`; technische
+Autohausbenutzer nur Original, optimiertes Ergebnis und `Verarbeitung starten`; technische
 Dienstleisternamen werden in der Auftragsansicht nicht angezeigt. Original und `Optimiert` können
 bei aktivem Vergleichsmodus über das Download-Symbol mit einem eindeutigen Dateinamen geladen
 werden.
