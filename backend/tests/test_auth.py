@@ -748,6 +748,18 @@ def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> Non
             files={"image": ("logo.png", b"\x89PNG\r\n\x1a\ncontent", "image/png")},
             follow_redirects=True,
         )
+        conflict_response = client.post(
+            f"/admin/dealerships/{dealership.id}/supplemental-images",
+            data={
+                "name": "Kollision",
+                "export_order": "1",
+                "brand_id": str(brand_id),
+                "location_ids": str(location_id),
+                "csrf_token": csrf_from(overlay_response.text),
+            },
+            files={"image": ("collision.jpg", b"\xff\xd8\xffcontent", "image/jpeg")},
+            follow_redirects=True,
+        )
         supplemental_response = client.post(
             f"/admin/dealerships/{dealership.id}/supplemental-images",
             data={
@@ -755,7 +767,7 @@ def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> Non
                 "export_order": "20",
                 "brand_id": str(brand_id),
                 "location_ids": str(location_id),
-                "csrf_token": csrf_from(overlay_response.text),
+                "csrf_token": csrf_from(conflict_response.text),
             },
             files={"image": ("garantie.jpg", b"\xff\xd8\xffcontent", "image/jpeg")},
             follow_redirects=True,
@@ -765,6 +777,7 @@ def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> Non
 
     assert overlay_response.status_code == 200
     assert "Overlay wurde hochgeladen" in overlay_response.text
+    assert "Exportplatz 1 ist bereits" in conflict_response.text
     assert supplemental_response.status_code == 200
     assert "Zusatzbild wurde hochgeladen" in supplemental_response.text
     assert len(storage.uploads) == 2
