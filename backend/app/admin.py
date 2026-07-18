@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.database import get_db
+from app.exporting import ExportValidationError, resolve_export_items, safe_vin
 from app.image_service import (
     IMAGE_PROVIDERS,
     VehicleCreditsExhausted,
@@ -29,6 +30,7 @@ from app.models import (
     Brand,
     CaptureStep,
     Dealership,
+    ExportRun,
     ImageOverlay,
     JobStatus,
     Location,
@@ -46,6 +48,7 @@ from app.processing_queue import (
     ProcessingQueueUnavailable,
     enqueue_photo_processing,
     enqueue_photo_variant,
+    enqueue_vehicle_export,
 )
 from app.security import hash_password, verify_password
 from app.storage import ObjectStorage, StorageUnavailableError, get_object_storage
@@ -282,6 +285,75 @@ def _tenant_brand(
     if brand is None or brand.dealership_id != dealership_id:
         raise HTTPException(status_code=400, detail="Ungültige Markenauswahl")
     return brand
+
+
+def _capture_export_order_conflict(
+    db: Session,
+    dealership_id: uuid.UUID,
+    export_order: int | None,
+    *,
+    excluding_step_id: uuid.UUID | None = None,
+) -> str | None:
+    if export_order is None:
+        return None
+    step_statement = select(CaptureStep).where(
+        CaptureStep.dealership_id == dealership_id,
+        CaptureStep.export_order == export_order,
+    )
+    if excluding_step_id is not None:
+        step_statement = step_statement.where(CaptureStep.id != excluding_step_id)
+    step = db.scalar(step_statement)
+    if step is not None:
+        return step.name
+    supplemental = db.scalar(
+        select(SupplementalImage).where(
+            SupplementalImage.dealership_id == dealership_id,
+            SupplementalImage.export_order == export_order,
+            SupplementalImage.is_active.is_(True),
+        )
+    )
+    return supplemental.name if supplemental is not None else None
+
+
+def _supplemental_export_order_conflict(
+    db: Session,
+    dealership_id: uuid.UUID,
+    export_order: int,
+    brand_id: uuid.UUID | None,
+    locations: list[Location],
+    *,
+    excluding_image_id: uuid.UUID | None = None,
+) -> str | None:
+    step = db.scalar(
+        select(CaptureStep).where(
+            CaptureStep.dealership_id == dealership_id,
+            CaptureStep.export_order == export_order,
+            CaptureStep.is_active.is_(True),
+        )
+    )
+    if step is not None:
+        return step.name
+    statement = (
+        select(SupplementalImage)
+        .options(selectinload(SupplementalImage.locations))
+        .where(
+            SupplementalImage.dealership_id == dealership_id,
+            SupplementalImage.export_order == export_order,
+            SupplementalImage.is_active.is_(True),
+        )
+    )
+    if excluding_image_id is not None:
+        statement = statement.where(SupplementalImage.id != excluding_image_id)
+    location_ids = {location.id for location in locations}
+    for other in db.scalars(statement):
+        brands_overlap = brand_id is None or other.brand_id is None or brand_id == other.brand_id
+        other_location_ids = {location.id for location in other.locations}
+        locations_overlap = (
+            not location_ids or not other_location_ids or bool(location_ids & other_location_ids)
+        )
+        if brands_overlap and locations_overlap:
+            return other.name
+    return None
 
 
 async def _store_configuration_image(
@@ -865,6 +937,13 @@ def job_detail_page(
     }
     runtime = get_settings()
     image_settings = get_image_settings(db)
+    export_runs = list(
+        db.scalars(
+            select(ExportRun)
+            .where(ExportRun.vehicle_job_id == job.id)
+            .order_by(ExportRun.attempt.desc(), ExportRun.created_at.desc())
+        )
+    )
     return templates.TemplateResponse(
         request,
         "admin/job_detail.html",
@@ -928,6 +1007,16 @@ def job_detail_page(
             photoroom_enabled=runtime.photoroom_enabled,
             photoroom_sandbox=photoroom_sandbox_active(image_settings, runtime),
             credit_balance=credit_balance(db, dealership),
+            export_runs=export_runs,
+            export_download_urls={
+                export_run.id: storage.create_download_url(
+                    object_key=export_run.object_key,
+                    filename=export_run.zip_filename,
+                    expires_in=3600,
+                )
+                for export_run in export_runs
+                if export_run.object_key and export_run.status == "completed"
+            },
         ),
     )
 
@@ -1017,6 +1106,61 @@ def reprocess_photo(
                 _flash(request, "Die Verarbeitung konnte nicht gestartet werden.", "error")
             else:
                 _flash(request, "Das Foto wurde zur Verarbeitung vorgemerkt.")
+    return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/jobs/{job_id}/exports")
+def create_vehicle_export(
+    job_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    job = db.get(VehicleJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    _authorized_dealership(db, admin, job.dealership_id)
+    active_export = db.scalar(
+        select(ExportRun).where(
+            ExportRun.vehicle_job_id == job.id,
+            ExportRun.status.in_(["queued", "processing"]),
+        )
+    )
+    if active_export is not None:
+        _flash(request, "Für diesen Auftrag wird bereits eine ZIP-Datei erstellt.", "error")
+        return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        resolve_export_items(db, job)
+    except ExportValidationError as exc:
+        _flash(request, str(exc), "error")
+        return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+    attempt = (
+        db.scalar(select(func.max(ExportRun.attempt)).where(ExportRun.vehicle_job_id == job.id))
+        or 0
+    ) + 1
+    export_run = ExportRun(
+        vehicle_job_id=job.id,
+        attempt=attempt,
+        zip_filename=f"{safe_vin(job.vin)}.zip",
+        status="queued",
+    )
+    db.add(export_run)
+    db.commit()
+    db.refresh(export_run)
+    try:
+        enqueue_vehicle_export(export_run.id)
+    except ProcessingQueueUnavailable:
+        export_run.status = "failed"
+        export_run.error_message = "Verarbeitungswarteschlange ist nicht erreichbar"
+        db.commit()
+        _flash(request, "Die ZIP-Erstellung konnte nicht gestartet werden.", "error")
+    else:
+        _flash(request, "Die ZIP-Datei wird im Hintergrund erstellt.")
     return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -1427,6 +1571,23 @@ async def create_supplemental_image(
         )
     selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
     selected_locations = _tenant_locations(db, dealership.id, location_ids)
+    conflict = _supplemental_export_order_conflict(
+        db,
+        dealership.id,
+        export_order,
+        selected_brand.id if selected_brand else None,
+        selected_locations,
+    )
+    if conflict:
+        _flash(
+            request,
+            f"Exportplatz {export_order} ist bereits durch „{conflict}“ belegt.",
+            "error",
+        )
+        return RedirectResponse(
+            f"/admin/dealerships/{dealership.id}/configuration#supplemental-images",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
     object_key, content_type = await _store_configuration_image(
         storage,
         image,
@@ -1476,13 +1637,33 @@ def update_supplemental_image(
         _flash(request, "Bitte prüfen Sie Name und Export-Nr.", "error")
     else:
         selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
-        supplemental_image.name = cleaned_name
-        supplemental_image.export_order = export_order
-        supplemental_image.brand_id = selected_brand.id if selected_brand else None
-        supplemental_image.locations = _tenant_locations(db, dealership.id, location_ids)
-        supplemental_image.is_active = is_active == "on"
-        db.commit()
-        _flash(request, "Zusatzbild wurde gespeichert.")
+        selected_locations = _tenant_locations(db, dealership.id, location_ids)
+        conflict = (
+            _supplemental_export_order_conflict(
+                db,
+                dealership.id,
+                export_order,
+                selected_brand.id if selected_brand else None,
+                selected_locations,
+                excluding_image_id=supplemental_image.id,
+            )
+            if is_active == "on"
+            else None
+        )
+        if conflict:
+            _flash(
+                request,
+                f"Exportplatz {export_order} ist bereits durch „{conflict}“ belegt.",
+                "error",
+            )
+        else:
+            supplemental_image.name = cleaned_name
+            supplemental_image.export_order = export_order
+            supplemental_image.brand_id = selected_brand.id if selected_brand else None
+            supplemental_image.locations = selected_locations
+            supplemental_image.is_active = is_active == "on"
+            db.commit()
+            _flash(request, "Zusatzbild wurde gespeichert.")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}/configuration#supplemental-images",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -1512,11 +1693,32 @@ def create_default_capture_steps(
         )
         or 0
     )
+    used_export_orders = set(
+        db.scalars(
+            select(CaptureStep.export_order).where(
+                CaptureStep.dealership_id == dealership.id,
+                CaptureStep.export_order.is_not(None),
+            )
+        )
+    )
+    used_export_orders.update(
+        db.scalars(
+            select(SupplementalImage.export_order).where(
+                SupplementalImage.dealership_id == dealership.id,
+                SupplementalImage.is_active.is_(True),
+            )
+        )
+    )
+    next_export_order = 0
     added = 0
     for name, instruction, category, processing in STANDARD_CAPTURE_STEPS:
         if name in existing_names:
             continue
         next_order += 1
+        next_export_order += 1
+        while next_export_order in used_export_orders:
+            next_export_order += 1
+        used_export_orders.add(next_export_order)
         db.add(
             CaptureStep(
                 dealership_id=dealership.id,
@@ -1524,7 +1726,7 @@ def create_default_capture_steps(
                 instruction=instruction,
                 category=category,
                 capture_order=next_order,
-                export_order=next_order,
+                export_order=next_export_order,
                 is_required=True,
                 requires_processing=processing,
             )
@@ -1576,6 +1778,12 @@ def create_capture_step(
     )
     if not step.name or capture_order < 1 or (export_order is not None and export_order < 1):
         _flash(request, "Bitte prüfen Sie Name und Reihenfolge.", "error")
+    elif conflict := _capture_export_order_conflict(db, dealership.id, export_order):
+        _flash(
+            request,
+            f"Exportplatz {export_order} ist bereits durch „{conflict}“ belegt.",
+            "error",
+        )
     else:
         db.add(step)
         try:
@@ -1620,6 +1828,17 @@ async def update_capture_step(
         raise HTTPException(status_code=400, detail="Ungültige Kategorie")
     if not name.strip() or capture_order < 1 or (export_order is not None and export_order < 1):
         _flash(request, "Bitte prüfen Sie Name und Reihenfolge.", "error")
+    elif conflict := _capture_export_order_conflict(
+        db,
+        dealership.id,
+        export_order,
+        excluding_step_id=step.id,
+    ):
+        _flash(
+            request,
+            f"Exportplatz {export_order} ist bereits durch „{conflict}“ belegt.",
+            "error",
+        )
     else:
         step.name = name.strip()
         step.instruction = instruction.strip()

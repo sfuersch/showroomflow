@@ -5,6 +5,14 @@
 <div class="page-heading"><div><span class="eyebrow">Fahrzeugauftrag · Version {{ job.version }}</span><h1>{{ job.vin }}</h1><p class="muted">{{ job.brand }} · Status: {{ job.status.value|replace('_', ' ') }}</p></div></div>
 <div class="credit-inline"><strong>{{ credit_balance.available }} Fahrzeug-Credits verfügbar</strong><span>{{ credit_balance.monthly_available }} monatlich + {{ credit_balance.additional_available }} dauerhaft</span></div>
 {% if not processing_enabled %}<div class="flash flash-error">Der reguläre KI-Dienst ist noch nicht konfiguriert. Originalbilder bleiben verfügbar; Freistellungen können danach manuell gestartet werden.</div>{% endif %}
+<section class="card section-card compact-card">
+    <div class="section-heading"><div><h2>ZIP-Export</h2><p>Die Export-Nr. bestimmt den Dateinamen. Doppelt belegte Plätze verhindern die Erstellung.</p></div><form method="post" action="/admin/jobs/{{ job.id }}/exports"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary" type="submit" {% if export_runs and export_runs[0].status in ['queued', 'processing'] %}disabled{% endif %}>ZIP erstellen</button></form></div>
+    <div class="stack">
+        {% for export_run in export_runs %}
+        <div class="item-row"><div class="grow"><strong>{{ export_run.zip_filename }}</strong><span>Versuch {{ export_run.attempt }} · {{ export_run.status|replace('_', ' ') }}{% if export_run.size_bytes %} · {{ (export_run.size_bytes / 1048576)|round(1) }} MB{% endif %}</span>{% if export_run.error_message %}<small class="field-error export-error">{{ export_run.error_message }}</small>{% endif %}</div>{% if export_run.id in export_download_urls %}<a class="button button-secondary" href="{{ export_download_urls[export_run.id] }}">Herunterladen</a>{% endif %}</div>
+        {% else %}<p class="empty">Noch keine ZIP-Datei erstellt.</p>{% endfor %}
+    </div>
+</section>
 <section class="photo-review-grid">
     {% for photo in photos %}
     {% set step = steps.get(photo.capture_step_id) %}

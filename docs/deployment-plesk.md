@@ -193,3 +193,18 @@ werden begrenzt, die Proportionen bleiben erhalten und zum Bildrand wird ein Sic
 eingehalten. Originale und manuelle Vergleichsvarianten werden nicht verändert. Nach einer
 Overlay-Änderung müssen bereits verarbeitete Bilder erneut über `Verarbeitung starten` erzeugt
 werden.
+
+### ZIP-Archive erstellen
+
+Nach Migration `0011_zip_exports` kann ein Administrator in der Auftragsansicht ein privates
+ZIP-Archiv erstellen. Verarbeitete Außenbilder, unveränderte Detailbilder und die für Marke und
+Standort passenden Zusatzbilder werden nach ihrer Export-Nr. sortiert, auf 1920 × 1440 Pixel
+vereinheitlicht und als `<VIN>_<Export-Nr.>.jpg` in `<VIN>.zip` gespeichert. Das fertige Archiv
+bleibt in R2 und wird über einen zeitlich begrenzten Download-Link bereitgestellt. Jeder erneute
+Export wird als eigener Versuch archiviert.
+
+Exportplätze werden bereits beim Speichern der Foto- und Zusatzbildkonfiguration geprüft. Zwei
+Zusatzbilder dürfen denselben Platz nur verwenden, wenn sich ihre Marken- oder Standortbereiche
+sicher ausschließen. Vor jeder ZIP-Erstellung validiert der Worker die für den konkreten Auftrag
+wirksamen Bilder erneut. Doppelte Plätze oder noch nicht verarbeitete Pflichtbilder führen zu einer
+verständlichen Fehlermeldung und niemals zum Überschreiben einer Datei.
