@@ -241,7 +241,11 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
         assert b'name="verticalAlignment"' in body
         assert b"bottom" in body
         assert b"lighting.mode" not in body
-        return httpx.Response(200, content=api_result, headers={"content-type": "image/jpeg"})
+        return httpx.Response(
+            200,
+            content=api_result,
+            headers={"content-type": "image/jpeg"},
+        )
 
     settings = Settings(photoroom_api_key="test-key", photoroom_sandbox=True)
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -260,9 +264,10 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
     assert requests == 2
 
 
-def test_optimized_photoroom_request_uses_cutout_for_local_composition() -> None:
+def test_optimized_photoroom_request_uses_perspective_framing_and_ai_shadow() -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+    api_result = image_bytes(Image.new("RGB", (1920, 1440), "gray"), "JPEG")
     cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
     ImageDraw.Draw(cutout).rectangle((20, 250, 779, 349), fill=(20, 30, 40, 255))
     cutout_result = image_bytes(cutout, "PNG")
@@ -272,12 +277,26 @@ def test_optimized_photoroom_request_uses_cutout_for_local_composition() -> None
         nonlocal requests
         requests += 1
         body = request.content
-        assert requests == 1
-        assert b'name="background.imageFile"' not in body
+        if requests == 1:
+            assert b'name="background.imageFile"' not in body
+            return httpx.Response(
+                200,
+                content=cutout_result,
+                headers={"content-type": "image/png"},
+            )
+        assert b'name="background.imageFile"' in body
+        assert b'name="shadow.mode"' in body
+        assert b"ai.soft" in body
+        assert b'name="paddingLeft"' in body
+        assert b"0.080" in body
+        assert b'name="paddingBottom"' in body
+        assert b"0.180" in body
+        assert b'name="verticalAlignment"' in body
+        assert b"bottom" in body
         return httpx.Response(
             200,
-            content=cutout_result,
-            headers={"content-type": "image/png"},
+            content=api_result,
+            headers={"content-type": "image/jpeg"},
         )
 
     settings = Settings(photoroom_api_key="test-key", photoroom_sandbox=True)
@@ -295,5 +314,39 @@ def test_optimized_photoroom_request_uses_cutout_for_local_composition() -> None
 
     finished = Image.open(io.BytesIO(result)).convert("RGB")
     assert finished.size == (1920, 1440)
-    assert requests == 1
-    assert all(channel >= 245 for channel in finished.getpixel((20, 20)))
+    assert requests == 2
+
+
+def test_photoroom_shadow_can_be_disabled() -> None:
+    original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
+    background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+    api_result = image_bytes(Image.new("RGB", (1920, 1440), "gray"), "JPEG")
+    cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(cutout).rectangle((200, 100, 599, 499), fill=(20, 30, 40, 255))
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            return httpx.Response(
+                200,
+                content=image_bytes(cutout, "PNG"),
+                headers={"content-type": "image/png"},
+            )
+        assert b'name="shadow.mode"' not in request.content
+        return httpx.Response(200, content=api_result, headers={"content-type": "image/jpeg"})
+
+    settings = Settings(photoroom_api_key="test-key", photoroom_sandbox=True)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        create_photoroom_showroom(
+            original,
+            background,
+            "image/jpeg",
+            settings,
+            optimized=True,
+            shadow_opacity_percent=0,
+            client=client,
+        )
+
+    assert requests == 2

@@ -271,7 +271,7 @@ def create_photoroom_showroom(
     *,
     client: httpx.Client | None = None,
 ) -> bytes:
-    """Measure the vehicle contour and create a consistently framed showroom result."""
+    """Measure the contour, then let Photoroom render the final showroom result."""
     request = client.post if client is not None else httpx.post
     cutout = create_photoroom_cutout(
         original_bytes,
@@ -279,40 +279,40 @@ def create_photoroom_showroom(
         photoroom_sandbox,
         client=client,
     )
+    contour = measure_vehicle_contour(cutout)
+    composition_options = CompositionOptions(
+        width=settings.output_width,
+        height=settings.output_height,
+        contour_target_area_percent=contour_target_area_percent,
+        contour_max_width_percent=contour_max_width_percent,
+        contour_max_height_percent=contour_max_height_percent,
+        vehicle_bottom_percent=vehicle_bottom_percent,
+        shadow_opacity_percent=shadow_opacity_percent,
+        reflection_opacity_percent=reflection_opacity_percent,
+        brightness_percent=brightness_percent,
+        capture_step_name=capture_step_name,
+    )
     if optimized:
-        return compose_showroom(
-            background_bytes,
-            cutout,
-            CompositionOptions(
-                width=settings.output_width,
-                height=settings.output_height,
-                contour_target_area_percent=contour_target_area_percent,
-                contour_max_width_percent=contour_max_width_percent,
-                contour_max_height_percent=contour_max_height_percent,
-                vehicle_bottom_percent=vehicle_bottom_percent,
-                shadow_opacity_percent=shadow_opacity_percent,
-                reflection_opacity_percent=reflection_opacity_percent,
-                brightness_percent=brightness_percent,
-                capture_step_name=capture_step_name,
-            ),
+        composition_options = perspective_composition_options(
+            composition_options,
+            contour,
         )
 
     framing = calculate_contour_framing(
-        measure_vehicle_contour(cutout),
+        contour,
         output_width=settings.output_width,
         output_height=settings.output_height,
-        target_area_percent=contour_target_area_percent,
-        max_width_percent=contour_max_width_percent,
-        max_height_percent=contour_max_height_percent,
+        target_area_percent=composition_options.contour_target_area_percent,
+        max_width_percent=composition_options.contour_max_width_percent,
+        max_height_percent=composition_options.contour_max_height_percent,
     )
     horizontal_padding = max(0.02, (1 - framing.width_fraction) / 2)
-    bottom_padding = max(0.02, 1 - vehicle_bottom_percent / 100)
+    bottom_padding = max(0.02, 1 - composition_options.vehicle_bottom_percent / 100)
     top_padding = min(0.49, max(0.02, 1 - framing.height_fraction - bottom_padding))
     background_extension = "png" if background_content_type == "image/png" else "jpg"
     edit_options = {
         "removeBackground": "true",
         "background.color": "FFFFFF",
-        "shadow.mode": "ai.soft",
         "outputSize": f"{settings.output_width}x{settings.output_height}",
         "paddingLeft": f"{horizontal_padding:.3f}",
         "paddingRight": f"{horizontal_padding:.3f}",
@@ -322,6 +322,10 @@ def create_photoroom_showroom(
         "verticalAlignment": "bottom",
         "export.format": "jpeg",
     }
+    if shadow_opacity_percent > 0:
+        # Photoroom derives the tyre contact points and perspective itself. Its API
+        # currently exposes a shadow mode but no numeric opacity control.
+        edit_options["shadow.mode"] = "ai.soft"
     try:
         response = request(
             "https://image-api.photoroom.com/v2/edit",
