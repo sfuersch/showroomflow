@@ -152,19 +152,22 @@ nebeneinander angezeigt. In dieser ersten Teststufe nutzt Photoroom einen weiche
 aber bewusst kein generatives Relighting, damit Fahrzeugfarbe und Details unverändert bleiben.
 
 Zusätzlich kann `Optimiert testen` gestartet werden. Diese getrennt gespeicherte Variante verwendet
-das farbschonende Photoroom-Relighting `ai.preserve-hue-and-saturation` und deaktiviert das Einrasten
-angeschnittener Motivseiten, damit Fahrzeuggröße und Position über eine Bildserie konsistenter
-bleiben. Sie überschreibt weder das reguläre Ergebnis noch den Export. Da auch das farbschonende
-Relighting sichtbare Farb- oder Helligkeitsänderungen erzeugen kann, muss es vor einer produktiven
-Aktivierung anhand mehrerer heller, dunkler und farbiger Fahrzeuge geprüft werden.
+dieselbe perspektivabhängige Größenautomatik wie die produktive Verarbeitung. Sie überschreibt
+weder das reguläre Ergebnis noch den Export und verändert Fahrzeugfarbe oder Fahrzeugdetails nicht
+durch generatives Relighting.
 
 Für Außenaufnahmen führt Photoroom zunächst eine transparente Konturerkennung durch. ShowroomFlow
 berechnet daraus den Zielrahmen anhand des sichtbaren Fahrzeugflächenanteils und übergibt die
 automatisch bestimmten Ränder an die anschließende Showroom-Verarbeitung. Dadurch werden schmale
 Front- und Heckansichten, breite Seitenansichten und diagonale Perspektiven ohne fest zugeordnete
-Perspektivprofile optisch angeglichen. Ziel-Flächenanteil sowie maximale Breite und Höhe werden
-ausschließlich vom Systemadministrator unter `Verwaltung > Bilddienstleister` gepflegt. Dieser
-Ablauf benötigt bei Photoroom zwei API-Aufrufe pro verarbeitetem Außenfoto.
+Perspektivprofile optisch angeglichen. Beim zweiten Aufruf erstellt Photoroom die Endkomposition mit
+dem gewählten statischen Hintergrund und einem perspektivabhängigen weichen KI-Schatten. Dadurch
+werden insbesondere Radaufstandspunkte und der Schatten unter diagonalen Fahrzeugansichten korrekt
+aus der Fahrzeuggeometrie abgeleitet. Ziel-Flächenanteil sowie maximale Breite und Höhe werden
+ausschließlich vom Systemadministrator unter `Verwaltung > Bilddienstleister` gepflegt. Ein
+Schattenwert von `0` deaktiviert den KI-Schatten; jeder positive Wert aktiviert ihn. Dieser Ablauf
+benötigt bei Photoroom zwei API-Aufrufe pro verarbeitetem Außenfoto. Bei remove.bg bleibt die lokale
+Komposition einschließlich prozentual regelbarem Ersatzschatten aktiv.
 
 Der Systemadministrator kann die zusätzlichen Bildvergleiche unter
 `Verwaltung > Bilddienstleister` zentral ein- oder ausschalten. Bei ausgeschaltetem Vergleichsmodus sehen
