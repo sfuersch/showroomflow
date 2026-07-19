@@ -1957,6 +1957,56 @@ def update_background(
     )
 
 
+@router.post("/backgrounds/{background_id}/delete")
+def delete_background(
+    background_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    background = db.get(Background, background_id)
+    if background is None:
+        raise HTTPException(status_code=404, detail="Hintergrund wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, background.dealership_id)
+    is_in_use = db.scalar(
+        select(VehicleJob.id).where(VehicleJob.background_id == background.id).limit(1)
+    )
+    if is_in_use is not None:
+        _flash(
+            request,
+            "Dieser Hintergrund wird bereits von einem Fahrzeugauftrag verwendet und kann "
+            "nicht gelöscht werden. Sie können ihn stattdessen deaktivieren.",
+            "error",
+        )
+    else:
+        db.delete(background)
+        try:
+            db.flush()
+            storage.delete_object(object_key=background.object_key)
+            db.commit()
+        except StorageUnavailableError:
+            db.rollback()
+            _flash(
+                request,
+                "Der Bildspeicher ist nicht erreichbar. Der Hintergrund wurde nicht gelöscht.",
+                "error",
+            )
+        except IntegrityError:
+            db.rollback()
+            _flash(request, "Der Hintergrund konnte nicht gelöscht werden.", "error")
+        else:
+            _flash(request, "Hintergrund wurde dauerhaft gelöscht.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#backgrounds",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
 @router.post("/dealerships/{dealership_id}/overlays")
 async def create_overlay(
     dealership_id: uuid.UUID,
@@ -2064,6 +2114,45 @@ def update_overlay(
         overlay.is_active = is_active == "on"
         db.commit()
         _flash(request, "Overlay wurde gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#overlays",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/overlays/{overlay_id}/delete")
+def delete_overlay(
+    overlay_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    overlay = db.get(ImageOverlay, overlay_id)
+    if overlay is None:
+        raise HTTPException(status_code=404, detail="Overlay wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, overlay.dealership_id)
+    db.delete(overlay)
+    try:
+        db.flush()
+        storage.delete_object(object_key=overlay.object_key)
+        db.commit()
+    except StorageUnavailableError:
+        db.rollback()
+        _flash(
+            request,
+            "Der Bildspeicher ist nicht erreichbar. Das Overlay wurde nicht gelöscht.",
+            "error",
+        )
+    except IntegrityError:
+        db.rollback()
+        _flash(request, "Das Overlay konnte nicht gelöscht werden.", "error")
+    else:
+        _flash(request, "Overlay wurde dauerhaft gelöscht.")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}/configuration#overlays",
         status_code=status.HTTP_303_SEE_OTHER,
@@ -2190,6 +2279,45 @@ def update_supplemental_image(
             supplemental_image.is_active = is_active == "on"
             db.commit()
             _flash(request, "Zusatzbild wurde gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#supplemental-images",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/supplemental-images/{image_id}/delete")
+def delete_supplemental_image(
+    image_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    supplemental_image = db.get(SupplementalImage, image_id)
+    if supplemental_image is None:
+        raise HTTPException(status_code=404, detail="Zusatzbild wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, supplemental_image.dealership_id)
+    db.delete(supplemental_image)
+    try:
+        db.flush()
+        storage.delete_object(object_key=supplemental_image.object_key)
+        db.commit()
+    except StorageUnavailableError:
+        db.rollback()
+        _flash(
+            request,
+            "Der Bildspeicher ist nicht erreichbar. Das Zusatzbild wurde nicht gelöscht.",
+            "error",
+        )
+    except IntegrityError:
+        db.rollback()
+        _flash(request, "Das Zusatzbild konnte nicht gelöscht werden.", "error")
+    else:
+        _flash(request, "Zusatzbild wurde dauerhaft gelöscht.")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}/configuration#supplemental-images",
         status_code=status.HTTP_303_SEE_OTHER,

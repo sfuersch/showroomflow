@@ -97,6 +97,14 @@ class ObjectStorage:
         except (BotoCoreError, ClientError) as exc:
             raise StorageUnavailableError("Object storage is unavailable") from exc
 
+    def delete_object(self, *, object_key: str) -> None:
+        if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+            raise ValueError("Invalid object key")
+        try:
+            self._client.delete_object(Bucket=self.bucket, Key=object_key)
+        except (BotoCoreError, ClientError) as exc:
+            raise StorageUnavailableError("Object storage is unavailable") from exc
+
     def get_object(self, *, object_key: str) -> bytes:
         if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
             raise ValueError("Invalid object key")

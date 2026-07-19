@@ -54,6 +54,7 @@ client = TestClient(app)
 class ConfigurationStorage:
     def __init__(self) -> None:
         self.uploads: list[dict[str, object]] = []
+        self.deleted_keys: list[str] = []
 
     def put_object(self, **values: object) -> None:
         self.uploads.append(values)
@@ -79,6 +80,9 @@ class ConfigurationStorage:
 
     def object_metadata(self, *, object_key: str) -> tuple[int, str]:
         return 1234, "image/jpeg"
+
+    def delete_object(self, *, object_key: str) -> None:
+        self.deleted_keys.append(object_key)
 
 
 @pytest.fixture(autouse=True)
@@ -831,6 +835,134 @@ def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> Non
         assert supplemental.brand_id == brand_id
         assert supplemental.export_order == 20
         assert [item.id for item in supplemental.locations] == [location_id]
+
+
+def test_dealership_admin_permanently_deletes_configuration_images() -> None:
+    dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        background = Background(
+            dealership_id=dealership.id,
+            name="Alter Hintergrund",
+            object_key="configuration/background.jpg",
+            content_type="image/jpeg",
+        )
+        overlay = ImageOverlay(
+            dealership_id=dealership.id,
+            name="Altes Logo",
+            object_key="configuration/overlay.png",
+            content_type="image/png",
+        )
+        supplemental = SupplementalImage(
+            dealership_id=dealership.id,
+            name="Alte Werbung",
+            object_key="configuration/supplemental.jpg",
+            content_type="image/jpeg",
+            export_order=20,
+        )
+        db.add_all([background, overlay, supplemental])
+        db.commit()
+        background_id = background.id
+        overlay_id = overlay.id
+        supplemental_id = supplemental.id
+
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        login_page = client.get("/admin/login")
+        client.post(
+            "/admin/login",
+            data={
+                "email": "admin@example.com",
+                "password": "a-secure-test-password",
+                "csrf_token": csrf_from(login_page.text),
+            },
+        )
+        configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+        csrf_token = csrf_from(configuration_page.text)
+
+        background_response = client.post(
+            f"/admin/backgrounds/{background_id}/delete",
+            data={"csrf_token": csrf_token},
+            follow_redirects=True,
+        )
+        overlay_response = client.post(
+            f"/admin/overlays/{overlay_id}/delete",
+            data={"csrf_token": csrf_token},
+            follow_redirects=True,
+        )
+        supplemental_response = client.post(
+            f"/admin/supplemental-images/{supplemental_id}/delete",
+            data={"csrf_token": csrf_token},
+            follow_redirects=True,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert "Hintergrund wurde dauerhaft gelöscht" in background_response.text
+    assert "Overlay wurde dauerhaft gelöscht" in overlay_response.text
+    assert "Zusatzbild wurde dauerhaft gelöscht" in supplemental_response.text
+    assert storage.deleted_keys == [
+        "configuration/background.jpg",
+        "configuration/overlay.png",
+        "configuration/supplemental.jpg",
+    ]
+    with TestingSession() as db:
+        assert db.get(Background, background_id) is None
+        assert db.get(ImageOverlay, overlay_id) is None
+        assert db.get(SupplementalImage, supplemental_id) is None
+
+
+def test_background_used_by_vehicle_job_cannot_be_deleted() -> None:
+    dealership, admin = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        background = Background(
+            dealership_id=dealership.id,
+            name="Verwendeter Hintergrund",
+            object_key="configuration/in-use.jpg",
+            content_type="image/jpeg",
+        )
+        db.add_all([location, background])
+        db.flush()
+        db.add(
+            VehicleJob(
+                dealership_id=dealership.id,
+                location_id=location.id,
+                created_by_id=admin.id,
+                vin="TESTVIN",
+                version=1,
+                brand="Ford",
+                background_id=background.id,
+            )
+        )
+        db.commit()
+        background_id = background.id
+
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        login_page = client.get("/admin/login")
+        client.post(
+            "/admin/login",
+            data={
+                "email": "admin@example.com",
+                "password": "a-secure-test-password",
+                "csrf_token": csrf_from(login_page.text),
+            },
+        )
+        configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+        response = client.post(
+            f"/admin/backgrounds/{background_id}/delete",
+            data={"csrf_token": csrf_from(configuration_page.text)},
+            follow_redirects=True,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert "wird bereits von einem Fahrzeugauftrag verwendet" in response.text
+    assert storage.deleted_keys == []
+    with TestingSession() as db:
+        assert db.get(Background, background_id) is not None
 
 
 def test_app_configuration_is_location_and_tenant_scoped() -> None:
