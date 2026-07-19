@@ -19,6 +19,16 @@ struct CameraCaptureMetadata: Codable, Equatable {
     }
 }
 
+extension CameraCaptureMetadata {
+    static let unavailable = CameraCaptureMetadata(
+        horizonAngleDegrees: 0,
+        verticalAngleDegrees: 0,
+        yawAngleDegrees: 0,
+        fieldOfViewDegrees: 65,
+        motionAvailable: false
+    )
+}
+
 struct CapturedCameraPhoto {
     let data: Data
     let metadata: CameraCaptureMetadata

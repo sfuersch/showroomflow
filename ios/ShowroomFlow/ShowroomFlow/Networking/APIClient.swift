@@ -282,6 +282,9 @@ struct APIClient {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
+        if httpResponse.statusCode == 401 {
+            throw APIError.unauthorized
+        }
         guard 200..<300 ~= httpResponse.statusCode else {
             let message = (try? JSONDecoder().decode(ErrorPayload.self, from: data).detail)
             throw APIError.server(message ?? "Sitzung abgelaufen")
@@ -354,7 +357,7 @@ struct AppInfo: Decodable {
     }
 }
 
-struct LocationSummary: Decodable, Identifiable, Hashable {
+struct LocationSummary: Codable, Identifiable, Hashable {
     let id: UUID
     let dealershipID: UUID
     let name: String
@@ -365,7 +368,7 @@ struct LocationSummary: Decodable, Identifiable, Hashable {
     }
 }
 
-struct VehicleJob: Decodable, Identifiable {
+struct VehicleJob: Codable, Identifiable {
     let id: UUID
     let dealershipID: UUID
     let locationID: UUID
@@ -391,7 +394,7 @@ struct VehicleJob: Decodable, Identifiable {
     }
 }
 
-struct AppConfiguration: Decodable {
+struct AppConfiguration: Codable {
     let brands: [ConfiguredBrand]
     let backgrounds: [ConfiguredBackground]
     let captureSteps: [ConfiguredCaptureStep]
@@ -402,12 +405,12 @@ struct AppConfiguration: Decodable {
     }
 }
 
-struct ConfiguredBrand: Decodable, Identifiable, Hashable {
+struct ConfiguredBrand: Codable, Identifiable, Hashable {
     let id: UUID
     let name: String
 }
 
-struct ConfiguredBackground: Decodable, Identifiable, Hashable {
+struct ConfiguredBackground: Codable, Identifiable, Hashable {
     let id: UUID
     let name: String
     let brandID: UUID?
@@ -422,7 +425,7 @@ struct ConfiguredBackground: Decodable, Identifiable, Hashable {
     }
 }
 
-struct ConfiguredCaptureStep: Decodable, Identifiable {
+struct ConfiguredCaptureStep: Codable, Identifiable {
     let id: UUID
     let name: String
     let instruction: String
@@ -450,7 +453,7 @@ struct ConfiguredCaptureStep: Decodable, Identifiable {
     }
 }
 
-struct CaptureSession: Decodable {
+struct CaptureSession: Codable {
     let job: VehicleJob
     let captureSteps: [ConfiguredCaptureStep]
     let photos: [CapturedPhoto]
@@ -461,7 +464,7 @@ struct CaptureSession: Decodable {
     }
 }
 
-struct CapturedPhoto: Decodable, Identifiable {
+struct CapturedPhoto: Codable, Identifiable {
     let id: UUID
     let captureStepID: UUID
     let revision: Int

@@ -12,8 +12,10 @@ struct JobListView: View {
     let loadConfiguration: (UUID) async throws -> AppConfiguration
     let createJob: (UUID, String, UUID, String, UUID?) async throws -> VehicleJob
     let loadCaptureSession: (UUID) async throws -> CaptureSession
-    let uploadCapturedPhoto: (UUID, UUID, CapturedCameraPhoto) async throws -> CapturedPhoto
-    let completeCapture: (UUID) async throws -> VehicleJob
+    let queueCapturedPhoto: (UUID, UUID, CapturedCameraPhoto) async throws -> PendingPhotoUpload
+    let pendingCapturedPhotos: (UUID) -> [PendingPhotoUpload]
+    let pendingUploadCount: Int
+    let completeCapture: (UUID) async throws -> VehicleJob?
     let onLogout: () -> Void
 
     var body: some View {
@@ -40,6 +42,17 @@ struct JobListView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 12) {
+                            if pendingUploadCount > 0 {
+                                Label(
+                                    "\(pendingUploadCount) Foto(s) lokal gespeichert – Übertragung folgt automatisch",
+                                    systemImage: "wifi.exclamationmark"
+                                )
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.orange)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(13)
+                                .background(.orange.opacity(0.1), in: .rect(cornerRadius: 13))
+                            }
                             if let errorMessage {
                                 Label(errorMessage, systemImage: "wifi.exclamationmark")
                                     .font(.footnote)
@@ -94,7 +107,8 @@ struct JobListView: View {
                 CaptureFlowView(
                     job: job,
                     loadCaptureSession: loadCaptureSession,
-                    uploadCapturedPhoto: uploadCapturedPhoto,
+                    queueCapturedPhoto: queueCapturedPhoto,
+                    pendingCapturedPhotos: pendingCapturedPhotos,
                     completeCapture: completeCapture
                 )
             }
@@ -243,7 +257,9 @@ private extension VehicleJob {
         },
         createJob: { _, _, _, _, _ in throw APIError.invalidResponse },
         loadCaptureSession: { _ in throw APIError.invalidResponse },
-        uploadCapturedPhoto: { _, _, _ in throw APIError.invalidResponse },
+        queueCapturedPhoto: { _, _, _ in throw APIError.invalidResponse },
+        pendingCapturedPhotos: { _ in [] },
+        pendingUploadCount: 0,
         completeCapture: { _ in throw APIError.invalidResponse },
         onLogout: {}
     )
