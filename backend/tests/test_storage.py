@@ -20,6 +20,7 @@ class FakeS3Client:
         self.put_call: dict[str, object] | None = None
         self.head_object_call: dict[str, object] | None = None
         self.get_object_call: dict[str, object] | None = None
+        self.delete_object_call: dict[str, object] | None = None
 
     def head_bucket(self, *, Bucket: str) -> None:
         self.head_bucket_name = Bucket
@@ -38,6 +39,9 @@ class FakeS3Client:
     def get_object(self, **kwargs: object) -> dict[str, object]:
         self.get_object_call = kwargs
         return {"Body": io.BytesIO(b"stored-image")}
+
+    def delete_object(self, **kwargs: object) -> None:
+        self.delete_object_call = kwargs
 
 
 class UnavailableStorage:
@@ -178,6 +182,18 @@ def test_private_object_can_be_downloaded_by_worker() -> None:
     assert fake_client.get_object_call == {
         "Bucket": "test-bucket",
         "Key": "dealerships/one/jobs/job/photo.jpg",
+    }
+
+
+def test_private_object_can_be_deleted() -> None:
+    fake_client = FakeS3Client()
+    storage = ObjectStorage(Settings(storage_bucket="test-bucket"), client=fake_client)
+
+    storage.delete_object(object_key="dealerships/one/configuration/background.jpg")
+
+    assert fake_client.delete_object_call == {
+        "Bucket": "test-bucket",
+        "Key": "dealerships/one/configuration/background.jpg",
     }
 
 

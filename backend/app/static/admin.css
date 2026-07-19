@@ -84,6 +84,8 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .button-primary { background: var(--brand); color: white; box-shadow: 0 5px 13px rgba(62,74,184,.2); }
 .button-primary:hover { background: var(--brand-dark); }
 .button-secondary { color: var(--brand); background: var(--brand-soft); }
+.button-danger { color: var(--danger); background: var(--danger-soft); }
+.button-danger:hover { background: #ffe1dd; }
 .button-quiet { background: transparent; color: var(--muted); padding-inline: 6px; }
 .button-wide { width: 100%; }
 .flash, .field-error { padding: 13px 16px; border-radius: 11px; margin-bottom: 20px; font-weight: 650; }
@@ -123,6 +125,7 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .choice-group legend { color: var(--muted); padding: 0 5px; font-size: .82rem; font-weight: 700; }
 .choice-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.asset-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .standard-action { margin: -4px 0 16px; }
 .step-stack { display: grid; gap: 12px; }
 .step-card { display: grid; grid-template-columns: 145px minmax(260px, 1fr) 180px; align-items: end; gap: 12px; border: 1px solid var(--line); border-radius: 14px; padding: 14px; }

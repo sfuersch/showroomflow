@@ -40,7 +40,7 @@
                 <label>Reflexion (%)<input type="number" name="reflection_opacity_percent" min="0" max="60" value="{{ background.reflection_opacity_percent }}" required></label>
                 <label>Fahrzeughelligkeit (%)<input type="number" name="brightness_percent" min="50" max="150" value="{{ background.brightness_percent }}" required></label>
             </div>
-            <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if background.is_active %}checked{% endif %}><span>Aktiv</span></label><button class="button button-secondary" type="submit">Speichern</button></div>
+            <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if background.is_active %}checked{% endif %}><span>Aktiv</span></label><div class="asset-actions"><button class="button button-secondary" type="submit">Speichern</button><button class="button button-danger" type="submit" formaction="/admin/backgrounds/{{ background.id }}/delete" formmethod="post" formnovalidate onclick="return confirm('Hintergrund dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.')">Löschen</button></div></div>
         </form>
         {% endfor %}
     </div>
@@ -66,7 +66,7 @@
             <div class="form-grid"><label>Position<select name="position">{% for value, label in overlay_positions.items() %}<option value="{{ value }}" {% if overlay.position == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label><label>Breite (%)<input type="number" name="width_percent" min="5" max="60" value="{{ overlay.width_percent }}" required></label><label>Deckkraft (%)<input type="number" name="opacity_percent" min="10" max="100" value="{{ overlay.opacity_percent }}" required></label></div>
             <fieldset class="choice-group"><legend>Standorte (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in overlay.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
             <fieldset class="choice-group"><legend>Overlay auf diesen Fotos</legend><div class="choice-row">{% for step in steps %}<label class="toggle"><input type="checkbox" name="capture_step_ids" value="{{ step.id }}" {% if step in overlay.capture_steps or (not overlay.capture_steps and default_overlay_step and step.id == default_overlay_step.id) %}checked{% endif %}><span>{{ step.export_order or '–' }} · {{ step.name }}</span></label>{% endfor %}</div><small class="muted">Ohne Auswahl wird automatisch das erste Exportfoto verwendet.</small></fieldset>
-            <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if overlay.is_active %}checked{% endif %}><span>Aktiv</span></label><button class="button button-secondary" type="submit">Speichern</button></div>
+            <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if overlay.is_active %}checked{% endif %}><span>Aktiv</span></label><div class="asset-actions"><button class="button button-secondary" type="submit">Speichern</button><button class="button button-danger" type="submit" formaction="/admin/overlays/{{ overlay.id }}/delete" formmethod="post" formnovalidate onclick="return confirm('Overlay dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.')">Löschen</button></div></div>
         </form>
         {% endfor %}
     </div>
@@ -95,7 +95,7 @@
             <label>Export-Nr.<input type="number" name="export_order" min="1" value="{{ item.export_order }}" required></label>
             <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}" {% if item.brand_id == brand.id %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
             <fieldset class="choice-group"><legend>Standorte (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in item.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
-            <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if item.is_active %}checked{% endif %}><span>Aktiv</span></label><button class="button button-secondary" type="submit">Speichern</button></div>
+            <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if item.is_active %}checked{% endif %}><span>Aktiv</span></label><div class="asset-actions"><button class="button button-secondary" type="submit">Speichern</button><button class="button button-danger" type="submit" formaction="/admin/supplemental-images/{{ item.id }}/delete" formmethod="post" formnovalidate onclick="return confirm('Zusatzbild dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.')">Löschen</button></div></div>
         </form>
         {% endfor %}
     </div>
