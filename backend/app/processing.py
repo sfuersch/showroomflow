@@ -4,7 +4,7 @@ import io
 import logging
 import math
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import httpx
@@ -51,6 +51,7 @@ class CompositionOptions:
     shadow_opacity_percent: int = 32
     reflection_opacity_percent: int = 10
     brightness_percent: int = 100
+    capture_step_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,62 @@ class VehicleContour:
 class ContourFraming:
     width_fraction: float
     height_fraction: float
+
+
+def infer_vehicle_perspective(
+    capture_step_name: str,
+    contour: VehicleContour,
+) -> str:
+    """Infer the broad marketing perspective without another AI request."""
+    normalized_name = " ".join(capture_step_name.casefold().split())
+    if "diagonal" in normalized_name:
+        return "diagonal"
+    if "seite" in normalized_name or "seitlich" in normalized_name:
+        return "side"
+    if normalized_name in {"front", "heck", "vorne", "hinten"}:
+        return "straight"
+
+    aspect = contour.width / max(1, contour.height)
+    if aspect >= 1.8:
+        return "side"
+    if aspect <= 1.15:
+        return "straight"
+    return "diagonal"
+
+
+def perspective_composition_options(
+    options: CompositionOptions,
+    contour: VehicleContour,
+) -> CompositionOptions:
+    """Adapt automatic contour framing to the photographed vehicle perspective."""
+    perspective = infer_vehicle_perspective(options.capture_step_name, contour)
+    if perspective == "side":
+        return replace(
+            options,
+            contour_target_area_percent=min(
+                60, round(options.contour_target_area_percent * 1.05)
+            ),
+            contour_max_width_percent=min(90, options.contour_max_width_percent + 6),
+            vehicle_bottom_percent=max(55, options.vehicle_bottom_percent - 8),
+        )
+    if perspective == "straight":
+        return replace(
+            options,
+            contour_target_area_percent=max(
+                15, round(options.contour_target_area_percent * 0.80)
+            ),
+            contour_max_width_percent=min(options.contour_max_width_percent, 64),
+            contour_max_height_percent=min(options.contour_max_height_percent, 64),
+            vehicle_bottom_percent=max(55, options.vehicle_bottom_percent - 8),
+        )
+    return replace(
+        options,
+        contour_target_area_percent=min(
+            60, round(options.contour_target_area_percent * 1.10)
+        ),
+        contour_max_width_percent=min(90, options.contour_max_width_percent + 2),
+        vehicle_bottom_percent=max(55, options.vehicle_bottom_percent - 3),
+    )
 
 
 def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
@@ -205,6 +262,10 @@ def create_photoroom_showroom(
     contour_max_width_percent: int = 78,
     contour_max_height_percent: int = 72,
     vehicle_bottom_percent: int = 90,
+    shadow_opacity_percent: int = 32,
+    reflection_opacity_percent: int = 10,
+    brightness_percent: int = 100,
+    capture_step_name: str = "",
     photoroom_sandbox: bool | None = None,
     optimized: bool = False,
     *,
@@ -218,6 +279,24 @@ def create_photoroom_showroom(
         photoroom_sandbox,
         client=client,
     )
+    if optimized:
+        return compose_showroom(
+            background_bytes,
+            cutout,
+            CompositionOptions(
+                width=settings.output_width,
+                height=settings.output_height,
+                contour_target_area_percent=contour_target_area_percent,
+                contour_max_width_percent=contour_max_width_percent,
+                contour_max_height_percent=contour_max_height_percent,
+                vehicle_bottom_percent=vehicle_bottom_percent,
+                shadow_opacity_percent=shadow_opacity_percent,
+                reflection_opacity_percent=reflection_opacity_percent,
+                brightness_percent=brightness_percent,
+                capture_step_name=capture_step_name,
+            ),
+        )
+
     framing = calculate_contour_framing(
         measure_vehicle_contour(cutout),
         output_width=settings.output_width,
@@ -243,13 +322,6 @@ def create_photoroom_showroom(
         "verticalAlignment": "bottom",
         "export.format": "jpeg",
     }
-    if optimized:
-        edit_options.update(
-            {
-                "lighting.mode": "ai.preserve-hue-and-saturation",
-                "ignorePaddingAndSnapOnCroppedSides": "false",
-            }
-        )
     try:
         response = request(
             "https://image-api.photoroom.com/v2/edit",
@@ -328,13 +400,18 @@ def compose_showroom(
         (options.width, options.height),
         method=Image.Resampling.LANCZOS,
     ).convert("RGBA")
-    alpha_box = vehicle.getchannel("A").getbbox()
+    alpha_box = vehicle.getchannel("A").point(
+        lambda value: 255 if value >= 128 else 0
+    ).getbbox()
     if alpha_box is None:
         raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
     vehicle = vehicle.crop(alpha_box)
 
+    contour = VehicleContour(vehicle.width, vehicle.height)
+    perspective = infer_vehicle_perspective(options.capture_step_name, contour)
+    options = perspective_composition_options(options, contour)
     framing = calculate_contour_framing(
-        VehicleContour(vehicle.width, vehicle.height),
+        contour,
         output_width=options.width,
         output_height=options.height,
         target_area_percent=options.contour_target_area_percent,
@@ -375,27 +452,143 @@ def compose_showroom(
 
     shadow_opacity = max(0, min(80, options.shadow_opacity_percent))
     if shadow_opacity:
-        shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        draw = ImageDraw.Draw(shadow)
-        shadow_width = int(vehicle.width * 0.82)
-        shadow_height = max(20, int(vehicle.height * 0.10))
-        shadow_x = x + (vehicle.width - shadow_width) // 2
-        draw.ellipse(
-            (
-                shadow_x,
-                bottom - shadow_height // 2,
-                shadow_x + shadow_width,
-                bottom + shadow_height // 2,
+        canvas = Image.alpha_composite(
+            canvas,
+            _create_vehicle_shadow(
+                vehicle.getchannel("A"),
+                canvas.size,
+                x=x,
+                y=y,
+                opacity_percent=shadow_opacity,
+                perspective=perspective,
             ),
-            fill=(0, 0, 0, int(255 * shadow_opacity / 100)),
         )
-        shadow = shadow.filter(ImageFilter.GaussianBlur(max(12, shadow_height // 2)))
-        canvas = Image.alpha_composite(canvas, shadow)
 
     canvas.alpha_composite(vehicle, (x, y))
     output = io.BytesIO()
     canvas.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
     return output.getvalue()
+
+
+def _vehicle_contact_regions(alpha: Image.Image) -> list[tuple[int, int, int]]:
+    """Return likely tyre contact runs as (left, right, bottom) in alpha coordinates."""
+    mask = alpha.point(lambda value: 255 if value >= 128 else 0)
+    width, height = mask.size
+    pixels = mask.load()
+    column_bottoms: list[int] = []
+    for x_position in range(width):
+        bottom = -1
+        for y_position in range(height - 1, -1, -1):
+            if pixels[x_position, y_position]:
+                bottom = y_position
+                break
+        column_bottoms.append(bottom)
+
+    global_bottom = max(column_bottoms, default=-1)
+    if global_bottom < 0:
+        return []
+    tolerance = max(5, round(height * 0.045))
+    allowed_gap = max(2, round(width * 0.012))
+    minimum_width = max(4, round(width * 0.012))
+    candidate_columns = [
+        index
+        for index, column_bottom in enumerate(column_bottoms)
+        if column_bottom >= global_bottom - tolerance
+    ]
+    if not candidate_columns:
+        return []
+
+    runs: list[list[int]] = [[candidate_columns[0]]]
+    for x_position in candidate_columns[1:]:
+        if x_position - runs[-1][-1] <= allowed_gap:
+            runs[-1].append(x_position)
+        else:
+            runs.append([x_position])
+
+    regions = [
+        (
+            run[0],
+            run[-1],
+            max(column_bottoms[run[0] : run[-1] + 1]),
+        )
+        for run in runs
+        if minimum_width <= run[-1] - run[0] + 1 <= width * 0.24
+    ]
+    if len(regions) > 4:
+        regions = sorted(regions, key=lambda region: region[1] - region[0], reverse=True)[:4]
+        regions.sort()
+    return regions
+
+
+def _create_vehicle_shadow(
+    alpha: Image.Image,
+    canvas_size: tuple[int, int],
+    *,
+    x: int,
+    y: int,
+    opacity_percent: int,
+    perspective: str,
+) -> Image.Image:
+    """Build a soft underbody shadow plus darker tyre contact shadows."""
+    vehicle_width, vehicle_height = alpha.size
+    bottom = y + vehicle_height
+
+    broad_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    broad_draw = ImageDraw.Draw(broad_shadow)
+    broad_width = round(vehicle_width * 0.84)
+    broad_height = max(18, round(vehicle_height * 0.085))
+    broad_left = x + (vehicle_width - broad_width) // 2
+    broad_top = bottom - round(broad_height * 0.72)
+    broad_draw.ellipse(
+        (
+            broad_left,
+            broad_top,
+            broad_left + broad_width,
+            broad_top + broad_height,
+        ),
+        fill=(0, 0, 0, round(255 * opacity_percent / 100)),
+    )
+    broad_shadow = broad_shadow.filter(
+        ImageFilter.GaussianBlur(max(10, round(broad_height * 0.55)))
+    )
+
+    contact_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    contact_draw = ImageDraw.Draw(contact_shadow)
+    contact_height = max(8, round(vehicle_height * 0.025))
+    contact_alpha = min(230, round(255 * opacity_percent / 100 * 1.75))
+    contact_regions = _vehicle_contact_regions(alpha)
+    if not contact_regions:
+        fallback_positions = {
+            "side": (0.20, 0.80),
+            "straight": (0.17, 0.83),
+            "diagonal": (0.26, 0.74),
+        }[perspective]
+        contact_regions = [
+            (
+                round(vehicle_width * position),
+                round(vehicle_width * position),
+                vehicle_height - 1,
+            )
+            for position in fallback_positions
+        ]
+    for left, right, contact_bottom in contact_regions:
+        region_width = right - left + 1
+        contact_width = max(round(vehicle_width * 0.055), round(region_width * 1.45))
+        center_x = x + (left + right) // 2
+        center_y = y + contact_bottom
+        contact_draw.ellipse(
+            (
+                center_x - contact_width // 2,
+                center_y - contact_height // 2,
+                center_x + contact_width // 2,
+                center_y + contact_height // 2,
+            ),
+            fill=(0, 0, 0, contact_alpha),
+        )
+    contact_shadow = contact_shadow.filter(
+        ImageFilter.GaussianBlur(max(3, round(contact_height * 0.45)))
+    )
+    return Image.alpha_composite(broad_shadow, contact_shadow)
 
 
 def apply_image_overlays(image_bytes: bytes, layers: list[OverlayLayer]) -> bytes:
@@ -534,7 +727,12 @@ def process_photo(photo_id: str) -> None:
                     contour_max_width_percent=image_settings.contour_max_width_percent,
                     contour_max_height_percent=image_settings.contour_max_height_percent,
                     vehicle_bottom_percent=background.vehicle_bottom_percent,
+                    shadow_opacity_percent=background.shadow_opacity_percent,
+                    reflection_opacity_percent=background.reflection_opacity_percent,
+                    brightness_percent=background.brightness_percent,
+                    capture_step_name=step.name,
                     photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
+                    optimized=True,
                 )
             elif image_settings.provider == "remove_bg":
                 ai_cutout = remove_vehicle_background(original, settings)
@@ -552,6 +750,7 @@ def process_photo(photo_id: str) -> None:
                         shadow_opacity_percent=background.shadow_opacity_percent,
                         reflection_opacity_percent=background.reflection_opacity_percent,
                         brightness_percent=background.brightness_percent,
+                        capture_step_name=step.name,
                     ),
                 )
             else:
@@ -663,6 +862,10 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 contour_max_width_percent=image_settings.contour_max_width_percent,
                 contour_max_height_percent=image_settings.contour_max_height_percent,
                 vehicle_bottom_percent=background.vehicle_bottom_percent,
+                shadow_opacity_percent=background.shadow_opacity_percent,
+                reflection_opacity_percent=background.reflection_opacity_percent,
+                brightness_percent=background.brightness_percent,
+                capture_step_name=step.name,
                 photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                 optimized=provider == "photoroom_optimized",
             )

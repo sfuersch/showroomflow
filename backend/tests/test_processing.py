@@ -1,4 +1,5 @@
 import io
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -14,7 +15,9 @@ from app.processing import (
     calculate_contour_framing,
     compose_showroom,
     create_photoroom_showroom,
+    infer_vehicle_perspective,
     measure_vehicle_contour,
+    perspective_composition_options,
 )
 
 
@@ -74,6 +77,38 @@ def test_vehicle_contour_ignores_faint_transparent_pixels() -> None:
     contour = measure_vehicle_contour(image_bytes(cutout, "PNG"))
 
     assert contour == VehicleContour(width=440, height=400)
+
+
+@pytest.mark.parametrize(
+    ("step_name", "contour", "expected"),
+    [
+        ("Seite links", VehicleContour(1800, 700), "side"),
+        ("Diagonal hinten rechts", VehicleContour(1400, 900), "diagonal"),
+        ("Heck", VehicleContour(900, 1000), "straight"),
+        ("Freie Perspektive", VehicleContour(1900, 700), "side"),
+    ],
+)
+def test_vehicle_perspective_uses_step_name_with_contour_fallback(
+    step_name: str,
+    contour: VehicleContour,
+    expected: str,
+) -> None:
+    assert infer_vehicle_perspective(step_name, contour) == expected
+
+
+def test_perspective_composition_raises_side_and_straight_views() -> None:
+    base = CompositionOptions(vehicle_bottom_percent=90, capture_step_name="Seite links")
+    side = perspective_composition_options(base, VehicleContour(1800, 700))
+    straight = perspective_composition_options(
+        replace(base, capture_step_name="Heck"),
+        VehicleContour(900, 1000),
+    )
+
+    assert side.vehicle_bottom_percent == 82
+    assert side.contour_max_width_percent == 84
+    assert straight.vehicle_bottom_percent == 82
+    assert straight.contour_target_area_percent == 29
+    assert straight.contour_max_width_percent == 64
 
 
 def test_showroom_composition_has_configured_output_size() -> None:
@@ -225,10 +260,9 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
     assert requests == 2
 
 
-def test_optimized_photoroom_request_preserves_color_and_consistent_positioning() -> None:
+def test_optimized_photoroom_request_uses_cutout_for_local_composition() -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
-    api_result = image_bytes(Image.new("RGB", (1920, 1440), "gray"), "JPEG")
     cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
     ImageDraw.Draw(cutout).rectangle((20, 250, 779, 349), fill=(20, 30, 40, 255))
     cutout_result = image_bytes(cutout, "PNG")
@@ -238,20 +272,13 @@ def test_optimized_photoroom_request_preserves_color_and_consistent_positioning(
         nonlocal requests
         requests += 1
         body = request.content
-        if requests == 1:
-            return httpx.Response(
-                200,
-                content=cutout_result,
-                headers={"content-type": "image/png"},
-            )
-        assert b'name="lighting.mode"' in body
-        assert b"ai.preserve-hue-and-saturation" in body
-        assert b'name="paddingTop"' in body
-        assert b"0.490" in body
-        assert b'name="ignorePaddingAndSnapOnCroppedSides"' in body
-        assert b"false" in body
-        assert b"ai.auto" not in body
-        return httpx.Response(200, content=api_result, headers={"content-type": "image/jpeg"})
+        assert requests == 1
+        assert b'name="background.imageFile"' not in body
+        return httpx.Response(
+            200,
+            content=cutout_result,
+            headers={"content-type": "image/png"},
+        )
 
     settings = Settings(photoroom_api_key="test-key", photoroom_sandbox=True)
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -261,8 +288,12 @@ def test_optimized_photoroom_request_preserves_color_and_consistent_positioning(
             "image/jpeg",
             settings,
             optimized=True,
+            capture_step_name="Seite links",
+            reflection_opacity_percent=0,
             client=client,
         )
 
-    assert Image.open(io.BytesIO(result)).size == (1920, 1440)
-    assert requests == 2
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    assert finished.size == (1920, 1440)
+    assert requests == 1
+    assert all(channel >= 245 for channel in finished.getpixel((20, 20)))
