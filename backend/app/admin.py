@@ -297,16 +297,7 @@ def _capture_export_order_conflict(
     if excluding_step_id is not None:
         step_statement = step_statement.where(CaptureStep.id != excluding_step_id)
     step = db.scalar(step_statement)
-    if step is not None:
-        return step.name
-    supplemental = db.scalar(
-        select(SupplementalImage).where(
-            SupplementalImage.dealership_id == dealership_id,
-            SupplementalImage.export_order == export_order,
-            SupplementalImage.is_active.is_(True),
-        )
-    )
-    return supplemental.name if supplemental is not None else None
+    return step.name if step is not None else None
 
 
 def _capture_order_conflict(
@@ -372,15 +363,6 @@ def _supplemental_export_order_conflict(
     *,
     excluding_image_id: uuid.UUID | None = None,
 ) -> str | None:
-    step = db.scalar(
-        select(CaptureStep).where(
-            CaptureStep.dealership_id == dealership_id,
-            CaptureStep.export_order == export_order,
-            CaptureStep.is_active.is_(True),
-        )
-    )
-    if step is not None:
-        return step.name
     statement = (
         select(SupplementalImage)
         .options(selectinload(SupplementalImage.locations))
@@ -2742,14 +2724,6 @@ def create_default_capture_steps(
             )
         )
     )
-    used_export_orders.update(
-        db.scalars(
-            select(SupplementalImage.export_order).where(
-                SupplementalImage.dealership_id == dealership.id,
-                SupplementalImage.is_active.is_(True),
-            )
-        )
-    )
     next_export_order = 0
     added = 0
     for orientation in orientations:
@@ -2910,22 +2884,6 @@ def update_dealership_orientation_settings(
             ),
             None,
         )
-        supplemental_orders = set(
-            db.scalars(
-                select(SupplementalImage.export_order).where(
-                    SupplementalImage.dealership_id == dealership.id,
-                    SupplementalImage.is_active.is_(True),
-                )
-            )
-        )
-        conflict = next(
-            (
-                export_order
-                for _, _, _, export_order in active_rows
-                if export_order is not None and export_order in supplemental_orders
-            ),
-            None,
-        )
         if capture_conflict is not None:
             _flash(
                 request,
@@ -2938,12 +2896,6 @@ def update_dealership_orientation_settings(
                 request,
                 f"Exportplatz {export_conflict[0]} ist bereits durch "
                 f"„{export_conflict[1]}“ belegt.",
-                "error",
-            )
-        elif conflict is not None:
-            _flash(
-                request,
-                f"Exportplatz {conflict} ist bereits durch ein Zusatzbild belegt.",
                 "error",
             )
         else:

@@ -65,6 +65,37 @@ def validate_export_items(items: list[ExportItem]) -> list[ExportItem]:
     return sorted(items, key=lambda item: (item.order, item.name))
 
 
+def arrange_export_items(
+    photo_items: list[ExportItem],
+    supplemental_items: list[ExportItem],
+) -> list[ExportItem]:
+    """Place fixed supplemental images and fill every other slot with photos.
+
+    Photo ``order`` values describe their relative order only. Supplemental image
+    orders are absolute preferred positions in the final archive. This keeps an
+    advert at its configured position while optional, missing photos simply make
+    later photos move up and the ZIP numbering stays continuous.
+    """
+    photos = validate_export_items(photo_items) if photo_items else []
+    supplemental = validate_export_items(supplemental_items) if supplemental_items else []
+    if not photos and not supplemental:
+        return validate_export_items([])
+
+    arranged = list(photos)
+    for item in supplemental:
+        # Insert supplemental images in ascending order. Existing entries move
+        # back, so the configured slot remains reserved and photos skip it.
+        # If there are too few actual images for a high slot, append instead of
+        # creating empty ZIP positions.
+        index = min(max(0, item.order - 1), len(arranged))
+        arranged.insert(index, item)
+
+    return [
+        ExportItem(position, item.name, item.object_key)
+        for position, item in enumerate(arranged, start=1)
+    ]
+
+
 def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
     rows = list(
         db.execute(
@@ -91,7 +122,7 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
         )
     )
 
-    items: list[ExportItem] = []
+    photo_items: list[ExportItem] = []
     for photo, step in rows:
         if step.requires_processing:
             if (
@@ -104,14 +135,14 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
             object_key = photo.processed_object_key
         else:
             object_key = photo.original_object_key
-        items.append(ExportItem(int(step.export_order), step.name, object_key))
+        photo_items.append(ExportItem(int(step.export_order), step.name, object_key))
 
-    items.extend(
+    supplemental_items = [
         ExportItem(item.export_order, item.name, item.object_key)
         for item in supplemental_images
         if _supplemental_matches(item, job)
-    )
-    return validate_export_items(items)
+    ]
+    return arrange_export_items(photo_items, supplemental_items)
 
 
 def normalize_export_jpeg(content: bytes, settings: Settings) -> bytes:
@@ -138,10 +169,10 @@ def build_zip_bytes(
     archive = io.BytesIO()
     filename_prefix = safe_vin(vin)
     with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_STORED) as zip_file:
-        for item in validate_export_items(items):
+        for position, item in enumerate(validate_export_items(items), start=1):
             content = storage.get_object(object_key=item.object_key)
             zip_file.writestr(
-                f"{filename_prefix}_{item.order:02d}.jpg",
+                f"{filename_prefix}_{position:02d}.jpg",
                 normalize_export_jpeg(content, settings),
             )
     return archive.getvalue()

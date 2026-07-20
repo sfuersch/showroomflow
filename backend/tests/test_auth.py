@@ -569,6 +569,12 @@ def test_dealership_admin_configures_separate_app_and_export_orders() -> None:
         },
     )
     configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+    assert 'data-sequence="capture"' in configuration_page.text
+    assert 'data-sequence="export"' in configuration_page.text
+    assert 'type="hidden" name="capture_orders"' in configuration_page.text
+    assert 'type="hidden" name="export_orders"' in configuration_page.text
+    assert 'type="number" name="capture_orders"' not in configuration_page.text
+    assert 'type="number" name="export_orders"' not in configuration_page.text
     with TestingSession() as db:
         orientation = db.scalar(select(Orientation).where(Orientation.name == "Vorne links"))
         assert orientation is not None
@@ -1110,10 +1116,10 @@ def test_system_admin_manages_tenant_overlay_and_supplemental_image() -> None:
 
     assert overlay_response.status_code == 200
     assert "Overlay wurde hochgeladen" in overlay_response.text
-    assert "Exportplatz 1 ist bereits" in conflict_response.text
+    assert "Zusatzbild wurde hochgeladen" in conflict_response.text
     assert supplemental_response.status_code == 200
     assert "Zusatzbild wurde hochgeladen" in supplemental_response.text
-    assert len(storage.uploads) == 2
+    assert len(storage.uploads) == 3
     with TestingSession() as db:
         overlay = db.scalar(
             select(ImageOverlay).options(
@@ -1122,7 +1128,9 @@ def test_system_admin_manages_tenant_overlay_and_supplemental_image() -> None:
             )
         )
         supplemental = db.scalar(
-            select(SupplementalImage).options(selectinload(SupplementalImage.locations))
+            select(SupplementalImage)
+            .options(selectinload(SupplementalImage.locations))
+            .where(SupplementalImage.name == "Garantie")
         )
         assert overlay is not None
         assert overlay.dealership_id == dealership.id
