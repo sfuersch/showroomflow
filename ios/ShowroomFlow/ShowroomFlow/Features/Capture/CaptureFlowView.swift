@@ -6,7 +6,7 @@ struct CaptureFlowView: View {
     @StateObject private var camera = CameraController()
     @State private var captureSession: CaptureSession?
     @State private var currentIndex = 0
-    @State private var pendingPhotoData: Data?
+    @State private var pendingPhoto: CapturedCameraPhoto?
     @State private var isLoading = true
     @State private var isCapturing = false
     @State private var isUploading = false
@@ -17,7 +17,7 @@ struct CaptureFlowView: View {
 
     let job: VehicleJob
     let loadCaptureSession: (UUID) async throws -> CaptureSession
-    let uploadCapturedPhoto: (UUID, UUID, Data) async throws -> CapturedPhoto
+    let uploadCapturedPhoto: (UUID, UUID, CapturedCameraPhoto) async throws -> CapturedPhoto
     let completeCapture: (UUID) async throws -> VehicleJob
 
     var body: some View {
@@ -143,7 +143,7 @@ struct CaptureFlowView: View {
             let height = width * 3 / 4
             ZStack {
                 Color.black
-                if let pendingPhotoData, let image = UIImage(data: pendingPhotoData) {
+                if let pendingPhoto, let image = UIImage(data: pendingPhoto.data) {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
@@ -189,6 +189,11 @@ struct CaptureFlowView: View {
                         .font(.headline)
                     Text("\(currentIndex + 1) von \(data.captureSteps.count)")
                         .font(.caption.bold())
+                    if step.usesScenePrototype {
+                        Label("Szenenmessung", systemImage: "view.3d")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.mint)
+                    }
                 }
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
@@ -355,7 +360,7 @@ struct CaptureFlowView: View {
                 LazyVStack(spacing: 12) {
                 ForEach(Array(data.captureSteps.enumerated()), id: \.element.id) { index, step in
                     Button {
-                        guard pendingPhotoData == nil, !isUploading else { return }
+                        guard pendingPhoto == nil, !isUploading else { return }
                         currentIndex = index
                         isRetakingExistingPhoto = false
                         errorMessage = nil
@@ -494,10 +499,10 @@ struct CaptureFlowView: View {
 
     @ViewBuilder
     private func controls(step: ConfiguredCaptureStep) -> some View {
-        if let pendingPhotoData {
+        if let pendingPhoto {
             VStack(spacing: 14) {
                 Button {
-                    self.pendingPhotoData = nil
+                    self.pendingPhoto = nil
                     errorMessage = nil
                 } label: {
                     railButtonLabel("Wiederholen", systemImage: "arrow.counterclockwise")
@@ -506,7 +511,7 @@ struct CaptureFlowView: View {
                 .disabled(isUploading)
 
                 Button {
-                    Task { await usePhoto(pendingPhotoData, step: step) }
+                    Task { await usePhoto(pendingPhoto, step: step) }
                 } label: {
                     if isUploading {
                         ProgressView().tint(.white)
@@ -599,18 +604,18 @@ struct CaptureFlowView: View {
         errorMessage = nil
         defer { isCapturing = false }
         do {
-            pendingPhotoData = try await camera.capturePhoto()
+            pendingPhoto = try await camera.capturePhoto()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func usePhoto(_ photoData: Data, step: ConfiguredCaptureStep) async {
+    private func usePhoto(_ photo: CapturedCameraPhoto, step: ConfiguredCaptureStep) async {
         isUploading = true
         errorMessage = nil
         defer { isUploading = false }
         do {
-            let uploadedPhoto = try await uploadCapturedPhoto(job.id, step.id, photoData)
+            let uploadedPhoto = try await uploadCapturedPhoto(job.id, step.id, photo)
             guard var updatedSession = captureSession else { return }
             updatedSession = CaptureSession(
                 job: updatedSession.job,
@@ -618,7 +623,7 @@ struct CaptureFlowView: View {
                 photos: updatedSession.photos.filter { $0.captureStepID != step.id } + [uploadedPhoto]
             )
             captureSession = updatedSession
-            pendingPhotoData = nil
+            pendingPhoto = nil
             isRetakingExistingPhoto = false
             moveToNextIncompleteStep(in: updatedSession)
         } catch {

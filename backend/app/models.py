@@ -11,6 +11,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -142,6 +143,10 @@ class Background(Timestamped, Base):
     shadow_opacity_percent: Mapped[int] = mapped_column(Integer, default=32)
     reflection_opacity_percent: Mapped[int] = mapped_column(Integer, default=10)
     brightness_percent: Mapped[int] = mapped_column(Integer, default=100)
+    scene_projection_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    scene_horizon_percent: Mapped[int] = mapped_column(Integer, default=43)
+    scene_reference_vertical_degrees: Mapped[int] = mapped_column(Integer, default=0)
+    scene_perspective_strength_percent: Mapped[int] = mapped_column(Integer, default=35)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     locations: Mapped[list[Location]] = relationship(secondary="background_locations")
@@ -339,6 +344,7 @@ class PhotoAsset(Timestamped, Base):
     original_object_key: Mapped[str] = mapped_column(String(500), unique=True)
     original_content_type: Mapped[str] = mapped_column(String(100))
     expected_size_bytes: Mapped[int] = mapped_column(Integer)
+    capture_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     original_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     original_thumbnail_object_key: Mapped[str | None] = mapped_column(
         String(500), nullable=True, unique=True

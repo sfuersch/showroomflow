@@ -45,6 +45,16 @@
                 <label>Reflexion (%)<input type="number" name="reflection_opacity_percent" min="0" max="60" value="{{ background.reflection_opacity_percent }}" required></label>
                 <label>Fahrzeughelligkeit (%)<input type="number" name="brightness_percent" min="50" max="150" value="{{ background.brightness_percent }}" required></label>
             </div>
+            <fieldset class="choice-group">
+                <legend>Perspektivische Szene (Beta)</legend>
+                <label class="check-row"><input type="checkbox" name="scene_projection_enabled" {% if background.scene_projection_enabled %}checked{% endif %}><span><strong>Für Testorientierungen verwenden</strong><small>Aktiv für Vorne links, Links, Hinten links und Hinten. Nutzt die bei der Aufnahme gemessene Gerätepose.</small></span></label>
+                <div class="form-grid">
+                    <label>Horizont im Hintergrund (%)<input type="number" name="scene_horizon_percent" min="25" max="70" value="{{ background.scene_horizon_percent }}" required></label>
+                    <label>Referenz-Neigung (°)<input type="number" name="scene_reference_vertical_degrees" min="-30" max="30" value="{{ background.scene_reference_vertical_degrees }}" required></label>
+                    <label>Perspektivstärke (%)<input type="number" name="scene_perspective_strength_percent" min="0" max="100" value="{{ background.scene_perspective_strength_percent }}" required></label>
+                </div>
+                <small class="muted">Startwerte: Horizont 43 %, Referenz-Neigung 0°, Stärke 35 %. Der Modus bleibt bei allen anderen Orientierungen wirkungslos.</small>
+            </fieldset>
             <div class="row-between"><label class="toggle"><input type="checkbox" name="is_active" {% if background.is_active %}checked{% endif %}><span>Aktiv</span></label><div class="asset-actions"><button class="button button-secondary" type="submit">Speichern</button><button class="button button-danger" type="submit" formaction="/admin/backgrounds/{{ background.id }}/delete" formmethod="post" formnovalidate onclick="return confirm('Hintergrund dauerhaft löschen? Diese Aktion kann nicht rückgängig gemacht werden.')">Löschen</button></div></div>
         </form>
         {% endfor %}

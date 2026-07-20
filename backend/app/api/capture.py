@@ -145,6 +145,7 @@ def capture_session(
                 is_required=step.is_required,
                 requires_processing=step.requires_processing,
                 silhouette_url=silhouette_url(step),
+                orientation_key=orientation_keys.get(step.orientation_id),
             )
             for step in steps
         ],
@@ -192,6 +193,9 @@ def create_photo_upload(
         original_object_key=object_key,
         original_content_type=payload.content_type,
         expected_size_bytes=payload.size_bytes,
+        capture_metadata=(
+            payload.capture_metadata.model_dump() if payload.capture_metadata else None
+        ),
     )
     db.add(photo)
     locked_job.status = JobStatus.CAPTURING

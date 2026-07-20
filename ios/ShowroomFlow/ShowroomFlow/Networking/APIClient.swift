@@ -185,13 +185,15 @@ struct APIClient {
         jobID: UUID,
         captureStepID: UUID,
         sizeBytes: Int,
+        captureMetadata: CameraCaptureMetadata,
         accessToken: String
     ) async throws -> PhotoUploadTicket {
         let body = try JSONEncoder().encode(
             PhotoUploadPayload(
                 captureStepID: captureStepID,
                 contentType: "image/jpeg",
-                sizeBytes: sizeBytes
+                sizeBytes: sizeBytes,
+                captureMetadata: captureMetadata
             )
         )
         let data = try await authorizedRequest(
@@ -430,6 +432,12 @@ struct ConfiguredCaptureStep: Decodable, Identifiable {
     let isRequired: Bool
     let requiresProcessing: Bool
     let silhouetteURL: URL?
+    let orientationKey: String?
+
+    var usesScenePrototype: Bool {
+        guard let orientationKey else { return false }
+        return ["front-left", "left", "rear-left", "rear"].contains(orientationKey)
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, name, instruction, category
@@ -438,6 +446,7 @@ struct ConfiguredCaptureStep: Decodable, Identifiable {
         case isRequired = "is_required"
         case requiresProcessing = "requires_processing"
         case silhouetteURL = "silhouette_url"
+        case orientationKey = "orientation_key"
     }
 }
 
@@ -518,10 +527,12 @@ private struct PhotoUploadPayload: Encodable {
     let captureStepID: UUID
     let contentType: String
     let sizeBytes: Int
+    let captureMetadata: CameraCaptureMetadata
 
     enum CodingKeys: String, CodingKey {
         case captureStepID = "capture_step_id"
         case contentType = "content_type"
         case sizeBytes = "size_bytes"
+        case captureMetadata = "capture_metadata"
     }
 }

@@ -12,7 +12,7 @@ struct JobListView: View {
     let loadConfiguration: (UUID) async throws -> AppConfiguration
     let createJob: (UUID, String, UUID, String, UUID?) async throws -> VehicleJob
     let loadCaptureSession: (UUID) async throws -> CaptureSession
-    let uploadCapturedPhoto: (UUID, UUID, Data) async throws -> CapturedPhoto
+    let uploadCapturedPhoto: (UUID, UUID, CapturedCameraPhoto) async throws -> CapturedPhoto
     let completeCapture: (UUID) async throws -> VehicleJob
     let onLogout: () -> Void
 

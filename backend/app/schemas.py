@@ -90,6 +90,7 @@ class CaptureStepConfigurationResponse(BaseModel):
     is_required: bool
     requires_processing: bool
     silhouette_url: str | None = None
+    orientation_key: str | None = None
 
 
 class AppConfigurationResponse(BaseModel):
@@ -117,10 +118,19 @@ class CaptureSessionResponse(BaseModel):
     photos: list[PhotoAssetResponse]
 
 
+class CameraCaptureMetadata(BaseModel):
+    horizon_angle_degrees: float = Field(ge=-180, le=180)
+    vertical_angle_degrees: float = Field(ge=-180, le=180)
+    yaw_angle_degrees: float = Field(ge=-180, le=180)
+    field_of_view_degrees: float = Field(ge=20, le=140)
+    motion_available: bool = True
+
+
 class PhotoUploadRequest(BaseModel):
     capture_step_id: uuid.UUID
     content_type: str = Field(pattern="^image/jpeg$")
     size_bytes: int = Field(ge=1, le=25 * 1024 * 1024)
+    capture_metadata: CameraCaptureMetadata | None = None
 
 
 class PhotoUploadResponse(BaseModel):
