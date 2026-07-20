@@ -382,9 +382,57 @@ def test_window_background_preserves_foreground_and_glass_transparency() -> None
     tinted_glass = finished.getpixel((400, 300))
     foreground = finished.getpixel((400, 500))
     assert finished.size == (800, 600)
-    assert transparent_scene[2] >= 190 and transparent_scene[0] < 70
+    assert transparent_scene[2] > 200 and transparent_scene[0] < 50
     assert tinted_glass[0] > 80 and tinted_glass[2] > 80
     assert foreground[0] > 200 and foreground[2] < 50
+
+
+def test_window_background_subtracts_protected_instrument_cluster_mask() -> None:
+    original = Image.new("RGB", (800, 600), (230, 220, 20))
+    window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(window_mask).rectangle((0, 0, 799, 399), fill="white")
+    protected_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(protected_mask).rectangle((300, 120, 500, 300), fill="white")
+    background = Image.new("RGB", original.size, (20, 30, 230))
+
+    result = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+        protected_foreground_mask_png_bytes=image_bytes(protected_mask, "PNG"),
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    replaced_glass = finished.getpixel((100, 100))
+    protected_cluster = finished.getpixel((400, 200))
+    assert replaced_glass[2] > 200 and replaced_glass[0] < 50
+    assert protected_cluster[0] > 200 and protected_cluster[2] < 50
+
+
+def test_window_background_locally_protects_dark_unlit_cluster() -> None:
+    original = Image.new("RGB", (800, 600), (230, 220, 20))
+    ImageDraw.Draw(original).rounded_rectangle(
+        (300, 120, 500, 300),
+        radius=35,
+        fill=(15, 18, 22),
+    )
+    window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(window_mask).rectangle((0, 0, 799, 399), fill="white")
+    background = Image.new("RGB", original.size, (20, 30, 230))
+
+    result = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    replaced_glass = finished.getpixel((100, 100))
+    protected_cluster = finished.getpixel((400, 200))
+    assert replaced_glass[2] > 200 and replaced_glass[0] < 50
+    assert max(protected_cluster) < 50
 
 
 def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
