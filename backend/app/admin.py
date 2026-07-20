@@ -50,6 +50,7 @@ from app.models import (
 from app.orientations import (
     ORIENTATION_CATEGORIES,
     PROCESSING_MODES,
+    PROCESSING_REQUIRED_MODES,
     STANDARD_ORIENTATIONS,
     default_silhouette_path,
     instance_name,
@@ -822,7 +823,7 @@ async def create_orientation(
             default_capture_order=default_capture_order,
             default_export_order=default_export_order,
             is_required=is_required == "on",
-            requires_processing=processing_mode == "optimized",
+            requires_processing=processing_mode in PROCESSING_REQUIRED_MODES,
             processing_mode=processing_mode,
             is_repeatable=is_repeatable == "on",
             default_instance_count=default_instance_count,
@@ -895,7 +896,7 @@ async def update_orientation(
         orientation.default_export_order = default_export_order
         orientation.is_required = is_required == "on"
         orientation.processing_mode = processing_mode
-        orientation.requires_processing = processing_mode == "optimized"
+        orientation.requires_processing = processing_mode in PROCESSING_REQUIRED_MODES
         orientation.is_repeatable = is_repeatable == "on"
         orientation.default_instance_count = default_instance_count
         orientation.max_instances = max_instances if orientation.is_repeatable else 1
@@ -2033,7 +2034,8 @@ def configuration_page(
             composition_orientations=[
                 orientation
                 for orientation in orientations
-                if orientation.is_active and orientation.processing_mode != "original"
+                if orientation.is_active
+                and orientation.processing_mode in {"optimized", "configurable"}
             ],
             composition_overrides_by_background={
                 background.id: {
@@ -2283,7 +2285,7 @@ def update_background(
             for orientation in db.scalars(
                 select(Orientation).where(
                     Orientation.id.in_(composition_orientation_ids),
-                    Orientation.processing_mode != "original",
+                    Orientation.processing_mode.in_({"optimized", "configurable"}),
                 )
             )
         }

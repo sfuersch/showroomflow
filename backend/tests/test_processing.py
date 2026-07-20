@@ -17,6 +17,7 @@ from app.processing import (
     apply_image_overlays,
     calculate_contour_framing,
     calculate_scene_adjustment,
+    compose_background_through_windows,
     compose_showroom,
     create_photoroom_showroom,
     infer_vehicle_perspective,
@@ -355,6 +356,33 @@ def test_preview_mask_preserves_original_resolution_and_pixels() -> None:
     assert all(abs(actual - expected) <= 1 for actual, expected in zip(center_color, (18, 42, 91)))
     assert restored.getpixel((0, 0))[3] == 0
     assert restored.getpixel((600, 400))[3] == 255
+
+
+def test_window_background_preserves_foreground_and_glass_transparency() -> None:
+    original = Image.new("RGB", (800, 600), (230, 20, 20))
+    cutout = Image.new("RGBA", (800, 600), (255, 255, 255, 0))
+    alpha = Image.new("L", cutout.size, 0)
+    draw = ImageDraw.Draw(alpha)
+    draw.rectangle((0, 200, 799, 399), fill=128)
+    draw.rectangle((0, 400, 799, 599), fill=255)
+    cutout.putalpha(alpha)
+    background = Image.new("RGB", (800, 600), (20, 30, 230))
+
+    result = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(cutout, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    transparent_scene = finished.getpixel((400, 80))
+    tinted_glass = finished.getpixel((400, 300))
+    foreground = finished.getpixel((400, 500))
+    assert finished.size == (800, 600)
+    assert transparent_scene[2] > 200 and transparent_scene[0] < 50
+    assert tinted_glass[0] > 80 and tinted_glass[2] > 80
+    assert foreground[0] > 200 and foreground[2] < 50
 
 
 def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:

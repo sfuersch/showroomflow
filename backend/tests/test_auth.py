@@ -729,6 +729,8 @@ def test_system_admin_sees_grouped_orientation_catalog_with_default_silhouettes(
     assert 'id="category-special"' in response.text
     assert "/admin/static/orientation-silhouettes/front.png" in response.text
     assert "System-Silhouette" in response.text
+    assert 'value="window_background"' in response.text
+    assert "Scheibenhintergrund" in response.text
 
 
 def test_admin_form_rejects_invalid_csrf_token() -> None:
@@ -899,6 +901,11 @@ def test_admin_adds_brand_and_standard_capture_sequence() -> None:
         assert len(steps) == 36
         assert steps[0].name == "Vorne"
         assert steps[0].requires_processing is True
+        steering_wheel = db.scalar(
+            select(Orientation).where(Orientation.key == "steering-wheel")
+        )
+        assert steering_wheel is not None
+        assert steering_wheel.processing_mode == "window_background"
         assert steps[-1].name == "Spezialaufnahme 1"
         assert steps[-1].requires_processing is False
 

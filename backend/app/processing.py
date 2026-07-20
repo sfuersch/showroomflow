@@ -337,6 +337,8 @@ def create_photoroom_cutout(
     settings: Settings,
     photoroom_sandbox: bool | None = None,
     *,
+    segmentation_prompt: str | None = None,
+    segmentation_negative_prompt: str | None = None,
     client: httpx.Client | None = None,
 ) -> bytes:
     """Request a transparent, original-frame cutout for contour measurement."""
@@ -346,6 +348,17 @@ def create_photoroom_cutout(
     except (OSError, ValueError) as exc:
         raise ImageProcessingError("Das Originalbild ist ungültig") from exc
     request = client.post if client is not None else httpx.post
+    request_data = {
+        "removeBackground": "true",
+        "referenceBox": "originalImage",
+        "outputSize": f"{original_size[0]}x{original_size[1]}",
+        "padding": "0",
+        "export.format": "png",
+    }
+    if segmentation_prompt:
+        request_data["segmentation.prompt"] = segmentation_prompt
+    if segmentation_negative_prompt:
+        request_data["segmentation.negativePrompt"] = segmentation_negative_prompt
     try:
         response = request(
             "https://image-api.photoroom.com/v2/edit",
@@ -354,13 +367,7 @@ def create_photoroom_cutout(
                 "pr-hd-background-removal": "auto",
             },
             files={"imageFile": ("vehicle.jpg", original_bytes, "image/jpeg")},
-            data={
-                "removeBackground": "true",
-                "referenceBox": "originalImage",
-                "outputSize": f"{original_size[0]}x{original_size[1]}",
-                "padding": "0",
-                "export.format": "png",
-            },
+            data=request_data,
             timeout=180,
         )
     except httpx.HTTPError as exc:
@@ -545,6 +552,48 @@ def apply_cutout_mask_to_original(original_bytes: bytes, cutout_png_bytes: bytes
     original.putalpha(alpha)
     output = io.BytesIO()
     original.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def compose_background_through_windows(
+    original_bytes: bytes,
+    cutout_png_bytes: bytes,
+    background_bytes: bytes,
+    settings: Settings,
+) -> bytes:
+    """Replace only AI-transparent scene areas while preserving the full frame.
+
+    The cutout contributes its alpha channel only. All visible foreground pixels
+    therefore come from the original photo, including dashboard details, glass
+    tint and reflections. Unlike the vehicle showroom composition, this mode
+    never crops the subject, adds a shadow or changes its position.
+    """
+    foreground_bytes = apply_cutout_mask_to_original(original_bytes, cutout_png_bytes)
+    try:
+        background = Image.open(io.BytesIO(background_bytes)).convert("RGBA")
+        foreground = Image.open(io.BytesIO(foreground_bytes)).convert("RGBA")
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Der Scheibenhintergrund konnte nicht erzeugt werden") from exc
+
+    output_size = (settings.output_width, settings.output_height)
+    canvas = ImageOps.fit(
+        background,
+        output_size,
+        method=Image.Resampling.LANCZOS,
+    ).convert("RGBA")
+    foreground = ImageOps.contain(
+        foreground,
+        output_size,
+        method=Image.Resampling.LANCZOS,
+    )
+    position = (
+        (settings.output_width - foreground.width) // 2,
+        (settings.output_height - foreground.height) // 2,
+    )
+    canvas.alpha_composite(foreground, position)
+
+    output = io.BytesIO()
+    canvas.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
     return output.getvalue()
 
 
@@ -921,7 +970,32 @@ def process_photo(photo_id: str) -> None:
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
-            if image_settings.provider == "photoroom":
+            processing_mode = orientation.processing_mode if orientation else "optimized"
+            if processing_mode == "window_background":
+                if image_settings.provider == "photoroom":
+                    ai_cutout = create_photoroom_cutout(
+                        original,
+                        settings,
+                        photoroom_sandbox_active(image_settings, settings),
+                        segmentation_prompt=(
+                            "car interior including steering wheel, dashboard, "
+                            "windshield glass and door frame"
+                        ),
+                        segmentation_negative_prompt=(
+                            "scenery, buildings, sky and vehicles outside the car"
+                        ),
+                    )
+                elif image_settings.provider == "remove_bg":
+                    ai_cutout = remove_vehicle_background(original, settings)
+                else:
+                    raise ImageProcessingError("Die Bildverarbeitung ist deaktiviert")
+                finished = compose_background_through_windows(
+                    original,
+                    ai_cutout,
+                    background_image,
+                    settings,
+                )
+            elif image_settings.provider == "photoroom":
                 finished = create_photoroom_showroom(
                     original,
                     background_image,
@@ -1087,30 +1161,52 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
-            finished = create_photoroom_showroom(
-                original,
-                background_image,
-                background.content_type,
-                settings,
-                contour_target_area_percent=composition.contour_target_area_percent,
-                contour_max_width_percent=composition.contour_max_width_percent,
-                contour_max_height_percent=composition.contour_max_height_percent,
-                vehicle_bottom_percent=composition.vehicle_bottom_percent,
-                shadow_opacity_percent=composition.shadow_opacity_percent,
-                reflection_opacity_percent=composition.reflection_opacity_percent,
-                brightness_percent=composition.brightness_percent,
-                capture_step_name=step.name,
-                orientation_key=orientation.key if orientation else "",
-                capture_metadata=photo.capture_metadata,
-                scene_projection_enabled=background.scene_projection_enabled,
-                scene_horizon_percent=background.scene_horizon_percent,
-                scene_reference_vertical_degrees=background.scene_reference_vertical_degrees,
-                scene_perspective_strength_percent=(
-                    background.scene_perspective_strength_percent
-                ),
-                photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
-                optimized=provider == "photoroom_optimized",
-            )
+            if orientation is not None and orientation.processing_mode == "window_background":
+                ai_cutout = create_photoroom_cutout(
+                    original,
+                    settings,
+                    photoroom_sandbox_active(image_settings, settings),
+                    segmentation_prompt=(
+                        "car interior including steering wheel, dashboard, "
+                        "windshield glass and door frame"
+                    ),
+                    segmentation_negative_prompt=(
+                        "scenery, buildings, sky and vehicles outside the car"
+                    ),
+                )
+                finished = compose_background_through_windows(
+                    original,
+                    ai_cutout,
+                    background_image,
+                    settings,
+                )
+            else:
+                finished = create_photoroom_showroom(
+                    original,
+                    background_image,
+                    background.content_type,
+                    settings,
+                    contour_target_area_percent=composition.contour_target_area_percent,
+                    contour_max_width_percent=composition.contour_max_width_percent,
+                    contour_max_height_percent=composition.contour_max_height_percent,
+                    vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                    shadow_opacity_percent=composition.shadow_opacity_percent,
+                    reflection_opacity_percent=composition.reflection_opacity_percent,
+                    brightness_percent=composition.brightness_percent,
+                    capture_step_name=step.name,
+                    orientation_key=orientation.key if orientation else "",
+                    capture_metadata=photo.capture_metadata,
+                    scene_projection_enabled=background.scene_projection_enabled,
+                    scene_horizon_percent=background.scene_horizon_percent,
+                    scene_reference_vertical_degrees=(
+                        background.scene_reference_vertical_degrees
+                    ),
+                    scene_perspective_strength_percent=(
+                        background.scene_perspective_strength_percent
+                    ),
+                    photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
+                    optimized=provider == "photoroom_optimized",
+                )
             object_key = (
                 f"dealerships/{job.dealership_id}/jobs/{job.id}/comparisons/"
                 f"{provider}/{step.id}/{photo.id}.jpg"
