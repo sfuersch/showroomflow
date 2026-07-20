@@ -104,30 +104,151 @@
 {% endif %}
 
 <section class="card section-card" id="orientations">
-    <div class="section-heading"><div><h2>Orientierungen</h2><p>Die Aufnahme-Nr. bestimmt ausschließlich die Reihenfolge in der App. Die Export-Nr. bestimmt unabhängig davon Dateireihenfolge und Dateinamen im ZIP.</p></div><span class="count">{{ orientations|length }}</span></div>
-    <form method="post" action="/admin/dealerships/{{ dealership.id }}/orientation-settings">
+    <div class="section-heading"><div><h2>Orientierungen und Reihenfolgen</h2><p>Die Reihenfolge in der App und die Reihenfolge im Export werden unabhängig voneinander gepflegt.</p></div><span class="count">{{ orientations|length }}</span></div>
+    <form method="post" action="/admin/dealerships/{{ dealership.id }}/orientation-settings" data-order-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="sequence-grid">
+        <section class="sequence-panel">
+            <div class="sequence-heading"><div><span class="eyebrow">App</span><h3>Aufnahmereihenfolge</h3></div><span class="sequence-hint">Mit ▲ und ▼ verschieben</span></div>
+            <ol class="sequence-list" data-sequence="capture" aria-label="Aufnahmereihenfolge in der App"></ol>
+        </section>
+        <section class="sequence-panel">
+            <div class="sequence-heading"><div><span class="eyebrow">ZIP-Export</span><h3>Foto-Reihenfolge</h3></div><span class="sequence-hint">Unabhängig von der App</span></div>
+            <ol class="sequence-list" data-sequence="export" aria-label="Reihenfolge der Fotos im Export"></ol>
+            <p class="muted sequence-note">Aktive Zusatzbilder belegen ihren fest gewählten ZIP-Platz. Die Fotos überspringen diese Plätze automatisch.</p>
+        </section>
+    </div>
+    <div class="section-heading compact-heading"><div><h3>Verfügbare Orientierungen</h3><p>Aktivierung, Pflichtstatus und Mehrfachaufnahmen festlegen.</p></div></div>
     <div class="step-stack">
         {% for orientation in orientations if orientation.is_active or steps_by_orientation_id.get(orientation.id) %}
         {% set orientation_steps = steps_by_orientation_id.get(orientation.id, []) %}
         {% set step = orientation_steps[0] if orientation_steps else none %}
         {% set active_instance_count = orientation_steps|selectattr('is_active')|list|length %}
-        <div class="step-card">
+        <div class="step-card orientation-order-row" data-orientation-row data-orientation-id="{{ orientation.id }}" data-orientation-name="{{ orientation.name }}">
             <input type="hidden" name="orientation_ids" value="{{ orientation.id }}">
-            <div class="order-pair">
-                <label>Aufnahme-Nr. (App)<input type="number" name="capture_orders" min="1" value="{{ step.capture_order if step else orientation.default_capture_order }}" required></label>
-                <label>Export-Nr. (ZIP)<input type="number" name="export_orders" min="1" value="{{ step.export_order if step and step.export_order else (orientation.default_export_order or '') }}" placeholder="Kein Export"></label>
-            </div>
+            <input type="hidden" name="capture_orders" value="{{ step.capture_order if step else orientation.default_capture_order }}" data-capture-order>
+            <input type="hidden" name="export_orders" value="{{ step.export_order if step and step.export_order else (orientation.default_export_order or '') }}" data-export-order>
+            <div class="orientation-order-state"><span class="order-state-badge" data-app-position>App –</span><span class="order-state-badge" data-export-position>Export –</span></div>
             <div class="step-main"><strong>{{ orientation.name }}</strong><span class="muted">{{ orientation.instruction }}</span>{% if orientation.is_repeatable %}<label>Anzahl<input type="number" name="instance_counts" min="1" max="{{ orientation.max_instances }}" value="{{ active_instance_count or orientation.default_instance_count }}" required></label>{% else %}<input type="hidden" name="instance_counts" value="1">{% endif %}</div>
             <div class="choice-row"><span class="status {{ 'status-active' if orientation.category == 'exterior' else 'status-inactive' }}">{{ {'exterior': 'Außenaufnahme', 'interior': 'Innenraum', 'detail': 'Detail', 'special': 'Spezialaufnahme'}.get(orientation.category, orientation.category) }}</span><span class="status status-inactive">{{ {'optimized': 'Optimierung', 'original': 'Originalbild', 'configurable': 'Konfigurierbar'}.get(orientation.processing_mode, orientation.processing_mode) }}</span>{% if orientation.is_repeatable %}<span class="muted">bis {{ orientation.max_instances }} Aufnahmen</span>{% endif %}</div>
-            <div class="step-options"><label class="toggle"><input type="checkbox" name="required_orientation_ids" value="{{ orientation.id }}" {% if (step and step.is_required) or (not step and orientation.is_required) %}checked{% endif %}><span>Pflichtfoto</span></label><label class="toggle"><input type="checkbox" name="active_orientation_ids" value="{{ orientation.id }}" {% if active_instance_count %}checked{% endif %} {% if not orientation.is_active %}disabled{% endif %}><span>Für dieses Autohaus aktiv</span></label></div>
+            <div class="step-options"><label class="toggle"><input type="checkbox" name="required_orientation_ids" value="{{ orientation.id }}" {% if (step and step.is_required) or (not step and orientation.is_required) %}checked{% endif %}><span>Pflichtfoto</span></label><label class="toggle"><input type="checkbox" data-export-enabled {% if (step and step.export_order is not none) or (not step and orientation.default_export_order is not none) %}checked{% endif %}><span>Im ZIP exportieren</span></label><label class="toggle"><input type="checkbox" name="active_orientation_ids" value="{{ orientation.id }}" data-active-orientation {% if active_instance_count %}checked{% endif %} {% if not orientation.is_active %}disabled{% endif %}><span>Für dieses Autohaus aktiv</span></label></div>
         </div>
         {% else %}<p class="empty">Der Superadmin hat noch keine Orientierungen freigegeben.</p>{% endfor %}
     </div>
     <div class="form-actions"><button class="button button-primary" type="submit">App- und Exportreihenfolge speichern</button></div>
     </form>
-    <p class="muted">Exportplätze müssen über aktive Orientierungen und Zusatzbilder hinweg eindeutig sein.</p>
+    <p class="muted">Die angezeigten Positionsnummern werden automatisch berechnet. Bei mehreren Aufnahmen einer Orientierung wird der komplette Block gemeinsam verschoben.</p>
 </section>
+
+<script>
+(() => {
+    const form = document.querySelector("[data-order-form]");
+    if (!form) return;
+    const rows = [...form.querySelectorAll("[data-orientation-row]")];
+    const lists = {
+        capture: form.querySelector('[data-sequence="capture"]'),
+        export: form.querySelector('[data-sequence="export"]')
+    };
+
+    const countFor = row => Math.max(1, Number(row.querySelector('[name="instance_counts"]').value) || 1);
+    const isEligible = (row, type) => {
+        const active = row.querySelector("[data-active-orientation]").checked;
+        const disabled = row.querySelector("[data-active-orientation]").disabled;
+        return !disabled && active && (type === "capture" || row.querySelector("[data-export-enabled]").checked);
+    };
+    const hiddenOrder = (row, type) => row.querySelector(type === "capture" ? "[data-capture-order]" : "[data-export-order]");
+
+    function updatePositions(type) {
+        let position = 1;
+        const listedIDs = new Set();
+        [...lists[type].children].forEach((item, index, all) => {
+            const row = rows.find(candidate => candidate.dataset.orientationId === item.dataset.orientationId);
+            const count = countFor(row);
+            const end = position + count - 1;
+            const label = count > 1 ? `${position}–${end}` : `${position}`;
+            item.querySelector("[data-position]").textContent = label;
+            hiddenOrder(row, type).value = position;
+            row.querySelector(type === "capture" ? "[data-app-position]" : "[data-export-position]").textContent = `${type === "capture" ? "App" : "Export"} ${label}`;
+            item.querySelector('[data-move="up"]').disabled = index === 0;
+            item.querySelector('[data-move="down"]').disabled = index === all.length - 1;
+            listedIDs.add(row.dataset.orientationId);
+            position = end + 1;
+        });
+        rows.filter(row => !listedIDs.has(row.dataset.orientationId)).forEach(row => {
+            if (type === "export") hiddenOrder(row, type).value = "";
+            row.querySelector(type === "capture" ? "[data-app-position]" : "[data-export-position]").textContent = `${type === "capture" ? "App" : "Export"} –`;
+        });
+    }
+
+    function sequenceItem(row, type) {
+        const item = document.createElement("li");
+        item.className = "sequence-item";
+        item.dataset.orientationId = row.dataset.orientationId;
+        const position = document.createElement("strong");
+        position.className = "sequence-position";
+        position.dataset.position = "";
+        const label = document.createElement("span");
+        label.className = "sequence-label";
+        label.textContent = row.dataset.orientationName;
+        const controls = document.createElement("span");
+        controls.className = "sequence-controls";
+        [["up", "▲", "Nach oben"], ["down", "▼", "Nach unten"]].forEach(([direction, symbol, aria]) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "sequence-button";
+            button.dataset.move = direction;
+            button.textContent = symbol;
+            button.setAttribute("aria-label", `${row.dataset.orientationName}: ${aria}`);
+            button.addEventListener("click", () => {
+                if (direction === "up" && item.previousElementSibling) {
+                    lists[type].insertBefore(item, item.previousElementSibling);
+                } else if (direction === "down" && item.nextElementSibling) {
+                    lists[type].insertBefore(item.nextElementSibling, item);
+                }
+                updatePositions(type);
+            });
+            controls.append(button);
+        });
+        item.append(position, label, controls);
+        return item;
+    }
+
+    function render(type) {
+        const existingOrder = [...lists[type].children].map(item => item.dataset.orientationId);
+        const eligible = rows.filter(row => isEligible(row, type));
+        const ordered = eligible.sort((left, right) => {
+            const leftIndex = existingOrder.indexOf(left.dataset.orientationId);
+            const rightIndex = existingOrder.indexOf(right.dataset.orientationId);
+            if (leftIndex >= 0 || rightIndex >= 0) {
+                if (leftIndex < 0) return 1;
+                if (rightIndex < 0) return -1;
+                return leftIndex - rightIndex;
+            }
+            return (Number(hiddenOrder(left, type).value) || 9999) - (Number(hiddenOrder(right, type).value) || 9999);
+        });
+        lists[type].replaceChildren(...ordered.map(row => sequenceItem(row, type)));
+        updatePositions(type);
+    }
+
+    rows.forEach(row => {
+        row.querySelector("[data-active-orientation]").addEventListener("change", () => {
+            render("capture");
+            render("export");
+        });
+        row.querySelector("[data-export-enabled]").addEventListener("change", () => render("export"));
+        row.querySelector('[name="instance_counts"]').addEventListener("change", () => {
+            updatePositions("capture");
+            updatePositions("export");
+        });
+    });
+    form.addEventListener("submit", () => {
+        updatePositions("capture");
+        updatePositions("export");
+    });
+    render("capture");
+    render("export");
+})();
+</script>
 
 <section class="card section-card" id="overlays">
     <div class="section-heading"><div><h2>Overlays</h2><p>Transparente PNG-Dateien wie Autohauslogos. Marke und Standort sind optional. Eine oder mehrere Fotopositionen können ausgewählt werden; Standard ist das erste Foto des Exports.</p></div><span class="count">{{ overlays|length }}</span></div>
