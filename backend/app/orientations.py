@@ -292,6 +292,14 @@ STANDARD_ORIENTATIONS = [
     ),
 ]
 
+STANDARD_ORIENTATION_KEYS = frozenset(item.key for item in STANDARD_ORIENTATIONS)
+
+
+def default_silhouette_path(key: str | None) -> str | None:
+    if key not in STANDARD_ORIENTATION_KEYS:
+        return None
+    return f"/orientation-silhouettes/{key}.png"
+
 
 def instance_name(name: str, instance_index: int, repeatable: bool) -> str:
     if not repeatable:

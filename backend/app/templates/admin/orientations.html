@@ -2,30 +2,92 @@
 {% block title %}Orientierungskatalog{% endblock %}
 {% block content %}
 <nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><span>Orientierungskatalog</span></nav>
-<div class="page-heading"><div><span class="eyebrow">Superadmin</span><h1>Orientierungen</h1><p class="muted">Zentrale Namen, Anweisungen und Standardwerte. Autohaus-Admins wählen daraus ihre aktiven Positionen und pflegen App- und Exportreihenfolge getrennt.</p></div></div>
-<section class="card section-card">
-    <div class="section-heading"><div><h2>Verfügbare Orientierungen</h2><p>Änderungen an Name, Anweisung, Kategorie und Verarbeitung werden auf bereits zugeordnete Autohauspositionen übertragen. Autohausspezifische Reihenfolgen bleiben erhalten.</p></div><span class="count">{{ orientations|length }}</span></div>
-    <div class="step-stack">
-        {% for orientation in orientations %}
-        <form class="step-card" method="post" action="/admin/orientations/{{ orientation.id }}" enctype="multipart/form-data">
+
+<div class="page-heading orientation-page-heading">
+    <div>
+        <span class="eyebrow">Superadmin</span>
+        <h1>Orientierungen</h1>
+        <p class="muted">Zentrale Vorgaben für Aufnahme, Verarbeitung und Reihenfolge. Eigene PNG-Silhouetten können die mitgelieferten System-Silhouetten jederzeit ersetzen.</p>
+    </div>
+    <div class="orientation-summary" aria-label="Zusammenfassung">
+        <div><strong>{{ orientations|length }}</strong><span>Vorlagen</span></div>
+        <div><strong>{{ orientations|selectattr('is_active')|list|length }}</strong><span>Verfügbar</span></div>
+        <div><strong>{{ orientations|selectattr('is_repeatable')|list|length }}</strong><span>Wiederholbar</span></div>
+    </div>
+</div>
+
+<nav class="orientation-category-nav" aria-label="Orientierungskategorien">
+    {% for category, label, items in orientation_groups %}
+    <a href="#category-{{ category }}"><span>{{ label }}</span><strong>{{ items|length }}</strong></a>
+    {% endfor %}
+</nav>
+
+{% for category, label, items in orientation_groups %}
+<section class="orientation-section" id="category-{{ category }}">
+    <div class="orientation-section-heading">
+        <div>
+            <span class="orientation-category-icon orientation-category-{{ category }}" aria-hidden="true">{% if category == 'exterior' %}◇{% elif category == 'interior' %}⌂{% elif category == 'detail' %}◎{% else %}✦{% endif %}</span>
+            <div><h2>{{ label }}</h2><p>{% if category == 'exterior' %}Freigestellte Gesamt- und Außenansichten{% elif category == 'interior' %}Innenraum, Türen und geöffnete Bereiche{% elif category == 'detail' %}Ausstattung, Räder und Zustandsdetails{% else %}Frei wählbare Zusatzperspektiven{% endif %}</p></div>
+        </div>
+        <span class="count">{{ items|length }}</span>
+    </div>
+
+    <div class="orientation-grid">
+        {% for orientation in items %}
+        <form class="orientation-card{% if not orientation.is_active %} orientation-card-inactive{% endif %}" method="post" action="/admin/orientations/{{ orientation.id }}" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div class="order-pair"><label>Standard App<input type="number" name="default_capture_order" min="1" value="{{ orientation.default_capture_order }}" required></label><label>Standard Export<input type="number" name="default_export_order" min="1" value="{{ orientation.default_export_order or '' }}" placeholder="Kein Export"></label></div>
-            <div class="step-main"><label>Name<input type="text" name="name" value="{{ orientation.name }}" maxlength="160" required></label><label>Anweisung<input type="text" name="instruction" value="{{ orientation.instruction }}" maxlength="500"></label></div>
-            <div class="form-grid">
-                <label>Kategorie<select name="category"><option value="exterior" {% if orientation.category == 'exterior' %}selected{% endif %}>Außenaufnahme</option><option value="interior" {% if orientation.category == 'interior' %}selected{% endif %}>Innenraum</option><option value="detail" {% if orientation.category == 'detail' %}selected{% endif %}>Detail</option><option value="special" {% if orientation.category == 'special' %}selected{% endif %}>Spezialaufnahme</option></select></label>
-                <label>Verarbeitung<select name="processing_mode"><option value="optimized" {% if orientation.processing_mode == 'optimized' %}selected{% endif %}>Optimierung</option><option value="original" {% if orientation.processing_mode == 'original' %}selected{% endif %}>Originalbild</option><option value="configurable" {% if orientation.processing_mode == 'configurable' %}selected{% endif %}>Je Autohaus konfigurierbar</option></select></label>
-                <label>Standard-Anzahl<input type="number" name="default_instance_count" min="1" max="50" value="{{ orientation.default_instance_count }}" required></label>
-                <label>Maximale Anzahl<input type="number" name="max_instances" min="1" max="50" value="{{ orientation.max_instances }}" required></label>
-                <label class="span-2">Aufnahme-Silhouette (transparentes PNG){% if orientation.silhouette_object_key %}<small class="muted">Eine zentrale Silhouette ist hinterlegt.</small>{% endif %}<input type="file" name="silhouette" accept="image/png"></label>
+            <div class="orientation-preview">
+                {% if orientation.id in silhouette_previews %}
+                <img src="{{ silhouette_previews[orientation.id] }}" alt="Silhouette für {{ orientation.name }}" loading="lazy">
+                {% else %}
+                <span aria-hidden="true">◇</span>
+                {% endif %}
+                <span class="orientation-sequence">{{ orientation.default_capture_order }}</span>
             </div>
-            <div class="step-options"><label class="toggle"><input type="checkbox" name="is_required" {% if orientation.is_required %}checked{% endif %}><span>Standardmäßig Pflicht</span></label><label class="toggle"><input type="checkbox" name="is_repeatable" {% if orientation.is_repeatable %}checked{% endif %}><span>Wiederholbar</span></label><label class="toggle"><input type="checkbox" name="is_active" {% if orientation.is_active %}checked{% endif %}><span>Verfügbar</span></label></div>
-            <div class="row-between"><span class="muted">Schlüssel: {{ orientation.key }}</span><button class="button button-secondary" type="submit">Speichern</button></div>
+
+            <div class="orientation-card-body">
+                <div class="orientation-card-title">
+                    <div><h3>{{ orientation.name }}</h3><code>{{ orientation.key }}</code></div>
+                    <span class="status {% if orientation.is_active %}status-active{% else %}status-inactive{% endif %}">{% if orientation.is_active %}Verfügbar{% else %}Deaktiviert{% endif %}</span>
+                </div>
+                <p>{{ orientation.instruction or 'Keine Aufnahme-Anweisung hinterlegt.' }}</p>
+                <div class="orientation-badges">
+                    <span>{% if orientation.processing_mode == 'optimized' %}Optimierung{% elif orientation.processing_mode == 'original' %}Originalbild{% else %}Je Autohaus{% endif %}</span>
+                    {% if orientation.is_required %}<span>Pflicht</span>{% endif %}
+                    {% if orientation.is_repeatable %}<span>Bis zu {{ orientation.max_instances }}×</span>{% endif %}
+                    <span>{% if orientation.silhouette_object_key %}Eigene Silhouette{% else %}System-Silhouette{% endif %}</span>
+                </div>
+            </div>
+
+            <details class="orientation-settings">
+                <summary>Einstellungen bearbeiten <span aria-hidden="true">⌄</span></summary>
+                <div class="orientation-settings-body">
+                    <div class="form-grid">
+                        <label>Name<input type="text" name="name" value="{{ orientation.name }}" maxlength="160" required></label>
+                        <label>Kategorie<select name="category"><option value="exterior" {% if orientation.category == 'exterior' %}selected{% endif %}>Außenaufnahme</option><option value="interior" {% if orientation.category == 'interior' %}selected{% endif %}>Innenraum</option><option value="detail" {% if orientation.category == 'detail' %}selected{% endif %}>Detail</option><option value="special" {% if orientation.category == 'special' %}selected{% endif %}>Spezialaufnahme</option></select></label>
+                        <label class="span-2">Anweisung<input type="text" name="instruction" value="{{ orientation.instruction }}" maxlength="500"></label>
+                        <label>Verarbeitung<select name="processing_mode"><option value="optimized" {% if orientation.processing_mode == 'optimized' %}selected{% endif %}>Optimierung</option><option value="original" {% if orientation.processing_mode == 'original' %}selected{% endif %}>Originalbild</option><option value="configurable" {% if orientation.processing_mode == 'configurable' %}selected{% endif %}>Je Autohaus konfigurierbar</option></select></label>
+                        <div class="order-pair"><label>Standard App<input type="number" name="default_capture_order" min="1" value="{{ orientation.default_capture_order }}" required></label><label>Standard Export<input type="number" name="default_export_order" min="1" value="{{ orientation.default_export_order or '' }}" placeholder="–"></label></div>
+                        <label>Standard-Anzahl<input type="number" name="default_instance_count" min="1" max="50" value="{{ orientation.default_instance_count }}" required></label>
+                        <label>Maximale Anzahl<input type="number" name="max_instances" min="1" max="50" value="{{ orientation.max_instances }}" required></label>
+                        <label class="span-2 silhouette-upload">Eigene Aufnahme-Silhouette <small>Optionales transparentes PNG; ersetzt die System-Silhouette.</small><input type="file" name="silhouette" accept="image/png"></label>
+                    </div>
+                    <div class="step-options">
+                        <label class="toggle"><input type="checkbox" name="is_required" {% if orientation.is_required %}checked{% endif %}><span>Standardmäßig Pflicht</span></label>
+                        <label class="toggle"><input type="checkbox" name="is_repeatable" {% if orientation.is_repeatable %}checked{% endif %}><span>Wiederholbar</span></label>
+                        <label class="toggle"><input type="checkbox" name="is_active" {% if orientation.is_active %}checked{% endif %}><span>Verfügbar</span></label>
+                    </div>
+                    <div class="form-actions"><button class="button button-primary" type="submit">Änderungen speichern</button></div>
+                </div>
+            </details>
         </form>
         {% endfor %}
     </div>
 </section>
-<section class="card section-card compact-card">
-    <div><h2>Orientierung ergänzen</h2><p class="muted">Für weitere feste Perspektiven. Der Schlüssel wird später für technische Optimierungsprofile verwendet.</p></div>
+{% endfor %}
+
+<details class="card orientation-create">
+    <summary><span><span class="card-icon" aria-hidden="true">＋</span><span><strong>Weitere Orientierung ergänzen</strong><small>Für individuelle feste Perspektiven außerhalb des Systemkatalogs</small></span></span><span aria-hidden="true">⌄</span></summary>
     <form class="form-grid" method="post" action="/admin/orientations" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>Technischer Schlüssel<input type="text" name="key" maxlength="80" pattern="[a-z0-9-]+" required placeholder="z. B. detail-motorraum"></label>
@@ -38,8 +100,8 @@
         <label>Standard-Anzahl<input type="number" name="default_instance_count" min="1" max="50" value="1" required></label>
         <label>Maximale Anzahl<input type="number" name="max_instances" min="1" max="50" value="1" required></label>
         <label class="span-2">Aufnahme-Silhouette (transparentes PNG)<input type="file" name="silhouette" accept="image/png"></label>
-        <div class="choice-row"><label class="toggle"><input type="checkbox" name="is_required"><span>Pflicht</span></label><label class="toggle"><input type="checkbox" name="is_repeatable"><span>Wiederholbar</span></label></div>
+        <div class="choice-row span-2"><label class="toggle"><input type="checkbox" name="is_required"><span>Pflicht</span></label><label class="toggle"><input type="checkbox" name="is_repeatable"><span>Wiederholbar</span></label></div>
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Orientierung anlegen</button></div>
     </form>
-</section>
+</details>
 {% endblock %}
