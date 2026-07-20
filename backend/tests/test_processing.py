@@ -6,7 +6,9 @@ import pytest
 from PIL import Image, ImageDraw
 
 from app.config import Settings
+from app.models import Background, BackgroundOrientationComposition
 from app.processing import (
+    BackgroundComposition,
     CompositionOptions,
     OverlayLayer,
     SceneAdjustment,
@@ -20,6 +22,7 @@ from app.processing import (
     infer_vehicle_perspective,
     measure_vehicle_contour,
     perspective_composition_options,
+    resolve_background_composition,
 )
 
 
@@ -27,6 +30,64 @@ def image_bytes(image: Image.Image, format_name: str) -> bytes:
     output = io.BytesIO()
     image.save(output, format=format_name)
     return output.getvalue()
+
+
+def test_background_composition_uses_background_defaults() -> None:
+    background = Background(
+        dealership_id="00000000-0000-0000-0000-000000000001",
+        name="Standard",
+        object_key="background.jpg",
+        content_type="image/jpeg",
+        contour_target_area_percent=35,
+        contour_max_width_percent=77,
+        contour_max_height_percent=70,
+        vehicle_bottom_percent=88,
+        shadow_opacity_percent=38,
+        reflection_opacity_percent=8,
+        brightness_percent=102,
+    )
+
+    assert resolve_background_composition(background, None) == BackgroundComposition(
+        contour_target_area_percent=35,
+        contour_max_width_percent=77,
+        contour_max_height_percent=70,
+        vehicle_bottom_percent=88,
+        shadow_opacity_percent=38,
+        reflection_opacity_percent=8,
+        brightness_percent=102,
+    )
+
+
+def test_background_composition_only_overrides_selected_orientation_values() -> None:
+    background = Background(
+        dealership_id="00000000-0000-0000-0000-000000000001",
+        name="Standard",
+        object_key="background.jpg",
+        content_type="image/jpeg",
+        contour_target_area_percent=36,
+        contour_max_width_percent=78,
+        contour_max_height_percent=72,
+        vehicle_bottom_percent=90,
+        shadow_opacity_percent=32,
+        reflection_opacity_percent=10,
+        brightness_percent=100,
+    )
+    override = BackgroundOrientationComposition(
+        background_id="00000000-0000-0000-0000-000000000002",
+        orientation_id="00000000-0000-0000-0000-000000000003",
+        vehicle_bottom_percent=94,
+        shadow_opacity_percent=45,
+    )
+
+    assert resolve_background_composition(background, override) == BackgroundComposition(
+        contour_target_area_percent=36,
+        contour_max_width_percent=78,
+        contour_max_height_percent=72,
+        vehicle_bottom_percent=94,
+        shadow_opacity_percent=45,
+        reflection_opacity_percent=10,
+        brightness_percent=100,
+    )
 
 
 @pytest.mark.parametrize(

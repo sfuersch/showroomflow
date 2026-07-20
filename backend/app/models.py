@@ -138,6 +138,9 @@ class Background(Timestamped, Base):
     name: Mapped[str] = mapped_column(String(160))
     object_key: Mapped[str] = mapped_column(String(500), unique=True)
     content_type: Mapped[str] = mapped_column(String(100))
+    contour_target_area_percent: Mapped[int] = mapped_column(Integer, default=36)
+    contour_max_width_percent: Mapped[int] = mapped_column(Integer, default=78)
+    contour_max_height_percent: Mapped[int] = mapped_column(Integer, default=72)
     vehicle_scale_percent: Mapped[int] = mapped_column(Integer, default=78)
     vehicle_bottom_percent: Mapped[int] = mapped_column(Integer, default=90)
     shadow_opacity_percent: Mapped[int] = mapped_column(Integer, default=32)
@@ -150,6 +153,34 @@ class Background(Timestamped, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     locations: Mapped[list[Location]] = relationship(secondary="background_locations")
+
+
+class BackgroundOrientationComposition(Timestamped, Base):
+    __tablename__ = "background_orientation_compositions"
+    __table_args__ = (
+        UniqueConstraint(
+            "background_id",
+            "orientation_id",
+            name="uq_background_orientation_composition",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    background_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("backgrounds.id", ondelete="CASCADE"), index=True
+    )
+    orientation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("orientations.id", ondelete="CASCADE"), index=True
+    )
+    contour_target_area_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    contour_max_width_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    contour_max_height_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vehicle_bottom_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shadow_opacity_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reflection_opacity_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    brightness_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    orientation: Mapped["Orientation"] = relationship()
 
 
 class ImageOverlayLocation(Base):

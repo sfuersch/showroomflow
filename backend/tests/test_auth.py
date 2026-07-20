@@ -16,6 +16,7 @@ from app.main import app
 from app.exporting import try_enqueue_auto_export
 from app.models import (
     Background,
+    BackgroundOrientationComposition,
     Brand,
     CaptureStep,
     Dealership,
@@ -176,15 +177,14 @@ def test_system_admin_configures_image_service_and_dealership_credits() -> None:
     settings_page = client.get("/admin/image-service")
     assert settings_page.status_code == 200
     assert "Bilddienstleister und Credits" in settings_page.text
+    assert "direkt am jeweiligen Hintergrund" in settings_page.text
+    assert 'name="contour_target_area_percent"' not in settings_page.text
 
     settings_response = client.post(
         "/admin/image-service",
         data={
             "provider": "photoroom",
             "default_monthly_vehicle_credits": "40",
-            "contour_target_area_percent": "37",
-            "contour_max_width_percent": "79",
-            "contour_max_height_percent": "73",
             "photoroom_sandbox": "on",
             "comparison_mode_enabled": "on",
             "csrf_token": csrf_from(settings_page.text),
@@ -219,9 +219,6 @@ def test_system_admin_configures_image_service_and_dealership_credits() -> None:
         assert image_settings.photoroom_sandbox is True
         assert image_settings.comparison_mode_enabled is True
         assert image_settings.default_monthly_vehicle_credits == 40
-        assert image_settings.contour_target_area_percent == 37
-        assert image_settings.contour_max_width_percent == 79
-        assert image_settings.contour_max_height_percent == 73
         assert dealership is not None
         assert dealership.monthly_vehicle_credits == 25
         assert dealership.additional_vehicle_credits == 7
@@ -949,6 +946,92 @@ def test_admin_uploads_background_with_location_assignment() -> None:
         assert background is not None
         assert background.brand_id == brand_id
         assert [item.id for item in background.locations] == [location_id]
+
+
+def test_system_admin_configures_background_defaults_and_orientation_override() -> None:
+    dealership, _ = create_dealership_admin()
+    create_system_admin()
+    with TestingSession() as db:
+        background = Background(
+            dealership_id=dealership.id,
+            name="Standard",
+            object_key="configuration/standard.jpg",
+            content_type="image/jpeg",
+        )
+        db.add(background)
+        db.commit()
+        background_id = background.id
+
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        login_page = client.get("/admin/login")
+        client.post(
+            "/admin/login",
+            data={
+                "email": "system@example.com",
+                "password": "a-secure-system-password",
+                "csrf_token": csrf_from(login_page.text),
+            },
+        )
+        configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+        with TestingSession() as db:
+            orientation = db.scalar(select(Orientation).where(Orientation.key == "front-right"))
+            assert orientation is not None
+            orientation_id = orientation.id
+
+        response = client.post(
+            f"/admin/backgrounds/{background_id}",
+            data={
+                "name": "Standard",
+                "contour_target_area_percent": "38",
+                "contour_max_width_percent": "80",
+                "contour_max_height_percent": "74",
+                "vehicle_bottom_percent": "91",
+                "shadow_opacity_percent": "36",
+                "reflection_opacity_percent": "8",
+                "brightness_percent": "102",
+                "scene_horizon_percent": "43",
+                "scene_reference_vertical_degrees": "0",
+                "scene_perspective_strength_percent": "35",
+                "composition_orientation_ids": str(orientation_id),
+                "custom_composition_orientation_ids": str(orientation_id),
+                "orientation_target_area_percents": "",
+                "orientation_max_width_percents": "",
+                "orientation_max_height_percents": "",
+                "orientation_bottom_percents": "94",
+                "orientation_shadow_percents": "48",
+                "orientation_reflection_percents": "",
+                "orientation_brightness_percents": "",
+                "is_active": "on",
+                "csrf_token": csrf_from(configuration_page.text),
+            },
+            follow_redirects=True,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert response.status_code == 200
+    assert "Hintergrund wurde gespeichert" in response.text
+    assert "Standard-Bildkomposition" in response.text
+    assert "Abweichungen je Orientierung" in response.text
+    assert 'aria-label="Information anzeigen"' in response.text
+    with TestingSession() as db:
+        background = db.get(Background, background_id)
+        override = db.scalar(
+            select(BackgroundOrientationComposition).where(
+                BackgroundOrientationComposition.background_id == background_id,
+                BackgroundOrientationComposition.orientation_id == orientation_id,
+            )
+        )
+        assert background is not None
+        assert background.contour_target_area_percent == 38
+        assert background.shadow_opacity_percent == 36
+        assert override is not None
+        assert override.vehicle_bottom_percent == 94
+        assert override.shadow_opacity_percent == 48
+        assert override.contour_target_area_percent is None
+        assert override.brightness_percent is None
 
 
 def test_system_admin_manages_tenant_overlay_and_supplemental_image() -> None:

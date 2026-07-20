@@ -1,4 +1,7 @@
 {% extends "admin/base.html" %}
+{% macro field_info(text) -%}
+<details class="field-info"><summary aria-label="Information anzeigen">i</summary><span>{{ text }}</span></details>
+{%- endmacro %}
 {% block title %}Foto-Konfiguration · {{ dealership.name }}{% endblock %}
 {% block content %}
 {% if current_user.role.value == 'system_admin' %}
@@ -33,25 +36,55 @@
     <div class="section-heading"><div><h2>Hintergründe</h2><p>Ohne Standortauswahl gilt ein Hintergrund an allen Standorten. Die Fahrzeuggröße wird automatisch aus der erkannten Kontur berechnet und zentral durch den Superadmin abgestimmt.</p></div><span class="count">{{ backgrounds|length }}</span></div>
     <div class="background-grid">
         {% for background in backgrounds %}
+        {% set background_overrides = composition_overrides_by_background.get(background.id, {}) %}
         <form class="asset-card" method="post" action="/admin/backgrounds/{{ background.id }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <img src="{{ background_previews[background.id] }}" alt="Vorschau {{ background.name }}">
             <label>Name<input type="text" name="name" value="{{ background.name }}" maxlength="160" required></label>
             <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}" {% if background.brand_id == brand.id %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
             <fieldset class="choice-group"><legend>Standorte</legend>{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in background.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}{% if not locations %}<span class="muted">Noch keine Standorte vorhanden.</span>{% endif %}</fieldset>
+            <h3 class="composition-heading">Standard-Bildkomposition</h3>
             <div class="form-grid">
-                <label>Bodenposition (%)<input type="number" name="vehicle_bottom_percent" min="55" max="98" value="{{ background.vehicle_bottom_percent }}" required></label>
-                <label>Schattenintensität (%)<input type="number" name="shadow_opacity_percent" min="0" max="80" value="{{ background.shadow_opacity_percent }}" required><small>0 = aus, 1–29 = weich, ab 30 = kräftiger Kontaktschatten</small></label>
-                <label>Reflexion (%)<input type="number" name="reflection_opacity_percent" min="0" max="60" value="{{ background.reflection_opacity_percent }}" required></label>
-                <label>Fahrzeughelligkeit (%)<input type="number" name="brightness_percent" min="50" max="150" value="{{ background.brightness_percent }}" required></label>
+                <label><span class="field-label">Ziel-Flächenanteil (%){{ field_info('Bestimmt, wie viel Prozent der gesamten Bildfläche die erkannte Fahrzeugkontur ungefähr einnimmt. Ein höherer Wert stellt das Fahrzeug größer dar.') }}</span><input type="number" name="contour_target_area_percent" min="15" max="60" value="{{ background.contour_target_area_percent }}" required></label>
+                <label><span class="field-label">Maximale Breite (%){{ field_info('Begrenzt die Fahrzeugbreite relativ zur Bildbreite und verhindert, dass lange Seitenansichten an den Rand geraten.') }}</span><input type="number" name="contour_max_width_percent" min="40" max="95" value="{{ background.contour_max_width_percent }}" required></label>
+                <label><span class="field-label">Maximale Höhe (%){{ field_info('Begrenzt die Fahrzeughöhe relativ zur Bildhöhe. Besonders relevant für Front-, Heck- und hohe Fahrzeuge.') }}</span><input type="number" name="contour_max_height_percent" min="40" max="90" value="{{ background.contour_max_height_percent }}" required></label>
+                <label><span class="field-label">Bodenposition (%){{ field_info('Legt die vertikale Kontaktlinie der Reifen fest. Ein höherer Wert setzt das Fahrzeug weiter nach unten.') }}</span><input type="number" name="vehicle_bottom_percent" min="55" max="98" value="{{ background.vehicle_bottom_percent }}" required></label>
+                <label><span class="field-label">Schattenintensität (%){{ field_info('0 deaktiviert den Schatten. Werte von 1 bis 29 erzeugen einen weichen Schatten, ab 30 wird ein kräftiger Kontaktschatten verwendet.') }}</span><input type="number" name="shadow_opacity_percent" min="0" max="80" value="{{ background.shadow_opacity_percent }}" required></label>
+                <label><span class="field-label">Reflexion (%){{ field_info('Steuert die sichtbare Spiegelung des Fahrzeugs unterhalb der Bodenlinie. 0 deaktiviert die Reflexion.') }}</span><input type="number" name="reflection_opacity_percent" min="0" max="60" value="{{ background.reflection_opacity_percent }}" required></label>
+                <label><span class="field-label">Fahrzeughelligkeit (%){{ field_info('Passt ausschließlich die Helligkeit des freigestellten Fahrzeugs an den Hintergrund an. 100 bedeutet unverändert.') }}</span><input type="number" name="brightness_percent" min="50" max="150" value="{{ background.brightness_percent }}" required></label>
             </div>
+            <details class="composition-overrides">
+                <summary>Abweichungen je Orientierung <span class="count">{{ background_overrides|length }}</span></summary>
+                <p class="muted">Aktiviere ein Profil nur dort, wo diese Orientierung vom Hintergrundstandard abweichen soll. Leere Felder erben weiterhin den jeweiligen Standardwert.</p>
+                <div class="composition-table-wrap">
+                    <table class="composition-table">
+                        <thead><tr><th>Orientierung</th><th>Eigenes Profil</th><th>Fläche {{ field_info('Ziel-Flächenanteil der Fahrzeugkontur.') }}</th><th>Breite {{ field_info('Maximale Fahrzeugbreite im Bild.') }}</th><th>Höhe {{ field_info('Maximale Fahrzeughöhe im Bild.') }}</th><th>Boden {{ field_info('Höherer Wert setzt das Fahrzeug tiefer.') }}</th><th>Schatten {{ field_info('0 = aus, 1–29 = weich, ab 30 = kräftig.') }}</th><th>Reflexion {{ field_info('Deckkraft der Spiegelung unter dem Fahrzeug.') }}</th><th>Helligkeit {{ field_info('100 = unveränderte Fahrzeughelligkeit.') }}</th></tr></thead>
+                        <tbody>
+                        {% for orientation in composition_orientations %}
+                        {% set override = background_overrides.get(orientation.id) %}
+                        <tr>
+                            <td><input type="hidden" name="composition_orientation_ids" value="{{ orientation.id }}"><strong>{{ orientation.name }}</strong></td>
+                            <td><label class="toggle compact-toggle"><input type="checkbox" name="custom_composition_orientation_ids" value="{{ orientation.id }}" {% if override %}checked{% endif %}><span>Aktiv</span></label></td>
+                            <td><input aria-label="Fläche {{ orientation.name }}" type="number" name="orientation_target_area_percents" min="15" max="60" value="{{ override.contour_target_area_percent if override and override.contour_target_area_percent is not none else '' }}" placeholder="{{ background.contour_target_area_percent }}"></td>
+                            <td><input aria-label="Breite {{ orientation.name }}" type="number" name="orientation_max_width_percents" min="40" max="95" value="{{ override.contour_max_width_percent if override and override.contour_max_width_percent is not none else '' }}" placeholder="{{ background.contour_max_width_percent }}"></td>
+                            <td><input aria-label="Höhe {{ orientation.name }}" type="number" name="orientation_max_height_percents" min="40" max="90" value="{{ override.contour_max_height_percent if override and override.contour_max_height_percent is not none else '' }}" placeholder="{{ background.contour_max_height_percent }}"></td>
+                            <td><input aria-label="Boden {{ orientation.name }}" type="number" name="orientation_bottom_percents" min="55" max="98" value="{{ override.vehicle_bottom_percent if override and override.vehicle_bottom_percent is not none else '' }}" placeholder="{{ background.vehicle_bottom_percent }}"></td>
+                            <td><input aria-label="Schatten {{ orientation.name }}" type="number" name="orientation_shadow_percents" min="0" max="80" value="{{ override.shadow_opacity_percent if override and override.shadow_opacity_percent is not none else '' }}" placeholder="{{ background.shadow_opacity_percent }}"></td>
+                            <td><input aria-label="Reflexion {{ orientation.name }}" type="number" name="orientation_reflection_percents" min="0" max="60" value="{{ override.reflection_opacity_percent if override and override.reflection_opacity_percent is not none else '' }}" placeholder="{{ background.reflection_opacity_percent }}"></td>
+                            <td><input aria-label="Helligkeit {{ orientation.name }}" type="number" name="orientation_brightness_percents" min="50" max="150" value="{{ override.brightness_percent if override and override.brightness_percent is not none else '' }}" placeholder="{{ background.brightness_percent }}"></td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
             <fieldset class="choice-group">
                 <legend>Perspektivische Szene (Beta)</legend>
                 <label class="check-row"><input type="checkbox" name="scene_projection_enabled" {% if background.scene_projection_enabled %}checked{% endif %}><span><strong>Für Testorientierungen verwenden</strong><small>Aktiv für Vorne links, Links, Hinten links und Hinten. Nutzt die bei der Aufnahme gemessene Gerätepose.</small></span></label>
                 <div class="form-grid">
-                    <label>Horizont im Hintergrund (%)<input type="number" name="scene_horizon_percent" min="25" max="70" value="{{ background.scene_horizon_percent }}" required></label>
-                    <label>Referenz-Neigung (°)<input type="number" name="scene_reference_vertical_degrees" min="-30" max="30" value="{{ background.scene_reference_vertical_degrees }}" required></label>
-                    <label>Perspektivstärke (%)<input type="number" name="scene_perspective_strength_percent" min="0" max="100" value="{{ background.scene_perspective_strength_percent }}" required></label>
+                    <label><span class="field-label">Horizont im Hintergrund (%){{ field_info('Markiert die Höhe, an der Boden und Hintergrund optisch zusammentreffen. Dieser Wert beeinflusst die perspektivische Platzierung.') }}</span><input type="number" name="scene_horizon_percent" min="25" max="70" value="{{ background.scene_horizon_percent }}" required></label>
+                    <label><span class="field-label">Referenz-Neigung (°){{ field_info('Definiert die Geräte-Neigung, für die das Hintergrundbild perspektivisch aufgenommen wurde. 0° entspricht einer waagerechten Referenz.') }}</span><input type="number" name="scene_reference_vertical_degrees" min="-30" max="30" value="{{ background.scene_reference_vertical_degrees }}" required></label>
+                    <label><span class="field-label">Perspektivstärke (%){{ field_info('Bestimmt, wie deutlich die gemessene Gerätepose Größe, Bodenposition und Schatten beeinflusst. 0 deaktiviert diese Korrektur.') }}</span><input type="number" name="scene_perspective_strength_percent" min="0" max="100" value="{{ background.scene_perspective_strength_percent }}" required></label>
                 </div>
                 <small class="muted">Startwerte: Horizont 43 %, Referenz-Neigung 0°, Stärke 35 %. Der Modus bleibt bei allen anderen Orientierungen wirkungslos.</small>
             </fieldset>
