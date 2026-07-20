@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import httpx
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -38,7 +38,7 @@ from app.thumbnails import create_thumbnail, thumbnail_key
 logger = logging.getLogger(__name__)
 
 WINDOW_MASK_SEGMENTATION_PROMPT = "windshield, side window"
-WINDOW_BACKGROUND_OPACITY_PERCENT = 86
+INSTRUMENT_CLUSTER_SEGMENTATION_PROMPT = "instrument cluster"
 
 
 class ImageProcessingError(RuntimeError):
@@ -566,6 +566,8 @@ def compose_background_through_windows(
     window_mask_png_bytes: bytes,
     background_bytes: bytes,
     settings: Settings,
+    *,
+    protected_foreground_mask_png_bytes: bytes | None = None,
 ) -> bytes:
     """Replace only AI-selected glass while preserving every other original pixel."""
     try:
@@ -577,8 +579,55 @@ def compose_background_through_windows(
         if window_alpha.size != original.size:
             window_alpha = window_alpha.resize(original.size, Image.Resampling.LANCZOS)
 
-        histogram = window_alpha.histogram()
-        selected_fraction = sum(histogram[16:]) / (window_alpha.width * window_alpha.height)
+        protected_alpha = Image.new("L", original.size, 0)
+        if protected_foreground_mask_png_bytes is not None:
+            protected_foreground = Image.open(
+                io.BytesIO(protected_foreground_mask_png_bytes)
+            ).convert("RGBA")
+            protected_alpha = protected_foreground.getchannel("A")
+            if protected_alpha.size != original.size:
+                protected_alpha = protected_alpha.resize(
+                    original.size,
+                    Image.Resampling.LANCZOS,
+                )
+
+        # A dedicated AI mask normally protects the instrument cluster. This
+        # conservative local fallback also preserves very dark cluster pixels
+        # when the text-guided service misses a black, unlit display.
+        grayscale = ImageOps.grayscale(original.convert("RGB"))
+        dark_pixels = grayscale.point(lambda value: 255 if value < 55 else 0)
+        cluster_region = Image.new("L", original.size, 0)
+        ImageDraw.Draw(cluster_region).rectangle(
+            (
+                round(original.width * 0.27),
+                round(original.height * 0.10),
+                round(original.width * 0.77),
+                round(original.height * 0.48),
+            ),
+            fill=255,
+        )
+        local_cluster_protection = ImageChops.multiply(dark_pixels, cluster_region)
+
+        expansion_size = max(3, round(max(original.size) * 0.012))
+        if expansion_size % 2 == 0:
+            expansion_size += 1
+        local_cluster_protection = local_cluster_protection.filter(
+            ImageFilter.MaxFilter(expansion_size)
+        ).filter(ImageFilter.GaussianBlur(max(1, expansion_size // 6)))
+        protected_alpha = ImageChops.lighter(protected_alpha, local_cluster_protection)
+        protected_alpha = protected_alpha.filter(ImageFilter.MaxFilter(expansion_size))
+
+        # The service returns alpha=255 for selected glass. Subtract protected
+        # foreground before compositing so the dashboard cannot be cut away.
+        replacement_alpha = ImageChops.multiply(
+            window_alpha,
+            ImageOps.invert(protected_alpha),
+        )
+
+        histogram = replacement_alpha.histogram()
+        selected_fraction = sum(histogram[16:]) / (
+            replacement_alpha.width * replacement_alpha.height
+        )
         if selected_fraction < 0.02:
             raise ImageProcessingError("Photoroom hat keine Scheibenfläche erkannt")
         if selected_fraction > 0.75:
@@ -603,14 +652,11 @@ def compose_background_through_windows(
         method=Image.Resampling.LANCZOS,
     )
     contained_window_alpha = ImageOps.contain(
-        window_alpha,
+        replacement_alpha,
         output_size,
         method=Image.Resampling.LANCZOS,
     )
-    replacement_alpha = contained_window_alpha.point(
-        lambda value: round(value * WINDOW_BACKGROUND_OPACITY_PERCENT / 100)
-    )
-    foreground.putalpha(replacement_alpha.point(lambda value: 255 - value))
+    foreground.putalpha(contained_window_alpha.point(lambda value: 255 - value))
     position = (
         (settings.output_width - foreground.width) // 2,
         (settings.output_height - foreground.height) // 2,
@@ -1007,11 +1053,18 @@ def process_photo(photo_id: str) -> None:
                     photoroom_sandbox_active(image_settings, settings),
                     segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
                 )
+                instrument_cluster_mask = create_photoroom_cutout(
+                    original,
+                    settings,
+                    photoroom_sandbox_active(image_settings, settings),
+                    segmentation_prompt=INSTRUMENT_CLUSTER_SEGMENTATION_PROMPT,
+                )
                 finished = compose_background_through_windows(
                     original,
                     window_mask,
                     background_image,
                     settings,
+                    protected_foreground_mask_png_bytes=instrument_cluster_mask,
                 )
             elif image_settings.provider == "photoroom":
                 finished = create_photoroom_showroom(
@@ -1186,11 +1239,18 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                     photoroom_sandbox_active(image_settings, settings),
                     segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
                 )
+                instrument_cluster_mask = create_photoroom_cutout(
+                    original,
+                    settings,
+                    photoroom_sandbox_active(image_settings, settings),
+                    segmentation_prompt=INSTRUMENT_CLUSTER_SEGMENTATION_PROMPT,
+                )
                 finished = compose_background_through_windows(
                     original,
                     window_mask,
                     background_image,
                     settings,
+                    protected_foreground_mask_png_bytes=instrument_cluster_mask,
                 )
             else:
                 finished = create_photoroom_showroom(
