@@ -98,6 +98,35 @@ def test_vehicle_perspective_uses_step_name_with_contour_fallback(
     assert infer_vehicle_perspective(step_name, contour) == expected
 
 
+@pytest.mark.parametrize(
+    ("orientation_key", "expected"),
+    [
+        ("front-right", "diagonal"),
+        ("front-left", "diagonal"),
+        ("rear-right", "diagonal"),
+        ("rear-left", "diagonal"),
+        ("right", "side"),
+        ("left", "side"),
+        ("front", "straight"),
+        ("rear", "straight"),
+    ],
+)
+def test_vehicle_perspective_prefers_orientation_key(
+    orientation_key: str,
+    expected: str,
+) -> None:
+    # Use an intentionally ambiguous name and a side-like contour to prove the
+    # centrally managed orientation wins over the geometric fallback.
+    assert (
+        infer_vehicle_perspective(
+            "Vorne rechts",
+            VehicleContour(1900, 700),
+            orientation_key,
+        )
+        == expected
+    )
+
+
 def test_perspective_composition_raises_side_and_straight_views() -> None:
     base = CompositionOptions(vehicle_bottom_percent=90, capture_step_name="Seite links")
     side = perspective_composition_options(base, VehicleContour(1800, 700))
@@ -116,7 +145,8 @@ def test_perspective_composition_raises_side_and_straight_views() -> None:
 def test_perspective_composition_keeps_diagonal_on_configured_ground_line() -> None:
     base = CompositionOptions(
         vehicle_bottom_percent=90,
-        capture_step_name="Diagonal vorne links",
+        capture_step_name="Vorne links",
+        orientation_key="front-left",
     )
 
     diagonal = perspective_composition_options(base, VehicleContour(1400, 900))
