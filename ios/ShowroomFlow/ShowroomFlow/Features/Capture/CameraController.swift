@@ -3,6 +3,27 @@ import CoreMotion
 import Foundation
 import UIKit
 
+struct CameraCaptureMetadata: Codable, Equatable {
+    let horizonAngleDegrees: Double
+    let verticalAngleDegrees: Double
+    let yawAngleDegrees: Double
+    let fieldOfViewDegrees: Double
+    let motionAvailable: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case horizonAngleDegrees = "horizon_angle_degrees"
+        case verticalAngleDegrees = "vertical_angle_degrees"
+        case yawAngleDegrees = "yaw_angle_degrees"
+        case fieldOfViewDegrees = "field_of_view_degrees"
+        case motionAvailable = "motion_available"
+    }
+}
+
+struct CapturedCameraPhoto {
+    let data: Data
+    let metadata: CameraCaptureMetadata
+}
+
 final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
     let session = AVCaptureSession()
 
@@ -11,6 +32,7 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
     @Published private(set) var previewRotationAngle: CGFloat = 0
     @Published private(set) var horizonAngle: Double = 0
     @Published private(set) var verticalAngle: Double = 0
+    @Published private(set) var yawAngle: Double = 0
     @Published private(set) var isMotionAvailable = false
     @Published private(set) var errorMessage: String?
 
@@ -24,7 +46,9 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
     }()
     private let sessionQueue = DispatchQueue(label: "com.promotekk.showroomflow.camera")
     private var isConfigured = false
-    private var photoContinuation: CheckedContinuation<Data, Error>?
+    private var photoContinuation: CheckedContinuation<CapturedCameraPhoto, Error>?
+    private var pendingCaptureMetadata: CameraCaptureMetadata?
+    private var fieldOfViewDegrees: Double = 65
     private var orientationObserver: NSObjectProtocol?
 
     override init() {
@@ -50,6 +74,9 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     func start() async {
+        if !motionManager.isDeviceMotionActive {
+            startMotionUpdates()
+        }
         guard await cameraAccessGranted() else {
             await MainActor.run {
                 errorMessage = "Bitte erlauben Sie ShowroomFlow den Kamerazugriff in den Einstellungen."
@@ -90,9 +117,10 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
         motionManager.stopDeviceMotionUpdates()
     }
 
-    func capturePhoto() async throws -> Data {
+    func capturePhoto() async throws -> CapturedCameraPhoto {
         guard isReady else { throw CameraError.unavailable }
         guard isLandscape else { throw CameraError.landscapeRequired }
+        let captureMetadata = currentCaptureMetadata()
         return try await withCheckedThrowingContinuation { continuation in
             sessionQueue.async { [weak self] in
                 guard let self else {
@@ -104,6 +132,7 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
                     return
                 }
                 self.photoContinuation = continuation
+                self.pendingCaptureMetadata = captureMetadata
                 let settings = AVCapturePhotoSettings(
                     format: [AVVideoCodecKey: AVVideoCodecType.jpeg]
                 )
@@ -149,6 +178,7 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
         session.addInput(input)
         session.addOutput(photoOutput)
         photoOutput.maxPhotoQualityPrioritization = .quality
+        fieldOfViewDegrees = Double(device.activeFormat.videoFieldOfView)
         isConfigured = true
     }
 
@@ -174,11 +204,14 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     private func startMotionUpdates() {
-        guard motionManager.isDeviceMotionAvailable else { return }
+        guard motionManager.isDeviceMotionAvailable, !motionManager.isDeviceMotionActive else {
+            return
+        }
         isMotionAvailable = true
         motionManager.deviceMotionUpdateInterval = 1.0 / 20.0
         motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, _ in
-            guard let self, let gravity = motion?.gravity else { return }
+            guard let self, let motion else { return }
+            let gravity = motion.gravity
             let horizonRadians = atan2(-gravity.y, abs(gravity.x))
             let verticalRadians = atan2(
                 gravity.z,
@@ -186,12 +219,24 @@ final class CameraController: NSObject, ObservableObject, @unchecked Sendable {
             )
             let horizon = horizonRadians * 180 / .pi
             let vertical = verticalRadians * 180 / .pi
+            let yaw = motion.attitude.yaw * 180 / .pi
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 horizonAngle = (horizonAngle * 0.72) + (horizon * 0.28)
                 verticalAngle = (verticalAngle * 0.72) + (vertical * 0.28)
+                yawAngle = yaw
             }
         }
+    }
+
+    private func currentCaptureMetadata() -> CameraCaptureMetadata {
+        CameraCaptureMetadata(
+            horizonAngleDegrees: horizonAngle,
+            verticalAngleDegrees: verticalAngle,
+            yawAngleDegrees: yawAngle,
+            fieldOfViewDegrees: fieldOfViewDegrees,
+            motionAvailable: isMotionAvailable
+        )
     }
 
     private func applyPhotoRotation(for orientation: UIDeviceOrientation) {
@@ -225,10 +270,12 @@ extension CameraController: AVCapturePhotoCaptureDelegate {
     ) {
         let continuation = photoContinuation
         photoContinuation = nil
+        let metadata = pendingCaptureMetadata
+        pendingCaptureMetadata = nil
         if let error {
             continuation?.resume(throwing: error)
-        } else if let data = photo.fileDataRepresentation() {
-            continuation?.resume(returning: data)
+        } else if let data = photo.fileDataRepresentation(), let metadata {
+            continuation?.resume(returning: CapturedCameraPhoto(data: data, metadata: metadata))
         } else {
             continuation?.resume(throwing: CameraError.invalidPhoto)
         }

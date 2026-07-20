@@ -2181,6 +2181,10 @@ def update_background(
     shadow_opacity_percent: int = Form(default=32),
     reflection_opacity_percent: int = Form(default=10),
     brightness_percent: int = Form(default=100),
+    scene_projection_enabled: str | None = Form(default=None),
+    scene_horizon_percent: int = Form(default=43),
+    scene_reference_vertical_degrees: int = Form(default=0),
+    scene_perspective_strength_percent: int = Form(default=35),
     is_active: str | None = Form(default=None),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
@@ -2199,6 +2203,9 @@ def update_background(
         and 0 <= shadow_opacity_percent <= 80
         and 0 <= reflection_opacity_percent <= 60
         and 50 <= brightness_percent <= 150
+        and 25 <= scene_horizon_percent <= 70
+        and -30 <= scene_reference_vertical_degrees <= 30
+        and 0 <= scene_perspective_strength_percent <= 100
     )
     if not cleaned_name or not values_valid:
         _flash(request, "Bitte prüfen Sie Name und Showroom-Einstellungen.", "error")
@@ -2211,6 +2218,10 @@ def update_background(
         background.shadow_opacity_percent = shadow_opacity_percent
         background.reflection_opacity_percent = reflection_opacity_percent
         background.brightness_percent = brightness_percent
+        background.scene_projection_enabled = scene_projection_enabled == "on"
+        background.scene_horizon_percent = scene_horizon_percent
+        background.scene_reference_vertical_degrees = scene_reference_vertical_degrees
+        background.scene_perspective_strength_percent = scene_perspective_strength_percent
         background.is_active = is_active == "on"
         db.commit()
         _flash(request, "Hintergrund wurde gespeichert.")

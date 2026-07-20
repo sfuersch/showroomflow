@@ -1514,6 +1514,13 @@ def test_guided_capture_upload_tracks_progress_and_revision() -> None:
                 "capture_step_id": str(step_id),
                 "content_type": "image/jpeg",
                 "size_bytes": 1234,
+                "capture_metadata": {
+                    "horizon_angle_degrees": 1.5,
+                    "vertical_angle_degrees": -3.0,
+                    "yaw_angle_degrees": 12.0,
+                    "field_of_view_degrees": 68.0,
+                    "motion_available": True,
+                },
             },
         )
         first_complete = client.post(
@@ -1542,6 +1549,16 @@ def test_guided_capture_upload_tracks_progress_and_revision() -> None:
     assert initial_session.json()["photos"] == []
     assert first_upload.status_code == 201
     assert first_upload.json()["revision"] == 1
+    with TestingSession() as db:
+        stored_photo = db.get(PhotoAsset, uuid.UUID(first_upload.json()["photo_id"]))
+        assert stored_photo is not None
+        assert stored_photo.capture_metadata == {
+            "horizon_angle_degrees": 1.5,
+            "vertical_angle_degrees": -3.0,
+            "yaw_angle_degrees": 12.0,
+            "field_of_view_degrees": 68.0,
+            "motion_available": True,
+        }
     assert first_complete.status_code == 200
     assert first_complete.json()["thumbnail_url"].endswith(".thumbnail.jpg?expires=900")
     assert second_upload.json()["revision"] == 2

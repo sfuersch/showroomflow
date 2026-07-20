@@ -25,6 +25,7 @@ from app.models import (
     CaptureStep,
     ImageOverlay,
     JobStatus,
+    Orientation,
     PhotoAsset,
     PhotoProcessingVariant,
     ProcessingStatus,
@@ -52,6 +53,12 @@ class CompositionOptions:
     reflection_opacity_percent: int = 10
     brightness_percent: int = 100
     capture_step_name: str = ""
+    orientation_key: str = ""
+    capture_metadata: dict | None = None
+    scene_projection_enabled: bool = False
+    scene_horizon_percent: int = 43
+    scene_reference_vertical_degrees: int = 0
+    scene_perspective_strength_percent: int = 35
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,70 @@ class VehicleContour:
 class ContourFraming:
     width_fraction: float
     height_fraction: float
+
+
+@dataclass(frozen=True)
+class SceneAdjustment:
+    scale_multiplier: float = 1.0
+    bottom_shift_fraction: float = 0.0
+    rotation_degrees: float = 0.0
+    shadow_depth_multiplier: float = 1.0
+
+
+SCENE_TEST_ORIENTATIONS = frozenset({"front-left", "left", "rear-left", "rear"})
+
+
+def calculate_scene_adjustment(options: CompositionOptions) -> SceneAdjustment:
+    """Project capture pose onto a calibrated virtual ground plane.
+
+    This deliberately stays subtle: a two-dimensional vehicle cutout cannot be
+    re-rendered from another viewpoint, but pose-aware scale, ground contact and
+    roll correction make the placement measurably more consistent.
+    """
+    if (
+        not options.scene_projection_enabled
+        or options.orientation_key not in SCENE_TEST_ORIENTATIONS
+        or not options.capture_metadata
+        or not options.capture_metadata.get("motion_available", False)
+    ):
+        return SceneAdjustment()
+
+    metadata = options.capture_metadata
+    strength = max(0.0, min(1.0, options.scene_perspective_strength_percent / 100))
+    try:
+        vertical = float(metadata.get("vertical_angle_degrees", 0.0))
+        horizon_angle = float(metadata.get("horizon_angle_degrees", 0.0))
+        field_of_view = float(metadata.get("field_of_view_degrees", 65.0))
+    except (TypeError, ValueError):
+        return SceneAdjustment()
+    if not all(math.isfinite(value) for value in (vertical, horizon_angle, field_of_view)):
+        return SceneAdjustment()
+    field_of_view = max(40.0, min(100.0, field_of_view))
+    pitch_delta = max(
+        -15.0,
+        min(15.0, vertical - options.scene_reference_vertical_degrees),
+    )
+
+    ground_depth = max(
+        0.12,
+        options.vehicle_bottom_percent / 100 - options.scene_horizon_percent / 100,
+    )
+    bottom_shift = max(
+        -0.025,
+        min(0.025, -(pitch_delta / 90) * ground_depth * strength),
+    )
+    pitch_scale = 1 + pitch_delta * 0.003 * strength
+    fov_scale = math.tan(math.radians(65 / 2)) / math.tan(math.radians(field_of_view / 2))
+    fov_scale = 1 + (max(0.94, min(1.06, fov_scale)) - 1) * strength
+    scale_multiplier = max(0.94, min(1.06, pitch_scale * fov_scale))
+    rotation = max(-3.0, min(3.0, -horizon_angle * strength))
+    shadow_depth = max(0.8, min(1.25, 1 + pitch_delta * 0.012 * strength))
+    return SceneAdjustment(
+        scale_multiplier=scale_multiplier,
+        bottom_shift_fraction=bottom_shift,
+        rotation_degrees=rotation,
+        shadow_depth_multiplier=shadow_depth,
+    )
 
 
 def infer_vehicle_perspective(
@@ -266,6 +337,12 @@ def create_photoroom_showroom(
     reflection_opacity_percent: int = 10,
     brightness_percent: int = 100,
     capture_step_name: str = "",
+    orientation_key: str = "",
+    capture_metadata: dict | None = None,
+    scene_projection_enabled: bool = False,
+    scene_horizon_percent: int = 43,
+    scene_reference_vertical_degrees: int = 0,
+    scene_perspective_strength_percent: int = 35,
     photoroom_sandbox: bool | None = None,
     optimized: bool = False,
     *,
@@ -291,12 +368,35 @@ def create_photoroom_showroom(
         reflection_opacity_percent=reflection_opacity_percent,
         brightness_percent=brightness_percent,
         capture_step_name=capture_step_name,
+        orientation_key=orientation_key,
+        capture_metadata=capture_metadata,
+        scene_projection_enabled=scene_projection_enabled,
+        scene_horizon_percent=scene_horizon_percent,
+        scene_reference_vertical_degrees=scene_reference_vertical_degrees,
+        scene_perspective_strength_percent=scene_perspective_strength_percent,
     )
     if optimized:
         composition_options = perspective_composition_options(
             composition_options,
             contour,
         )
+    # Keep the regular provider result as an unchanged A/B comparison baseline.
+    scene_adjustment = (
+        calculate_scene_adjustment(composition_options)
+        if optimized
+        else SceneAdjustment()
+    )
+    composition_options = replace(
+        composition_options,
+        contour_target_area_percent=round(
+            composition_options.contour_target_area_percent
+            * scene_adjustment.scale_multiplier**2
+        ),
+        vehicle_bottom_percent=round(
+            composition_options.vehicle_bottom_percent
+            + scene_adjustment.bottom_shift_fraction * 100
+        ),
+    )
 
     framing = calculate_contour_framing(
         contour,
@@ -414,6 +514,28 @@ def compose_showroom(
     contour = VehicleContour(vehicle.width, vehicle.height)
     perspective = infer_vehicle_perspective(options.capture_step_name, contour)
     options = perspective_composition_options(options, contour)
+    scene_adjustment = calculate_scene_adjustment(options)
+    if abs(scene_adjustment.rotation_degrees) >= 0.05:
+        vehicle = vehicle.rotate(
+            scene_adjustment.rotation_degrees,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+        )
+        rotated_box = vehicle.getchannel("A").point(
+            lambda value: 255 if value >= 128 else 0
+        ).getbbox()
+        if rotated_box is not None:
+            vehicle = vehicle.crop(rotated_box)
+            contour = VehicleContour(vehicle.width, vehicle.height)
+    options = replace(
+        options,
+        contour_target_area_percent=round(
+            options.contour_target_area_percent * scene_adjustment.scale_multiplier**2
+        ),
+        vehicle_bottom_percent=round(
+            options.vehicle_bottom_percent + scene_adjustment.bottom_shift_fraction * 100
+        ),
+    )
     framing = calculate_contour_framing(
         contour,
         output_width=options.width,
@@ -465,6 +587,7 @@ def compose_showroom(
                 y=y,
                 opacity_percent=shadow_opacity,
                 perspective=perspective,
+                depth_multiplier=scene_adjustment.shadow_depth_multiplier,
             ),
         )
 
@@ -532,6 +655,7 @@ def _create_vehicle_shadow(
     y: int,
     opacity_percent: int,
     perspective: str,
+    depth_multiplier: float = 1.0,
 ) -> Image.Image:
     """Build a soft underbody shadow plus darker tyre contact shadows."""
     vehicle_width, vehicle_height = alpha.size
@@ -540,7 +664,7 @@ def _create_vehicle_shadow(
     broad_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     broad_draw = ImageDraw.Draw(broad_shadow)
     broad_width = round(vehicle_width * 0.84)
-    broad_height = max(18, round(vehicle_height * 0.085))
+    broad_height = max(18, round(vehicle_height * 0.085 * depth_multiplier))
     broad_left = x + (vehicle_width - broad_width) // 2
     broad_top = bottom - round(broad_height * 0.72)
     broad_draw.ellipse(
@@ -709,6 +833,7 @@ def process_photo(photo_id: str) -> None:
             if background is None or not background.is_active:
                 raise ImageProcessingError("Für den Auftrag ist kein aktiver Hintergrund gewählt")
             image_settings = get_image_settings(db)
+            orientation = db.get(Orientation, step.orientation_id) if step.orientation_id else None
             if not provider_is_available(image_settings, settings):
                 raise ImageProcessingError("Der gewählte Bilddienstleister ist nicht verfügbar")
 
@@ -735,6 +860,14 @@ def process_photo(photo_id: str) -> None:
                     reflection_opacity_percent=background.reflection_opacity_percent,
                     brightness_percent=background.brightness_percent,
                     capture_step_name=step.name,
+                    orientation_key=orientation.key if orientation else "",
+                    capture_metadata=photo.capture_metadata,
+                    scene_projection_enabled=background.scene_projection_enabled,
+                    scene_horizon_percent=background.scene_horizon_percent,
+                    scene_reference_vertical_degrees=background.scene_reference_vertical_degrees,
+                    scene_perspective_strength_percent=(
+                        background.scene_perspective_strength_percent
+                    ),
                     photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                     optimized=True,
                 )
@@ -755,6 +888,16 @@ def process_photo(photo_id: str) -> None:
                         reflection_opacity_percent=background.reflection_opacity_percent,
                         brightness_percent=background.brightness_percent,
                         capture_step_name=step.name,
+                        orientation_key=orientation.key if orientation else "",
+                        capture_metadata=photo.capture_metadata,
+                        scene_projection_enabled=background.scene_projection_enabled,
+                        scene_horizon_percent=background.scene_horizon_percent,
+                        scene_reference_vertical_degrees=(
+                            background.scene_reference_vertical_degrees
+                        ),
+                        scene_perspective_strength_percent=(
+                            background.scene_perspective_strength_percent
+                        ),
                     ),
                 )
             else:
@@ -839,6 +982,7 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
             if background is None or not background.is_active:
                 raise ImageProcessingError("Für den Auftrag ist kein aktiver Hintergrund gewählt")
             image_settings = get_image_settings(db)
+            orientation = db.get(Orientation, step.orientation_id) if step.orientation_id else None
 
             variant = db.scalar(
                 select(PhotoProcessingVariant).where(
@@ -870,6 +1014,14 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 reflection_opacity_percent=background.reflection_opacity_percent,
                 brightness_percent=background.brightness_percent,
                 capture_step_name=step.name,
+                orientation_key=orientation.key if orientation else "",
+                capture_metadata=photo.capture_metadata,
+                scene_projection_enabled=background.scene_projection_enabled,
+                scene_horizon_percent=background.scene_horizon_percent,
+                scene_reference_vertical_degrees=background.scene_reference_vertical_degrees,
+                scene_perspective_strength_percent=(
+                    background.scene_perspective_strength_percent
+                ),
                 photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                 optimized=provider == "photoroom_optimized",
             )

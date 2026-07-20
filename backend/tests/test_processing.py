@@ -9,10 +9,12 @@ from app.config import Settings
 from app.processing import (
     CompositionOptions,
     OverlayLayer,
+    SceneAdjustment,
     VehicleContour,
     apply_cutout_mask_to_original,
     apply_image_overlays,
     calculate_contour_framing,
+    calculate_scene_adjustment,
     compose_showroom,
     create_photoroom_showroom,
     infer_vehicle_perspective,
@@ -109,6 +111,60 @@ def test_perspective_composition_raises_side_and_straight_views() -> None:
     assert straight.vehicle_bottom_percent == 82
     assert straight.contour_target_area_percent == 29
     assert straight.contour_max_width_percent == 64
+
+
+def test_scene_adjustment_uses_pose_only_for_beta_orientations() -> None:
+    enabled = CompositionOptions(
+        orientation_key="front-left",
+        scene_projection_enabled=True,
+        scene_horizon_percent=43,
+        scene_reference_vertical_degrees=0,
+        scene_perspective_strength_percent=50,
+        capture_metadata={
+            "horizon_angle_degrees": 4.0,
+            "vertical_angle_degrees": 10.0,
+            "yaw_angle_degrees": 0.0,
+            "field_of_view_degrees": 65.0,
+            "motion_available": True,
+        },
+    )
+
+    adjustment = calculate_scene_adjustment(enabled)
+    unsupported = calculate_scene_adjustment(replace(enabled, orientation_key="front"))
+
+    assert adjustment.scale_multiplier > 1
+    assert adjustment.bottom_shift_fraction < 0
+    assert adjustment.rotation_degrees == pytest.approx(-2)
+    assert adjustment.shadow_depth_multiplier > 1
+    assert unsupported.scale_multiplier == 1
+    assert unsupported.bottom_shift_fraction == 0
+
+
+def test_scene_adjustment_is_disabled_without_motion_metadata() -> None:
+    adjustment = calculate_scene_adjustment(
+        CompositionOptions(
+            orientation_key="left",
+            scene_projection_enabled=True,
+            capture_metadata={"motion_available": False},
+        )
+    )
+
+    assert adjustment == calculate_scene_adjustment(CompositionOptions())
+
+
+def test_scene_adjustment_ignores_invalid_legacy_metadata() -> None:
+    adjustment = calculate_scene_adjustment(
+        CompositionOptions(
+            orientation_key="left",
+            scene_projection_enabled=True,
+            capture_metadata={
+                "motion_available": True,
+                "vertical_angle_degrees": None,
+            },
+        )
+    )
+
+    assert adjustment == SceneAdjustment()
 
 
 def test_showroom_composition_has_configured_output_size() -> None:
