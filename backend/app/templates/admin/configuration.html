@@ -65,17 +65,19 @@
     <form method="post" action="/admin/dealerships/{{ dealership.id }}/orientation-settings">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="step-stack">
-        {% for orientation in orientations if orientation.is_active or orientation.id in step_by_orientation_id %}
-        {% set step = step_by_orientation_id.get(orientation.id) %}
+        {% for orientation in orientations if orientation.is_active or steps_by_orientation_id.get(orientation.id) %}
+        {% set orientation_steps = steps_by_orientation_id.get(orientation.id, []) %}
+        {% set step = orientation_steps[0] if orientation_steps else none %}
+        {% set active_instance_count = orientation_steps|selectattr('is_active')|list|length %}
         <div class="step-card">
             <input type="hidden" name="orientation_ids" value="{{ orientation.id }}">
             <div class="order-pair">
                 <label>Aufnahme-Nr. (App)<input type="number" name="capture_orders" min="1" value="{{ step.capture_order if step else orientation.default_capture_order }}" required></label>
                 <label>Export-Nr. (ZIP)<input type="number" name="export_orders" min="1" value="{{ step.export_order if step and step.export_order else (orientation.default_export_order or '') }}" placeholder="Kein Export"></label>
             </div>
-            <div class="step-main"><strong>{{ orientation.name }}</strong><span class="muted">{{ orientation.instruction }}</span></div>
-            <span class="status {{ 'status-active' if orientation.category == 'exterior' else 'status-inactive' }}">{{ {'exterior': 'Außenaufnahme', 'interior': 'Innenraum', 'detail': 'Detail', 'free': 'Freie Perspektive'}.get(orientation.category, orientation.category) }}</span>
-            <div class="step-options"><label class="toggle"><input type="checkbox" name="required_orientation_ids" value="{{ orientation.id }}" {% if (step and step.is_required) or (not step and orientation.is_required) %}checked{% endif %}><span>Pflichtfoto</span></label><label class="toggle"><input type="checkbox" name="active_orientation_ids" value="{{ orientation.id }}" {% if step and step.is_active %}checked{% endif %} {% if not orientation.is_active %}disabled{% endif %}><span>Für dieses Autohaus aktiv</span></label></div>
+            <div class="step-main"><strong>{{ orientation.name }}</strong><span class="muted">{{ orientation.instruction }}</span>{% if orientation.is_repeatable %}<label>Anzahl<input type="number" name="instance_counts" min="1" max="{{ orientation.max_instances }}" value="{{ active_instance_count or orientation.default_instance_count }}" required></label>{% else %}<input type="hidden" name="instance_counts" value="1">{% endif %}</div>
+            <div class="choice-row"><span class="status {{ 'status-active' if orientation.category == 'exterior' else 'status-inactive' }}">{{ {'exterior': 'Außenaufnahme', 'interior': 'Innenraum', 'detail': 'Detail', 'special': 'Spezialaufnahme'}.get(orientation.category, orientation.category) }}</span><span class="status status-inactive">{{ {'optimized': 'Optimierung', 'original': 'Originalbild', 'configurable': 'Konfigurierbar'}.get(orientation.processing_mode, orientation.processing_mode) }}</span>{% if orientation.is_repeatable %}<span class="muted">bis {{ orientation.max_instances }} Aufnahmen</span>{% endif %}</div>
+            <div class="step-options"><label class="toggle"><input type="checkbox" name="required_orientation_ids" value="{{ orientation.id }}" {% if (step and step.is_required) or (not step and orientation.is_required) %}checked{% endif %}><span>Pflichtfoto</span></label><label class="toggle"><input type="checkbox" name="active_orientation_ids" value="{{ orientation.id }}" {% if active_instance_count %}checked{% endif %} {% if not orientation.is_active %}disabled{% endif %}><span>Für dieses Autohaus aktiv</span></label></div>
         </div>
         {% else %}<p class="empty">Der Superadmin hat noch keine Orientierungen freigegeben.</p>{% endfor %}
     </div>
@@ -150,7 +152,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <div class="order-pair"><label>Aufnahme-Nr.<input type="number" name="capture_order" min="1" value="{{ step.capture_order }}" required></label><label>Export-Nr.<input type="number" name="export_order" min="1" value="{{ step.export_order or '' }}" placeholder="Kein Export"></label></div>
             <div class="step-main"><label>Name<input type="text" name="name" value="{{ step.name }}" maxlength="160" required></label><label>Anweisung<input type="text" name="instruction" value="{{ step.instruction }}" maxlength="500"></label></div>
-            <label>Kategorie<select name="category"><option value="exterior" {% if step.category == 'exterior' %}selected{% endif %}>Außenaufnahme</option><option value="interior" {% if step.category == 'interior' %}selected{% endif %}>Innenraum</option><option value="detail" {% if step.category == 'detail' %}selected{% endif %}>Detail</option><option value="free" {% if step.category == 'free' %}selected{% endif %}>Freie Perspektive</option></select></label>
+            <label>Kategorie<select name="category"><option value="exterior" {% if step.category == 'exterior' %}selected{% endif %}>Außenaufnahme</option><option value="interior" {% if step.category == 'interior' %}selected{% endif %}>Innenraum</option><option value="detail" {% if step.category == 'detail' %}selected{% endif %}>Detail</option><option value="special" {% if step.category == 'special' %}selected{% endif %}>Spezialaufnahme</option><option value="free" {% if step.category == 'free' %}selected{% endif %}>Freie Perspektive (alt)</option></select></label>
             <div class="step-options"><label class="toggle"><input type="checkbox" name="is_required" {% if step.is_required %}checked{% endif %}><span>Pflicht</span></label><label class="toggle"><input type="checkbox" name="requires_processing" {% if step.requires_processing %}checked{% endif %}><span>Freistellen</span></label><label class="toggle"><input type="checkbox" name="is_active" {% if step.is_active %}checked{% endif %}><span>Aktiv</span></label></div>
             <label class="silhouette-field">Silhouette (transparentes PNG){% if step.id in silhouette_previews %}<a href="{{ silhouette_previews[step.id] }}" target="_blank" rel="noopener">Vorhandene Silhouette ansehen</a>{% endif %}<input type="file" name="silhouette" accept="image/png"></label>
             <button class="button button-secondary" type="submit">Speichern</button>
@@ -160,7 +162,7 @@
     <form class="form-grid add-panel" method="post" action="/admin/dealerships/{{ dealership.id }}/capture-steps">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>Name<input type="text" name="name" maxlength="160" required></label><label>Anweisung<input type="text" name="instruction" maxlength="500"></label>
-        <label>Kategorie<select name="category"><option value="detail">Detail</option><option value="exterior">Außenaufnahme</option><option value="interior">Innenraum</option><option value="free">Freie Perspektive</option></select></label>
+        <label>Kategorie<select name="category"><option value="detail">Detail</option><option value="exterior">Außenaufnahme</option><option value="interior">Innenraum</option><option value="special">Spezialaufnahme</option><option value="free">Freie Perspektive (alt)</option></select></label>
         <label>Aufnahme-Nr.<input type="number" name="capture_order" min="1" required></label><label>Export-Nr.<input type="number" name="export_order" min="1" placeholder="Optional"></label>
         <div class="choice-row"><label class="toggle"><input type="checkbox" name="is_required" checked><span>Pflicht</span></label><label class="toggle"><input type="checkbox" name="requires_processing"><span>Freistellen</span></label></div>
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Fotoposition hinzufügen</button></div>

@@ -4,7 +4,17 @@ import enum
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -77,9 +87,7 @@ class DealershipSftpSettings(Timestamped, Base):
     remote_directory: Mapped[str] = mapped_column(String(500), default="/")
     host_key_fingerprint: Mapped[str] = mapped_column(String(128), default="")
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    last_tested_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_test_successful: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_test_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
@@ -227,6 +235,12 @@ class Orientation(Timestamped, Base):
     default_export_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_required: Mapped[bool] = mapped_column(Boolean, default=True)
     requires_processing: Mapped[bool] = mapped_column(Boolean, default=False)
+    processing_mode: Mapped[str] = mapped_column(String(32), default="original")
+    is_repeatable: Mapped[bool] = mapped_column(Boolean, default=False)
+    default_instance_count: Mapped[int] = mapped_column(Integer, default=1)
+    max_instances: Mapped[int] = mapped_column(Integer, default=1)
+    silhouette_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    silhouette_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -241,6 +255,7 @@ class CaptureStep(Timestamped, Base):
     orientation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("orientations.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    orientation_instance_index: Mapped[int] = mapped_column(Integer, default=1)
     name: Mapped[str] = mapped_column(String(160))
     instruction: Mapped[str] = mapped_column(String(500), default="")
     category: Mapped[str] = mapped_column(String(32), default="detail")
@@ -449,8 +464,6 @@ class ExportRun(Timestamped, Base):
     error_message: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     transfer_status: Mapped[str] = mapped_column(String(32), default="not_requested")
     transfer_attempts: Mapped[int] = mapped_column(Integer, default=0)
-    transferred_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    transferred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     remote_path: Mapped[str | None] = mapped_column(String(700), nullable=True)
     transfer_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)
