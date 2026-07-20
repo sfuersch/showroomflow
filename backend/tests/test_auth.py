@@ -912,7 +912,7 @@ def test_dealership_admin_permanently_deletes_configuration_images() -> None:
         assert db.get(SupplementalImage, supplemental_id) is None
 
 
-def test_background_used_by_vehicle_job_cannot_be_deleted() -> None:
+def test_background_used_by_vehicle_job_is_unlinked_and_deleted() -> None:
     dealership, admin = create_dealership_admin()
     with TestingSession() as db:
         location = Location(dealership_id=dealership.id, name="Bad Neustadt")
@@ -924,19 +924,19 @@ def test_background_used_by_vehicle_job_cannot_be_deleted() -> None:
         )
         db.add_all([location, background])
         db.flush()
-        db.add(
-            VehicleJob(
-                dealership_id=dealership.id,
-                location_id=location.id,
-                created_by_id=admin.id,
-                vin="TESTVIN",
-                version=1,
-                brand="Ford",
-                background_id=background.id,
-            )
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=admin.id,
+            vin="TESTVIN",
+            version=1,
+            brand="Ford",
+            background_id=background.id,
         )
+        db.add(job)
         db.commit()
         background_id = background.id
+        job_id = job.id
 
     storage = ConfigurationStorage()
     app.dependency_overrides[get_object_storage] = lambda: storage
@@ -959,10 +959,13 @@ def test_background_used_by_vehicle_job_cannot_be_deleted() -> None:
     finally:
         app.dependency_overrides.pop(get_object_storage, None)
 
-    assert "wird bereits von einem Fahrzeugauftrag verwendet" in response.text
-    assert storage.deleted_keys == []
+    assert "Hintergrund wurde dauerhaft gelöscht" in response.text
+    assert storage.deleted_keys == ["configuration/in-use.jpg"]
     with TestingSession() as db:
-        assert db.get(Background, background_id) is not None
+        assert db.get(Background, background_id) is None
+        job = db.get(VehicleJob, job_id)
+        assert job is not None
+        assert job.background_id is None
 
 
 def test_app_configuration_is_location_and_tenant_scoped() -> None:
