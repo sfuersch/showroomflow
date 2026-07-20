@@ -705,6 +705,29 @@ def test_dealership_admin_cannot_manage_central_orientation_catalog() -> None:
     assert response.status_code == 403
 
 
+def test_system_admin_sees_grouped_orientation_catalog_with_default_silhouettes() -> None:
+    create_system_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+
+    response = client.get("/admin/orientations")
+
+    assert response.status_code == 200
+    assert 'id="category-exterior"' in response.text
+    assert 'id="category-interior"' in response.text
+    assert 'id="category-detail"' in response.text
+    assert 'id="category-special"' in response.text
+    assert "/admin/static/orientation-silhouettes/front.png" in response.text
+    assert "System-Silhouette" in response.text
+
+
 def test_admin_form_rejects_invalid_csrf_token() -> None:
     create_dealership_admin()
 
@@ -1172,7 +1195,14 @@ def test_app_configuration_is_location_and_tenant_scoped() -> None:
         own_location = Location(dealership_id=dealership.id, name="Bad Neustadt")
         other_location = Location(dealership_id=dealership.id, name="Bad Kissingen")
         brand = Brand(dealership_id=dealership.id, name="Volkswagen")
-        db.add_all([own_location, other_location, brand])
+        orientation = Orientation(
+            key="front",
+            name="Vorne",
+            instruction="Fahrzeug gerade aufnehmen",
+            category="exterior",
+            default_capture_order=1,
+        )
+        db.add_all([own_location, other_location, brand, orientation])
         db.flush()
         db.add_all(
             [
@@ -1201,6 +1231,7 @@ def test_app_configuration_is_location_and_tenant_scoped() -> None:
                 ),
                 CaptureStep(
                     dealership_id=dealership.id,
+                    orientation_id=orientation.id,
                     name="Front",
                     instruction="Gerade aufnehmen",
                     category="exterior",
@@ -1235,6 +1266,9 @@ def test_app_configuration_is_location_and_tenant_scoped() -> None:
     assert payload["capture_steps"][0]["capture_order"] == 1
     assert payload["capture_steps"][0]["export_order"] == 3
     assert payload["capture_steps"][0]["requires_processing"] is True
+    assert payload["capture_steps"][0]["silhouette_url"].endswith(
+        "/admin/static/orientation-silhouettes/front.png"
+    )
 
 
 def test_job_stores_selected_brand_and_background() -> None:

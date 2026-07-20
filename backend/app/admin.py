@@ -50,6 +50,7 @@ from app.orientations import (
     ORIENTATION_CATEGORIES,
     PROCESSING_MODES,
     STANDARD_ORIENTATIONS,
+    default_silhouette_path,
     instance_name,
 )
 from app.processing_queue import (
@@ -752,15 +753,51 @@ def dealership_detail(
 
 
 @router.get("/orientations", response_class=HTMLResponse)
-def orientations_page(request: Request, db: Session = Depends(get_db)):
+def orientations_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
     admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     orientations = _ensure_standard_orientations(db)
+    category_labels = {
+        "exterior": "Außenaufnahmen",
+        "interior": "Innenraum",
+        "detail": "Details",
+        "special": "Spezialaufnahmen",
+    }
+    orientation_groups = [
+        (
+            category,
+            category_labels[category],
+            [item for item in orientations if item.category == category],
+        )
+        for category in ("exterior", "interior", "detail", "special")
+    ]
+    silhouette_previews = {}
+    for orientation in orientations:
+        if orientation.silhouette_object_key:
+            silhouette_previews[orientation.id] = storage.create_download_url(
+                object_key=orientation.silhouette_object_key
+            )
+            continue
+        default_path = default_silhouette_path(orientation.key)
+        if default_path:
+            silhouette_previews[orientation.id] = str(
+                request.url_for("admin-static", path=default_path)
+            )
     return templates.TemplateResponse(
         request,
         "admin/orientations.html",
-        _context(request, admin, orientations=orientations),
+        _context(
+            request,
+            admin,
+            orientations=orientations,
+            orientation_groups=orientation_groups,
+            silhouette_previews=silhouette_previews,
+        ),
     )
 
 

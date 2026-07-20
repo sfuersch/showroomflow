@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func, select, update
 
 from app.api.dependencies import CurrentUser, DatabaseSession
@@ -18,11 +18,13 @@ from app.image_service import (
 from app.models import (
     CaptureStep,
     JobStatus,
+    Orientation,
     PhotoAsset,
     ProcessingStatus,
     UserRole,
     VehicleJob,
 )
+from app.orientations import default_silhouette_path
 from app.processing_queue import ProcessingQueueUnavailable, enqueue_photo_processing
 from app.schemas import (
     CaptureSessionResponse,
@@ -86,6 +88,7 @@ def _photo_response(storage: ObjectStorage, photo: PhotoAsset) -> PhotoAssetResp
 
 @router.get("", response_model=CaptureSessionResponse)
 def capture_session(
+    request: Request,
     job_id: uuid.UUID,
     db: DatabaseSession,
     current_user: CurrentUser,
@@ -113,6 +116,22 @@ def capture_session(
             .order_by(PhotoAsset.created_at)
         )
     )
+    orientation_ids = {step.orientation_id for step in steps if step.orientation_id is not None}
+    orientation_keys = {
+        orientation_id: key
+        for orientation_id, key in db.execute(
+            select(Orientation.id, Orientation.key).where(Orientation.id.in_(orientation_ids))
+        )
+    }
+
+    def silhouette_url(step: CaptureStep) -> str | None:
+        if step.silhouette_object_key:
+            return storage.create_download_url(object_key=step.silhouette_object_key)
+        default_path = default_silhouette_path(orientation_keys.get(step.orientation_id))
+        if default_path is None:
+            return None
+        return str(request.url_for("admin-static", path=default_path))
+
     return CaptureSessionResponse(
         job=VehicleJobResponse.model_validate(job),
         capture_steps=[
@@ -125,11 +144,7 @@ def capture_session(
                 export_order=step.export_order,
                 is_required=step.is_required,
                 requires_processing=step.requires_processing,
-                silhouette_url=(
-                    storage.create_download_url(object_key=step.silhouette_object_key)
-                    if step.silhouette_object_key
-                    else None
-                ),
+                silhouette_url=silhouette_url(step),
             )
             for step in steps
         ],
