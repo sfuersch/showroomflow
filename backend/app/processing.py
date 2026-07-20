@@ -584,11 +584,22 @@ def compose_background_through_windows(
             protected_foreground = Image.open(
                 io.BytesIO(protected_foreground_mask_png_bytes)
             ).convert("RGBA")
-            protected_alpha = protected_foreground.getchannel("A")
-            if protected_alpha.size != original.size:
-                protected_alpha = protected_alpha.resize(
+            ai_protected_alpha = protected_foreground.getchannel("A")
+            if ai_protected_alpha.size != original.size:
+                ai_protected_alpha = ai_protected_alpha.resize(
                     original.size,
                     Image.Resampling.LANCZOS,
+                )
+            ai_protected_histogram = ai_protected_alpha.histogram()
+            ai_protected_fraction = sum(ai_protected_histogram[16:]) / (
+                ai_protected_alpha.width * ai_protected_alpha.height
+            )
+            if 0.002 <= ai_protected_fraction <= 0.25:
+                protected_alpha = ai_protected_alpha
+            else:
+                logger.warning(
+                    "Ignoring implausible instrument-cluster mask covering %.2f%%",
+                    ai_protected_fraction * 100,
                 )
 
         # A dedicated AI mask normally protects the instrument cluster. This

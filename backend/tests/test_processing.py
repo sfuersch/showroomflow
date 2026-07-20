@@ -435,6 +435,40 @@ def test_window_background_locally_protects_dark_unlit_cluster() -> None:
     assert max(protected_cluster) < 50
 
 
+def test_window_background_ignores_oversized_instrument_cluster_mask() -> None:
+    original = Image.new("RGB", (800, 600), (230, 220, 20))
+    ImageDraw.Draw(original).rounded_rectangle(
+        (300, 120, 500, 300),
+        radius=35,
+        fill=(15, 18, 22),
+    )
+    window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(window_mask).rectangle((0, 0, 799, 399), fill="white")
+    oversized_protected_mask = Image.new(
+        "RGBA",
+        original.size,
+        (255, 255, 255, 255),
+    )
+    background = Image.new("RGB", original.size, (20, 30, 230))
+
+    result = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+        protected_foreground_mask_png_bytes=image_bytes(
+            oversized_protected_mask,
+            "PNG",
+        ),
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    replaced_glass = finished.getpixel((100, 100))
+    protected_cluster = finished.getpixel((400, 200))
+    assert replaced_glass[2] > 200 and replaced_glass[0] < 50
+    assert max(protected_cluster) < 50
+
+
 def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     cutout = image_bytes(Image.new("RGBA", (800, 600), (20, 30, 40, 255)), "PNG")
