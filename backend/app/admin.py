@@ -168,6 +168,15 @@ def _require_admin(request: Request, db: Session) -> User | RedirectResponse:
     return user
 
 
+def _require_system_admin(request: Request, db: Session) -> User | RedirectResponse:
+    user = _require_admin(request, db)
+    if isinstance(user, RedirectResponse):
+        return user
+    if user.role != UserRole.SYSTEM_ADMIN:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    return user
+
+
 def _flash(request: Request, message: str, category: str = "success") -> None:
     request.session["flash"] = {"message": message, "category": category}
 
@@ -467,9 +476,14 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     admin = _require_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
-    statement = select(Dealership).order_by(Dealership.name)
     if admin.role == UserRole.DEALERSHIP_ADMIN:
-        statement = statement.where(Dealership.id == admin.dealership_id)
+        if admin.dealership_id is None:
+            raise HTTPException(status_code=403, detail="Keine Berechtigung")
+        return RedirectResponse(
+            f"/admin/dealerships/{admin.dealership_id}/jobs",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    statement = select(Dealership).order_by(Dealership.name)
     dealerships = list(db.scalars(statement))
     credit_balances = {dealership.id: credit_balance(db, dealership) for dealership in dealerships}
     return templates.TemplateResponse(
@@ -682,7 +696,7 @@ def dealership_detail(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     dealership = _authorized_dealership(db, admin, dealership_id)
@@ -729,7 +743,7 @@ def update_dealership_sftp(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -771,7 +785,7 @@ def test_dealership_sftp(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -806,7 +820,7 @@ def fetch_dealership_sftp_fingerprint(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -841,7 +855,7 @@ def update_dealership(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -855,8 +869,7 @@ def update_dealership(
         dealership.name = cleaned_name
         dealership.retention_days = retention_days
         dealership.auto_export_enabled = auto_export_enabled == "on"
-        if admin.role == UserRole.SYSTEM_ADMIN:
-            dealership.is_active = is_active == "on"
+        dealership.is_active = is_active == "on"
         db.commit()
         _flash(request, "Autohaus-Einstellungen wurden gespeichert.")
     return RedirectResponse(
@@ -872,7 +885,7 @@ def create_location(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -901,7 +914,7 @@ def update_location(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -940,7 +953,7 @@ def create_user(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -987,7 +1000,7 @@ def update_user(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -1058,6 +1071,7 @@ def jobs_page(
             .order_by(Background.name)
         )
     )
+    balance = credit_balance(db, dealership)
     return templates.TemplateResponse(
         request,
         "admin/jobs.html",
@@ -1069,6 +1083,7 @@ def jobs_page(
             locations=locations,
             brands=brands,
             backgrounds=backgrounds,
+            credit_balance=balance,
         ),
     )
 
@@ -1154,7 +1169,7 @@ def create_job_from_admin(
             f"/admin/dealerships/{dealership.id}/jobs",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-    _flash(request, f"Testauftrag {job.vin} · Version {job.version} wurde angelegt.")
+    _flash(request, f"Auftrag {job.vin} · Version {job.version} wurde angelegt.")
     return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -1700,7 +1715,7 @@ def configuration_page(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     dealership = _authorized_dealership(db, admin, dealership_id)
@@ -1800,7 +1815,7 @@ def create_brand(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -1832,7 +1847,7 @@ def update_brand(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -1871,7 +1886,7 @@ async def create_background(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -1922,7 +1937,7 @@ def update_background(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -1965,7 +1980,7 @@ def delete_background(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2017,7 +2032,7 @@ async def create_overlay(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2080,7 +2095,7 @@ def update_overlay(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2122,7 +2137,7 @@ def delete_overlay(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2166,7 +2181,7 @@ async def create_supplemental_image(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2233,7 +2248,7 @@ def update_supplemental_image(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2287,7 +2302,7 @@ def delete_supplemental_image(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2325,7 +2340,7 @@ def create_default_capture_steps(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2407,7 +2422,7 @@ def create_capture_step(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2464,7 +2479,7 @@ async def update_capture_step(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)

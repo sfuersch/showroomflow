@@ -495,6 +495,14 @@ def test_admin_interface_requires_login() -> None:
 
 def test_dealership_admin_logs_into_tenant_interface() -> None:
     dealership, _ = create_dealership_admin()
+    with TestingSession() as db:
+        db.add_all(
+            [
+                Location(dealership_id=dealership.id, name="Bad Neustadt"),
+                Brand(dealership_id=dealership.id, name="Ford"),
+            ]
+        )
+        db.commit()
     login_page = client.get("/admin/login")
 
     login_response = client.post(
@@ -511,7 +519,40 @@ def test_dealership_admin_logs_into_tenant_interface() -> None:
     assert login_response.status_code == 303
     assert dashboard.status_code == 200
     assert dealership.name in dashboard.text
+    assert "Aktueller Credit-Stand" in dashboard.text
+    assert "Auftrag manuell anlegen" in dashboard.text
+    assert 'id="create-job-dialog"' in dashboard.text
+    assert "Standorte und Benutzer" not in dashboard.text
+    assert "SFTP-Übertragung" not in dashboard.text
     assert "Autohaus hinzufügen" not in dashboard.text
+
+
+def test_dealership_admin_cannot_open_or_change_management() -> None:
+    dealership, _ = create_dealership_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+
+    detail_response = client.get(f"/admin/dealerships/{dealership.id}")
+    configuration_response = client.get(
+        f"/admin/dealerships/{dealership.id}/configuration"
+    )
+    create_location_response = client.post(
+        f"/admin/dealerships/{dealership.id}/locations",
+        data={"name": "Nicht erlaubt", "csrf_token": "irrelevant"},
+    )
+
+    assert detail_response.status_code == 403
+    assert configuration_response.status_code == 403
+    assert create_location_response.status_code == 403
+    with TestingSession() as db:
+        assert db.scalar(select(Location).where(Location.name == "Nicht erlaubt")) is None
 
 
 def test_admin_form_rejects_invalid_csrf_token() -> None:
@@ -557,12 +598,13 @@ def test_photographer_cannot_log_into_admin_interface() -> None:
 
 def test_admin_interface_rejects_invalid_user_email() -> None:
     dealership, _ = create_dealership_admin()
+    create_system_admin()
     login_page = client.get("/admin/login")
     client.post(
         "/admin/login",
         data={
-            "email": "admin@example.com",
-            "password": "a-secure-test-password",
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
             "csrf_token": csrf_from(login_page.text),
         },
     )
@@ -587,6 +629,7 @@ def test_admin_interface_rejects_invalid_user_email() -> None:
 
 def test_admin_interface_rejects_duplicate_location() -> None:
     dealership, _ = create_dealership_admin()
+    create_system_admin()
     with TestingSession() as db:
         db.add(Location(dealership_id=dealership.id, name="Bad Neustadt"))
         db.commit()
@@ -594,8 +637,8 @@ def test_admin_interface_rejects_duplicate_location() -> None:
     client.post(
         "/admin/login",
         data={
-            "email": "admin@example.com",
-            "password": "a-secure-test-password",
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
             "csrf_token": csrf_from(login_page.text),
         },
     )
@@ -645,12 +688,13 @@ def test_inactive_dealership_cannot_log_in() -> None:
 
 def test_admin_adds_brand_and_standard_capture_sequence() -> None:
     dealership, _ = create_dealership_admin()
+    create_system_admin()
     login_page = client.get("/admin/login")
     client.post(
         "/admin/login",
         data={
-            "email": "admin@example.com",
-            "password": "a-secure-test-password",
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
             "csrf_token": csrf_from(login_page.text),
         },
     )
@@ -685,6 +729,7 @@ def test_admin_adds_brand_and_standard_capture_sequence() -> None:
 
 def test_admin_uploads_background_with_location_assignment() -> None:
     dealership, _ = create_dealership_admin()
+    create_system_admin()
     with TestingSession() as db:
         location = Location(dealership_id=dealership.id, name="Bad Neustadt")
         brand = Brand(dealership_id=dealership.id, name="Volkswagen")
@@ -701,8 +746,8 @@ def test_admin_uploads_background_with_location_assignment() -> None:
         client.post(
             "/admin/login",
             data={
-                "email": "admin@example.com",
-                "password": "a-secure-test-password",
+                "email": "system@example.com",
+                "password": "a-secure-system-password",
                 "csrf_token": csrf_from(login_page.text),
             },
         )
@@ -733,8 +778,9 @@ def test_admin_uploads_background_with_location_assignment() -> None:
         assert [item.id for item in background.locations] == [location_id]
 
 
-def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> None:
+def test_system_admin_manages_tenant_overlay_and_supplemental_image() -> None:
     dealership, _ = create_dealership_admin()
+    create_system_admin()
     with TestingSession() as db:
         location = Location(dealership_id=dealership.id, name="Bad Neustadt")
         brand = Brand(dealership_id=dealership.id, name="Ford")
@@ -759,8 +805,8 @@ def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> Non
         client.post(
             "/admin/login",
             data={
-                "email": "admin@example.com",
-                "password": "a-secure-test-password",
+                "email": "system@example.com",
+                "password": "a-secure-system-password",
                 "csrf_token": csrf_from(login_page.text),
             },
         )
@@ -837,8 +883,9 @@ def test_dealership_admin_manages_tenant_overlay_and_supplemental_image() -> Non
         assert [item.id for item in supplemental.locations] == [location_id]
 
 
-def test_dealership_admin_permanently_deletes_configuration_images() -> None:
+def test_system_admin_permanently_deletes_configuration_images() -> None:
     dealership, _ = create_dealership_admin()
+    create_system_admin()
     with TestingSession() as db:
         background = Background(
             dealership_id=dealership.id,
@@ -872,8 +919,8 @@ def test_dealership_admin_permanently_deletes_configuration_images() -> None:
         client.post(
             "/admin/login",
             data={
-                "email": "admin@example.com",
-                "password": "a-secure-test-password",
+                "email": "system@example.com",
+                "password": "a-secure-system-password",
                 "csrf_token": csrf_from(login_page.text),
             },
         )
@@ -914,6 +961,7 @@ def test_dealership_admin_permanently_deletes_configuration_images() -> None:
 
 def test_background_used_by_vehicle_job_is_unlinked_and_deleted() -> None:
     dealership, admin = create_dealership_admin()
+    create_system_admin()
     with TestingSession() as db:
         location = Location(dealership_id=dealership.id, name="Bad Neustadt")
         background = Background(
@@ -945,8 +993,8 @@ def test_background_used_by_vehicle_job_is_unlinked_and_deleted() -> None:
         client.post(
             "/admin/login",
             data={
-                "email": "admin@example.com",
-                "password": "a-secure-test-password",
+                "email": "system@example.com",
+                "password": "a-secure-system-password",
                 "csrf_token": csrf_from(login_page.text),
             },
         )

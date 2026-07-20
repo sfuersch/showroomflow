@@ -1,22 +1,24 @@
 {% extends "admin/base.html" %}
 {% block title %}Fahrzeugaufträge · {{ dealership.name }}{% endblock %}
 {% block content %}
+{% if current_user.role.value == 'system_admin' %}
 <nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><span>Fahrzeugaufträge</span></nav>
-<div class="page-heading"><div><span class="eyebrow">Fahrzeugaufträge</span><h1>{{ dealership.name }}</h1><p class="muted">Aufnahmen, Verarbeitung und spätere Exporte kontrollieren.</p></div><span class="count">{{ jobs|length }}</span></div>
-<section class="card section-card compact-card">
-    <div class="section-heading"><div><h2>Testauftrag manuell anlegen</h2><p>Ausgangsbilder ohne App hochladen und später direkt mit einem Referenzergebnis vergleichen.</p></div></div>
-    {% if locations and brands %}
-    <form method="post" action="/admin/dealerships/{{ dealership.id }}/jobs" class="form-grid">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label>Fahrgestellnummer<input type="text" name="vin" maxlength="64" required placeholder="z. B. WF0…"></label>
-        <label>Standort<select name="location_id" required>{% for location in locations.values() %}<option value="{{ location.id }}">{{ location.name }}</option>{% endfor %}</select></label>
-        <label>Marke<select name="brand_id" required>{% for brand in brands %}<option value="{{ brand.id }}">{{ brand.name }}</option>{% endfor %}</select></label>
-        <label>Hintergrund<select name="background_id"><option value="">Kein Hintergrund</option>{% for background in backgrounds %}<option value="{{ background.id }}">{{ background.name }}</option>{% endfor %}</select></label>
-        <div class="span-2 form-actions"><button class="button button-primary" type="submit">Testauftrag anlegen</button></div>
-    </form>
-    {% else %}<p class="empty">Für die manuelle Anlage werden mindestens ein aktiver Standort und eine aktive Marke benötigt.</p>{% endif %}
+{% else %}
+<nav class="breadcrumb"><a href="/admin">Übersicht</a><span>›</span><span>Fahrzeugaufträge</span></nav>
+{% endif %}
+<div class="page-heading">
+    <div><span class="eyebrow">Fahrzeugaufträge</span><h1>{{ dealership.name }}</h1><p class="muted">Aufnahmen, Verarbeitung und Exporte kontrollieren.</p></div>
+    {% if locations and brands %}<button class="button button-primary" type="button" onclick="document.getElementById('create-job-dialog').showModal()">Auftrag manuell anlegen</button>{% endif %}
+</div>
+<section class="card credit-summary" aria-labelledby="credit-heading">
+    <div><span class="eyebrow" id="credit-heading">Aktueller Credit-Stand</span><strong>{{ credit_balance.available }}</strong><span>verfügbar</span></div>
+    <div><strong>{{ credit_balance.monthly_available }}</strong><span>monatlich verfügbar</span></div>
+    <div><strong>{{ credit_balance.additional_available }}</strong><span>zusätzlich verfügbar</span></div>
+    <div><strong>{{ credit_balance.monthly_used }}</strong><span>diesen Monat verbraucht</span></div>
+    {% if current_user.role.value == 'system_admin' %}<a class="button button-secondary" href="/admin/image-service#dealership-credits">Credits verwalten</a>{% endif %}
 </section>
 <section class="card section-card">
+    <div class="section-heading"><div><h2>Aufträge</h2><p>{{ jobs|length }} {{ 'Auftrag' if jobs|length == 1 else 'Aufträge' }} vorhanden</p></div><span class="count">{{ jobs|length }}</span></div>
     <div class="job-list">
         {% for job in jobs %}
         <a class="job-row" href="/admin/jobs/{{ job.id }}">
@@ -27,4 +29,24 @@
         {% else %}<p class="empty">Noch keine Fahrzeugaufträge vorhanden.</p>{% endfor %}
     </div>
 </section>
+{% if locations and brands %}
+<dialog class="admin-dialog" id="create-job-dialog" aria-labelledby="create-job-heading">
+    <div class="dialog-content">
+        <div class="dialog-heading">
+            <div><span class="eyebrow">Manuelle Anlage</span><h2 id="create-job-heading">Auftrag anlegen</h2><p>Fahrzeugdaten erfassen und Bilder anschließend im Auftrag hochladen.</p></div>
+            <form method="dialog"><button class="dialog-close" type="submit" aria-label="Dialog schließen">×</button></form>
+        </div>
+        <form method="post" action="/admin/dealerships/{{ dealership.id }}/jobs" class="form-grid">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label>Fahrgestellnummer<input type="text" name="vin" maxlength="64" required placeholder="z. B. WF0…" autofocus></label>
+            <label>Standort<select name="location_id" required>{% for location in locations.values() %}<option value="{{ location.id }}">{{ location.name }}</option>{% endfor %}</select></label>
+            <label>Marke<select name="brand_id" required>{% for brand in brands %}<option value="{{ brand.id }}">{{ brand.name }}</option>{% endfor %}</select></label>
+            <label>Hintergrund<select name="background_id"><option value="">Kein Hintergrund</option>{% for background in backgrounds %}<option value="{{ background.id }}">{{ background.name }}</option>{% endfor %}</select></label>
+            <div class="span-2 dialog-actions"><button class="button button-quiet" type="button" onclick="document.getElementById('create-job-dialog').close()">Abbrechen</button><button class="button button-primary" type="submit">Auftrag anlegen</button></div>
+        </form>
+    </div>
+</dialog>
+{% else %}
+<section class="card section-card"><p class="empty">Für die manuelle Anlage werden mindestens ein aktiver Standort und eine aktive Marke benötigt. Bitte wenden Sie sich an den Superadmin.</p></section>
+{% endif %}
 {% endblock %}

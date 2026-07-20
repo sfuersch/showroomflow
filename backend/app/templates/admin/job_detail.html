@@ -1,7 +1,11 @@
 {% extends "admin/base.html" %}
 {% block title %}{{ job.vin }} · V{{ job.version }}{% endblock %}
 {% block content %}
+{% if current_user.role.value == 'system_admin' %}
 <nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}/jobs">Fahrzeugaufträge</a><span>›</span><span>{{ job.vin }}</span></nav>
+{% else %}
+<nav class="breadcrumb"><a href="/admin">Übersicht</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}/jobs">Fahrzeugaufträge</a><span>›</span><span>{{ job.vin }}</span></nav>
+{% endif %}
 <div class="page-heading"><div><span class="eyebrow">Fahrzeugauftrag · Version {{ job.version }}</span><h1>{{ job.vin }}</h1><p class="muted">{{ job.brand }} · Status: {{ job.status.value|replace('_', ' ') }}</p></div></div>
 <div class="credit-inline"><strong>{{ credit_balance.available }} Fahrzeug-Credits verfügbar</strong><span>{{ credit_balance.monthly_available }} monatlich + {{ credit_balance.additional_available }} dauerhaft</span></div>
 {% if not processing_enabled %}<div class="flash flash-error">Der reguläre KI-Dienst ist noch nicht konfiguriert. Originalbilder bleiben verfügbar; Freistellungen können danach manuell gestartet werden.</div>{% endif %}
