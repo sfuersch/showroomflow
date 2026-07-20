@@ -541,9 +541,7 @@ def test_dealership_admin_only_opens_limited_photo_configuration() -> None:
     )
 
     detail_response = client.get(f"/admin/dealerships/{dealership.id}")
-    configuration_response = client.get(
-        f"/admin/dealerships/{dealership.id}/configuration"
-    )
+    configuration_response = client.get(f"/admin/dealerships/{dealership.id}/configuration")
     create_location_response = client.post(
         f"/admin/dealerships/{dealership.id}/locations",
         data={"name": "Nicht erlaubt", "csrf_token": "irrelevant"},
@@ -575,9 +573,7 @@ def test_dealership_admin_configures_separate_app_and_export_orders() -> None:
     )
     configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
     with TestingSession() as db:
-        orientation = db.scalar(
-            select(Orientation).where(Orientation.name == "Diagonal vorne links")
-        )
+        orientation = db.scalar(select(Orientation).where(Orientation.name == "Vorne links"))
         assert orientation is not None
         orientation_id = orientation.id
 
@@ -607,6 +603,89 @@ def test_dealership_admin_configures_separate_app_and_export_orders() -> None:
         assert step.capture_order == 7
         assert step.export_order == 2
         assert step.is_active is True
+
+
+def test_dealership_admin_configures_repeatable_orientation_instances() -> None:
+    dealership, _ = create_dealership_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+    with TestingSession() as db:
+        orientation = db.scalar(select(Orientation).where(Orientation.key == "infotainment"))
+        assert orientation is not None
+        orientation_id = orientation.id
+
+    response = client.post(
+        f"/admin/dealerships/{dealership.id}/orientation-settings",
+        data={
+            "orientation_ids": str(orientation_id),
+            "capture_orders": "10",
+            "export_orders": "20",
+            "instance_counts": "3",
+            "required_orientation_ids": str(orientation_id),
+            "active_orientation_ids": str(orientation_id),
+            "csrf_token": csrf_from(configuration_page.text),
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "App- und Exportreihenfolge wurden gespeichert" in response.text
+    with TestingSession() as db:
+        steps = list(
+            db.scalars(
+                select(CaptureStep)
+                .where(
+                    CaptureStep.dealership_id == dealership.id,
+                    CaptureStep.orientation_id == orientation_id,
+                    CaptureStep.is_active.is_(True),
+                )
+                .order_by(CaptureStep.orientation_instance_index)
+            )
+        )
+        assert [step.name for step in steps] == [
+            "Navigation/Infotainment 1",
+            "Navigation/Infotainment 2",
+            "Navigation/Infotainment 3",
+        ]
+        assert [step.capture_order for step in steps] == [10, 11, 12]
+        assert [step.export_order for step in steps] == [20, 21, 22]
+
+    reduced_response = client.post(
+        f"/admin/dealerships/{dealership.id}/orientation-settings",
+        data={
+            "orientation_ids": str(orientation_id),
+            "capture_orders": "4",
+            "export_orders": "8",
+            "instance_counts": "1",
+            "active_orientation_ids": str(orientation_id),
+            "csrf_token": csrf_from(response.text),
+        },
+        follow_redirects=True,
+    )
+
+    assert reduced_response.status_code == 200
+    with TestingSession() as db:
+        all_steps = list(
+            db.scalars(
+                select(CaptureStep)
+                .where(
+                    CaptureStep.dealership_id == dealership.id,
+                    CaptureStep.orientation_id == orientation_id,
+                )
+                .order_by(CaptureStep.orientation_instance_index)
+            )
+        )
+        assert [step.is_active for step in all_steps] == [True, False, False]
+        assert all_steps[0].capture_order == 4
+        assert all_steps[0].export_order == 8
 
 
 def test_dealership_admin_cannot_manage_central_orientation_catalog() -> None:
@@ -786,15 +865,15 @@ def test_admin_adds_brand_and_standard_capture_sequence() -> None:
     assert brand_response.status_code == 200
     assert "Volkswagen" in brand_response.text
     assert defaults_response.status_code == 200
-    assert "16 Standard-Fotopositionen wurden ergänzt" in defaults_response.text
+    assert "36 Standard-Fotopositionen wurden ergänzt" in defaults_response.text
     with TestingSession() as db:
         brands = list(db.scalars(select(Brand)))
         steps = list(db.scalars(select(CaptureStep).order_by(CaptureStep.capture_order)))
         assert [brand.name for brand in brands] == ["Volkswagen"]
-        assert len(steps) == 16
-        assert steps[0].name == "Front"
+        assert len(steps) == 36
+        assert steps[0].name == "Vorne"
         assert steps[0].requires_processing is True
-        assert steps[-1].name == "Kofferraum"
+        assert steps[-1].name == "Spezialaufnahme 1"
         assert steps[-1].requires_processing is False
 
 
@@ -1435,12 +1514,8 @@ def test_guided_capture_upload_tracks_progress_and_revision() -> None:
     assert second_complete.status_code == 200
     assert len(final_session.json()["photos"]) == 1
     assert final_session.json()["photos"][0]["revision"] == 2
-    assert final_session.json()["photos"][0]["thumbnail_url"].endswith(
-        ".thumbnail.jpg?expires=900"
-    )
-    assert any(
-        str(upload["object_key"]).endswith(".thumbnail.jpg") for upload in storage.uploads
-    )
+    assert final_session.json()["photos"][0]["thumbnail_url"].endswith(".thumbnail.jpg?expires=900")
+    assert any(str(upload["object_key"]).endswith(".thumbnail.jpg") for upload in storage.uploads)
 
 
 def test_capture_must_be_completed_and_is_locked_afterwards() -> None:
@@ -1505,9 +1580,7 @@ def test_capture_must_be_completed_and_is_locked_afterwards() -> None:
             f"/api/v1/jobs/{job_id}/capture/photos/{upload.json()['photo_id']}/complete",
             headers=headers,
         )
-        completed_capture = client.post(
-            f"/api/v1/jobs/{job_id}/capture/complete", headers=headers
-        )
+        completed_capture = client.post(f"/api/v1/jobs/{job_id}/capture/complete", headers=headers)
         blocked_upload = client.post(
             f"/api/v1/jobs/{job_id}/capture/uploads",
             headers=headers,
