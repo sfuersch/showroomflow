@@ -35,6 +35,7 @@ from app.models import (
     ImageOverlay,
     JobStatus,
     Location,
+    Orientation,
     PhotoAsset,
     PhotoProcessingVariant,
     ProcessingStatus,
@@ -321,6 +322,7 @@ def _capture_export_order_conflict(
     step_statement = select(CaptureStep).where(
         CaptureStep.dealership_id == dealership_id,
         CaptureStep.export_order == export_order,
+        CaptureStep.is_active.is_(True),
     )
     if excluding_step_id is not None:
         step_statement = step_statement.where(CaptureStep.id != excluding_step_id)
@@ -335,6 +337,54 @@ def _capture_export_order_conflict(
         )
     )
     return supplemental.name if supplemental is not None else None
+
+
+def _capture_order_conflict(
+    db: Session,
+    dealership_id: uuid.UUID,
+    capture_order: int,
+    *,
+    excluding_step_id: uuid.UUID | None = None,
+) -> str | None:
+    statement = select(CaptureStep).where(
+        CaptureStep.dealership_id == dealership_id,
+        CaptureStep.capture_order == capture_order,
+        CaptureStep.is_active.is_(True),
+    )
+    if excluding_step_id is not None:
+        statement = statement.where(CaptureStep.id != excluding_step_id)
+    step = db.scalar(statement)
+    return step.name if step is not None else None
+
+
+def _ensure_standard_orientations(db: Session) -> list[Orientation]:
+    orientations = list(db.scalars(select(Orientation).order_by(Orientation.default_capture_order)))
+    existing_names = {orientation.name for orientation in orientations}
+    changed = False
+    for position, (name, instruction, category, processing) in enumerate(
+        STANDARD_CAPTURE_STEPS, start=1
+    ):
+        if name in existing_names:
+            continue
+        db.add(
+            Orientation(
+                key=f"standard-{position}",
+                name=name,
+                instruction=instruction,
+                category=category,
+                default_capture_order=position,
+                default_export_order=position,
+                is_required=True,
+                requires_processing=processing,
+            )
+        )
+        changed = True
+    if changed:
+        db.commit()
+        orientations = list(
+            db.scalars(select(Orientation).order_by(Orientation.default_capture_order))
+        )
+    return orientations
 
 
 def _supplemental_export_order_conflict(
@@ -727,6 +777,123 @@ def dealership_detail(
             ),
         ),
     )
+
+
+@router.get("/orientations", response_class=HTMLResponse)
+def orientations_page(request: Request, db: Session = Depends(get_db)):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    orientations = _ensure_standard_orientations(db)
+    return templates.TemplateResponse(
+        request,
+        "admin/orientations.html",
+        _context(request, admin, orientations=orientations),
+    )
+
+
+@router.post("/orientations")
+def create_orientation(
+    request: Request,
+    key: str = Form(),
+    name: str = Form(),
+    instruction: str = Form(default=""),
+    category: str = Form(default="detail"),
+    default_capture_order: int = Form(),
+    default_export_order: int | None = Form(default=None),
+    is_required: str | None = Form(default=None),
+    requires_processing: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    if (
+        not key.strip()
+        or not name.strip()
+        or category not in {"exterior", "interior", "detail", "free"}
+        or default_capture_order < 1
+        or (default_export_order is not None and default_export_order < 1)
+    ):
+        _flash(request, "Bitte prüfen Sie Schlüssel, Name und Reihenfolgen.", "error")
+    else:
+        db.add(
+            Orientation(
+                key=key.strip().lower(),
+                name=name.strip(),
+                instruction=instruction.strip(),
+                category=category,
+                default_capture_order=default_capture_order,
+                default_export_order=default_export_order,
+                is_required=is_required == "on",
+                requires_processing=requires_processing == "on",
+            )
+        )
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            _flash(request, "Schlüssel oder Name ist bereits vorhanden.", "error")
+        else:
+            _flash(request, "Orientierung wurde angelegt.")
+    return RedirectResponse("/admin/orientations", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/orientations/{orientation_id}")
+def update_orientation(
+    orientation_id: uuid.UUID,
+    request: Request,
+    name: str = Form(),
+    instruction: str = Form(default=""),
+    category: str = Form(default="detail"),
+    default_capture_order: int = Form(),
+    default_export_order: int | None = Form(default=None),
+    is_required: str | None = Form(default=None),
+    requires_processing: str | None = Form(default=None),
+    is_active: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    orientation = db.get(Orientation, orientation_id)
+    if orientation is None:
+        raise HTTPException(status_code=404, detail="Orientierung wurde nicht gefunden")
+    if (
+        not name.strip()
+        or category not in {"exterior", "interior", "detail", "free"}
+        or default_capture_order < 1
+        or (default_export_order is not None and default_export_order < 1)
+    ):
+        _flash(request, "Bitte prüfen Sie Name und Reihenfolgen.", "error")
+    else:
+        orientation.name = name.strip()
+        orientation.instruction = instruction.strip()
+        orientation.category = category
+        orientation.default_capture_order = default_capture_order
+        orientation.default_export_order = default_export_order
+        orientation.is_required = is_required == "on"
+        orientation.requires_processing = requires_processing == "on"
+        orientation.is_active = is_active == "on"
+        for step in db.scalars(
+            select(CaptureStep).where(CaptureStep.orientation_id == orientation.id)
+        ):
+            step.name = orientation.name
+            step.instruction = orientation.instruction
+            step.category = orientation.category
+            step.requires_processing = orientation.requires_processing
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            _flash(request, "Der Name ist bereits vorhanden.", "error")
+        else:
+            _flash(request, "Orientierung wurde gespeichert.")
+    return RedirectResponse("/admin/orientations", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/dealerships/{dealership_id}/sftp")
@@ -1715,10 +1882,11 @@ def configuration_page(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_system_admin(request, db)
+    admin = _require_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     dealership = _authorized_dealership(db, admin, dealership_id)
+    orientations = _ensure_standard_orientations(db)
     brands = list(
         db.scalars(select(Brand).where(Brand.dealership_id == dealership.id).order_by(Brand.name))
     )
@@ -1803,6 +1971,10 @@ def configuration_page(
             silhouette_previews=silhouette_previews,
             overlay_positions=OVERLAY_POSITIONS,
             default_overlay_step=default_overlay_step,
+            orientations=orientations,
+            step_by_orientation_id={
+                step.orientation_id: step for step in steps if step.orientation_id is not None
+            },
         ),
     )
 
@@ -2032,7 +2204,7 @@ async def create_overlay(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_system_admin(request, db)
+    admin = _require_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2095,7 +2267,7 @@ def update_overlay(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_system_admin(request, db)
+    admin = _require_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2137,7 +2309,7 @@ def delete_overlay(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_system_admin(request, db)
+    admin = _require_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2181,7 +2353,7 @@ async def create_supplemental_image(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_system_admin(request, db)
+    admin = _require_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2248,7 +2420,7 @@ def update_supplemental_image(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_system_admin(request, db)
+    admin = _require_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2302,7 +2474,7 @@ def delete_supplemental_image(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_system_admin(request, db)
+    admin = _require_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2345,8 +2517,14 @@ def create_default_capture_steps(
         return admin
     _validate_csrf(request, csrf_token)
     dealership = _authorized_dealership(db, admin, dealership_id)
-    existing_names = set(
-        db.scalars(select(CaptureStep.name).where(CaptureStep.dealership_id == dealership.id))
+    orientations = _ensure_standard_orientations(db)
+    existing_orientation_ids = set(
+        db.scalars(
+            select(CaptureStep.orientation_id).where(
+                CaptureStep.dealership_id == dealership.id,
+                CaptureStep.orientation_id.is_not(None),
+            )
+        )
     )
     next_order = (
         db.scalar(
@@ -2374,8 +2552,8 @@ def create_default_capture_steps(
     )
     next_export_order = 0
     added = 0
-    for name, instruction, category, processing in STANDARD_CAPTURE_STEPS:
-        if name in existing_names:
+    for orientation in orientations:
+        if orientation.id in existing_orientation_ids:
             continue
         next_order += 1
         next_export_order += 1
@@ -2385,13 +2563,15 @@ def create_default_capture_steps(
         db.add(
             CaptureStep(
                 dealership_id=dealership.id,
-                name=name,
-                instruction=instruction,
-                category=category,
+                orientation_id=orientation.id,
+                name=orientation.name,
+                instruction=orientation.instruction,
+                category=orientation.category,
                 capture_order=next_order,
                 export_order=next_export_order,
-                is_required=True,
-                requires_processing=processing,
+                is_required=orientation.is_required,
+                requires_processing=orientation.requires_processing,
+                is_active=orientation.is_active,
             )
         )
         added += 1
@@ -2403,7 +2583,169 @@ def create_default_capture_steps(
         else "Der Standardablauf ist bereits vollständig vorhanden.",
     )
     return RedirectResponse(
-        f"/admin/dealerships/{dealership.id}/configuration#capture-steps",
+        f"/admin/dealerships/{dealership.id}/configuration#orientations",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/dealerships/{dealership_id}/orientation-settings")
+def update_dealership_orientation_settings(
+    dealership_id: uuid.UUID,
+    request: Request,
+    orientation_ids: list[uuid.UUID] = Form(),
+    capture_orders: list[int] = Form(),
+    export_orders: list[str] = Form(),
+    active_orientation_ids: list[uuid.UUID] = Form(default=[]),
+    required_orientation_ids: list[uuid.UUID] = Form(default=[]),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    dealership = _authorized_dealership(db, admin, dealership_id)
+    if not (
+        len(orientation_ids) == len(capture_orders) == len(export_orders)
+        and len(set(orientation_ids)) == len(orientation_ids)
+    ):
+        raise HTTPException(status_code=400, detail="Ungültige Orientierungsauswahl")
+    orientations = {
+        item.id: item
+        for item in db.scalars(select(Orientation).where(Orientation.id.in_(orientation_ids)))
+    }
+    if len(orientations) != len(orientation_ids):
+        raise HTTPException(status_code=400, detail="Ungültige Orientierungsauswahl")
+    active_ids = set(active_orientation_ids)
+    required_ids = set(required_orientation_ids)
+    parsed_export_orders: list[int | None] = []
+    for raw_value in export_orders:
+        try:
+            parsed_export_orders.append(int(raw_value) if raw_value.strip() else None)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Ungültige Exportreihenfolge") from exc
+    active_rows = [
+        (orientation_id, capture_order, export_order)
+        for orientation_id, capture_order, export_order in zip(
+            orientation_ids, capture_orders, parsed_export_orders, strict=True
+        )
+        if orientation_id in active_ids
+    ]
+    if any(not orientations[item_id].is_active for item_id, _, _ in active_rows):
+        _flash(request, "Eine zentral deaktivierte Orientierung kann nicht aktiviert werden.", "error")
+    elif any(order < 1 for _, order, _ in active_rows) or any(
+        export_order is not None and export_order < 1 for _, _, export_order in active_rows
+    ):
+        _flash(request, "Bitte prüfen Sie Aufnahme- und Exportreihenfolge.", "error")
+    elif len({order for _, order, _ in active_rows}) != len(active_rows):
+        _flash(request, "Jede aktive Orientierung benötigt einen eigenen Aufnahmeplatz.", "error")
+    elif len(
+        {export_order for _, _, export_order in active_rows if export_order is not None}
+    ) != len([1 for _, _, export_order in active_rows if export_order is not None]):
+        _flash(request, "Jede aktive Orientierung benötigt einen eigenen Exportplatz.", "error")
+    else:
+        submitted_ids = set(orientation_ids)
+        untouched_steps = [
+            step
+            for step in db.scalars(
+                select(CaptureStep).where(
+                    CaptureStep.dealership_id == dealership.id,
+                    CaptureStep.is_active.is_(True),
+                )
+            )
+            if step.orientation_id not in submitted_ids
+        ]
+        untouched_capture_orders = {step.capture_order: step.name for step in untouched_steps}
+        untouched_export_orders = {
+            step.export_order: step.name
+            for step in untouched_steps
+            if step.export_order is not None
+        }
+        capture_conflict = next(
+            (
+                (capture_order, untouched_capture_orders[capture_order])
+                for _, capture_order, _ in active_rows
+                if capture_order in untouched_capture_orders
+            ),
+            None,
+        )
+        export_conflict = next(
+            (
+                (export_order, untouched_export_orders[export_order])
+                for _, _, export_order in active_rows
+                if export_order is not None and export_order in untouched_export_orders
+            ),
+            None,
+        )
+        supplemental_orders = set(
+            db.scalars(
+                select(SupplementalImage.export_order).where(
+                    SupplementalImage.dealership_id == dealership.id,
+                    SupplementalImage.is_active.is_(True),
+                )
+            )
+        )
+        conflict = next(
+            (
+                export_order
+                for _, _, export_order in active_rows
+                if export_order is not None and export_order in supplemental_orders
+            ),
+            None,
+        )
+        if capture_conflict is not None:
+            _flash(
+                request,
+                f"Aufnahmeplatz {capture_conflict[0]} ist bereits durch "
+                f"„{capture_conflict[1]}“ belegt.",
+                "error",
+            )
+        elif export_conflict is not None:
+            _flash(
+                request,
+                f"Exportplatz {export_conflict[0]} ist bereits durch "
+                f"„{export_conflict[1]}“ belegt.",
+                "error",
+            )
+        elif conflict is not None:
+            _flash(
+                request,
+                f"Exportplatz {conflict} ist bereits durch ein Zusatzbild belegt.",
+                "error",
+            )
+        else:
+            existing_steps = {
+                step.orientation_id: step
+                for step in db.scalars(
+                    select(CaptureStep).where(
+                        CaptureStep.dealership_id == dealership.id,
+                        CaptureStep.orientation_id.in_(orientation_ids),
+                    )
+                )
+            }
+            for orientation_id, capture_order, export_order in zip(
+                orientation_ids, capture_orders, parsed_export_orders, strict=True
+            ):
+                orientation = orientations[orientation_id]
+                step = existing_steps.get(orientation_id)
+                if step is None:
+                    step = CaptureStep(
+                        dealership_id=dealership.id,
+                        orientation_id=orientation.id,
+                        name=orientation.name,
+                        instruction=orientation.instruction,
+                        category=orientation.category,
+                        requires_processing=orientation.requires_processing,
+                    )
+                    db.add(step)
+                step.capture_order = capture_order
+                step.export_order = export_order
+                step.is_required = orientation_id in required_ids
+                step.is_active = orientation_id in active_ids
+            db.commit()
+            _flash(request, "App- und Exportreihenfolge wurden gespeichert.")
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/configuration#orientations",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -2441,6 +2783,12 @@ def create_capture_step(
     )
     if not step.name or capture_order < 1 or (export_order is not None and export_order < 1):
         _flash(request, "Bitte prüfen Sie Name und Reihenfolge.", "error")
+    elif conflict := _capture_order_conflict(db, dealership.id, capture_order):
+        _flash(
+            request,
+            f"Aufnahmeplatz {capture_order} ist bereits durch „{conflict}“ belegt.",
+            "error",
+        )
     elif conflict := _capture_export_order_conflict(db, dealership.id, export_order):
         _flash(
             request,
@@ -2491,6 +2839,16 @@ async def update_capture_step(
         raise HTTPException(status_code=400, detail="Ungültige Kategorie")
     if not name.strip() or capture_order < 1 or (export_order is not None and export_order < 1):
         _flash(request, "Bitte prüfen Sie Name und Reihenfolge.", "error")
+    elif is_active == "on" and (
+        conflict := _capture_order_conflict(
+            db, dealership.id, capture_order, excluding_step_id=step.id
+        )
+    ):
+        _flash(
+            request,
+            f"Aufnahmeplatz {capture_order} ist bereits durch „{conflict}“ belegt.",
+            "error",
+        )
     elif conflict := _capture_export_order_conflict(
         db,
         dealership.id,

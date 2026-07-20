@@ -1,10 +1,15 @@
 {% extends "admin/base.html" %}
 {% block title %}Foto-Konfiguration · {{ dealership.name }}{% endblock %}
 {% block content %}
+{% if current_user.role.value == 'system_admin' %}
 <nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}">{{ dealership.name }}</a><span>›</span><span>Foto-Konfiguration</span></nav>
-<div class="page-heading"><div><span class="eyebrow">Foto-Konfiguration</span><h1>{{ dealership.name }}</h1><p class="muted">Markenauswahl, virtuelle Showrooms, Overlays und die Reihenfolge des Exports steuern.</p></div></div>
-<div class="subnav"><a href="#brands">Marken</a><a href="#backgrounds">Hintergründe</a><a href="#overlays">Overlays</a><a href="#supplemental-images">Zusatzbilder</a><a href="#capture-steps">Fotoablauf</a></div>
+{% else %}
+<nav class="breadcrumb"><a href="/admin">Übersicht</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}/jobs">Fahrzeugaufträge</a><span>›</span><span>Fotoablauf & Medien</span></nav>
+{% endif %}
+<div class="page-heading"><div><span class="eyebrow">Foto-Konfiguration</span><h1>{{ dealership.name }}</h1><p class="muted">Orientierungen für die App, Exportreihenfolge, Overlays und Zusatzbilder steuern.</p></div></div>
+<div class="subnav">{% if current_user.role.value == 'system_admin' %}<a href="#brands">Marken</a><a href="#backgrounds">Hintergründe</a>{% endif %}<a href="#orientations">Orientierungen</a><a href="#overlays">Overlays</a><a href="#supplemental-images">Zusatzbilder</a>{% if current_user.role.value == 'system_admin' %}<a href="#capture-steps">Technische Details</a>{% endif %}</div>
 
+{% if current_user.role.value == 'system_admin' %}
 <section class="card section-card" id="brands">
     <div class="section-heading"><div><h2>Marken</h2><p>Diese Marken stehen dem Fotografen in der App zur Auswahl.</p></div><span class="count">{{ brands|length }}</span></div>
     <div class="stack">
@@ -52,6 +57,31 @@
         <fieldset class="choice-group span-2"><legend>Nur an diesen Standorten (leer = alle)</legend><div class="choice-row">{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}"><span>{{ location.name }}</span></label>{% endfor %}</div></fieldset>
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Hintergrund hochladen</button></div>
     </form>
+</section>
+{% endif %}
+
+<section class="card section-card" id="orientations">
+    <div class="section-heading"><div><h2>Orientierungen</h2><p>Die Aufnahme-Nr. bestimmt ausschließlich die Reihenfolge in der App. Die Export-Nr. bestimmt unabhängig davon Dateireihenfolge und Dateinamen im ZIP.</p></div><span class="count">{{ orientations|length }}</span></div>
+    <form method="post" action="/admin/dealerships/{{ dealership.id }}/orientation-settings">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="step-stack">
+        {% for orientation in orientations if orientation.is_active or orientation.id in step_by_orientation_id %}
+        {% set step = step_by_orientation_id.get(orientation.id) %}
+        <div class="step-card">
+            <input type="hidden" name="orientation_ids" value="{{ orientation.id }}">
+            <div class="order-pair">
+                <label>Aufnahme-Nr. (App)<input type="number" name="capture_orders" min="1" value="{{ step.capture_order if step else orientation.default_capture_order }}" required></label>
+                <label>Export-Nr. (ZIP)<input type="number" name="export_orders" min="1" value="{{ step.export_order if step and step.export_order else (orientation.default_export_order or '') }}" placeholder="Kein Export"></label>
+            </div>
+            <div class="step-main"><strong>{{ orientation.name }}</strong><span class="muted">{{ orientation.instruction }}</span></div>
+            <span class="status {{ 'status-active' if orientation.category == 'exterior' else 'status-inactive' }}">{{ {'exterior': 'Außenaufnahme', 'interior': 'Innenraum', 'detail': 'Detail', 'free': 'Freie Perspektive'}.get(orientation.category, orientation.category) }}</span>
+            <div class="step-options"><label class="toggle"><input type="checkbox" name="required_orientation_ids" value="{{ orientation.id }}" {% if (step and step.is_required) or (not step and orientation.is_required) %}checked{% endif %}><span>Pflichtfoto</span></label><label class="toggle"><input type="checkbox" name="active_orientation_ids" value="{{ orientation.id }}" {% if step and step.is_active %}checked{% endif %} {% if not orientation.is_active %}disabled{% endif %}><span>Für dieses Autohaus aktiv</span></label></div>
+        </div>
+        {% else %}<p class="empty">Der Superadmin hat noch keine Orientierungen freigegeben.</p>{% endfor %}
+    </div>
+    <div class="form-actions"><button class="button button-primary" type="submit">App- und Exportreihenfolge speichern</button></div>
+    </form>
+    <p class="muted">Exportplätze müssen über aktive Orientierungen und Zusatzbilder hinweg eindeutig sein.</p>
 </section>
 
 <section class="card section-card" id="overlays">
@@ -110,8 +140,9 @@
     </form>
 </section>
 
+{% if current_user.role.value == 'system_admin' %}
 <section class="card section-card" id="capture-steps">
-    <div class="section-heading"><div><h2>Fotoablauf</h2><p>Aufnahme-Nr. führt den Fotografen; Export-Nr. bestimmt den späteren Dateinamen.</p></div><span class="count">{{ steps|length }}</span></div>
+    <div class="section-heading"><div><h2>Technische Fotodetails</h2><p>Nur für den Superadmin: Anweisungen, Verarbeitung und Silhouetten der autohausspezifischen Einträge.</p></div><span class="count">{{ steps|length }}</span></div>
     <form method="post" action="/admin/dealerships/{{ dealership.id }}/capture-steps/defaults" class="standard-action"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary" type="submit">Standardablauf ergänzen</button></form>
     <div class="step-stack">
         {% for step in steps %}
@@ -135,4 +166,5 @@
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Fotoposition hinzufügen</button></div>
     </form>
 </section>
+{% endif %}
 {% endblock %}

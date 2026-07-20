@@ -14,7 +14,7 @@
         </a>
         {% if current_user %}
         <div class="account">
-            {% if current_user.role.value == "system_admin" %}<a href="/admin/image-service">Bilddienstleister</a>{% endif %}
+            {% if current_user.role.value == "system_admin" %}<a href="/admin/orientations">Orientierungen</a><a href="/admin/image-service">Bilddienstleister</a>{% else %}<a href="/admin/dealerships/{{ current_user.dealership_id }}/configuration">Fotoablauf & Medien</a>{% endif %}
             <span>{{ current_user.email }}</span>
             <form method="post" action="/admin/logout">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

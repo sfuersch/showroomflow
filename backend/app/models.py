@@ -215,6 +215,21 @@ class SupplementalImage(Timestamped, Base):
     locations: Mapped[list[Location]] = relationship(secondary="supplemental_image_locations")
 
 
+class Orientation(Timestamped, Base):
+    __tablename__ = "orientations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(80), unique=True)
+    name: Mapped[str] = mapped_column(String(160), unique=True)
+    instruction: Mapped[str] = mapped_column(String(500), default="")
+    category: Mapped[str] = mapped_column(String(32), default="detail")
+    default_capture_order: Mapped[int] = mapped_column(Integer)
+    default_export_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    requires_processing: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class CaptureStep(Timestamped, Base):
     __tablename__ = "capture_steps"
     __table_args__ = (
@@ -223,6 +238,9 @@ class CaptureStep(Timestamped, Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     dealership_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("dealerships.id"), index=True)
+    orientation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("orientations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(160))
     instruction: Mapped[str] = mapped_column(String(500), default="")
     category: Mapped[str] = mapped_column(String(32), default="detail")
@@ -233,6 +251,8 @@ class CaptureStep(Timestamped, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     silhouette_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     silhouette_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    orientation: Mapped[Orientation | None] = relationship()
 
 
 class User(Timestamped, Base):
