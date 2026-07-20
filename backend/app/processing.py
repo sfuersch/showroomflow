@@ -37,13 +37,8 @@ from app.thumbnails import create_thumbnail, thumbnail_key
 
 logger = logging.getLogger(__name__)
 
-WINDOW_SEGMENTATION_PROMPT = (
-    "steering wheel, dashboard, instrument cluster, infotainment screen, "
-    "center console, door panel, seat, windshield frame, rear-view mirror"
-)
-WINDOW_SEGMENTATION_NEGATIVE_PROMPT = (
-    "windshield, side window, building, sky, scenery, outdoor vehicle"
-)
+WINDOW_MASK_SEGMENTATION_PROMPT = "windshield, side window"
+WINDOW_BACKGROUND_OPACITY_PERCENT = 86
 
 
 class ImageProcessingError(RuntimeError):
@@ -568,32 +563,29 @@ def apply_cutout_mask_to_original(original_bytes: bytes, cutout_png_bytes: bytes
 
 def compose_background_through_windows(
     original_bytes: bytes,
-    cutout_png_bytes: bytes,
+    window_mask_png_bytes: bytes,
     background_bytes: bytes,
     settings: Settings,
 ) -> bytes:
-    """Replace only AI-transparent scene areas while preserving the full frame.
-
-    The cutout contributes its alpha channel only. All visible foreground pixels
-    therefore come from the original photo, including dashboard details, glass
-    tint and reflections. Unlike the vehicle showroom composition, this mode
-    never crops the subject, adds a shadow or changes its position.
-    """
+    """Replace only AI-selected glass while preserving every other original pixel."""
     try:
-        cutout = Image.open(io.BytesIO(cutout_png_bytes)).convert("RGBA")
-        alpha = cutout.getchannel("A")
-        histogram = alpha.histogram()
-        replaceable_fraction = sum(histogram[:245]) / (alpha.width * alpha.height)
-        if replaceable_fraction < 0.02:
+        original = ImageOps.exif_transpose(
+            Image.open(io.BytesIO(original_bytes))
+        ).convert("RGBA")
+        window_mask = Image.open(io.BytesIO(window_mask_png_bytes)).convert("RGBA")
+        window_alpha = window_mask.getchannel("A")
+        if window_alpha.size != original.size:
+            window_alpha = window_alpha.resize(original.size, Image.Resampling.LANCZOS)
+
+        histogram = window_alpha.histogram()
+        selected_fraction = sum(histogram[16:]) / (window_alpha.width * window_alpha.height)
+        if selected_fraction < 0.02:
+            raise ImageProcessingError("Photoroom hat keine Scheibenfläche erkannt")
+        if selected_fraction > 0.75:
             raise ImageProcessingError(
-                "Photoroom hat keine ersetzbare Scheibenfläche erkannt"
+                "Photoroom hat zu große Bildbereiche als Scheibe erkannt"
             )
-        foreground_bytes = apply_cutout_mask_to_original(
-            original_bytes,
-            cutout_png_bytes,
-        )
         background = Image.open(io.BytesIO(background_bytes)).convert("RGBA")
-        foreground = Image.open(io.BytesIO(foreground_bytes)).convert("RGBA")
     except ImageProcessingError:
         raise
     except (OSError, ValueError) as exc:
@@ -606,10 +598,19 @@ def compose_background_through_windows(
         method=Image.Resampling.LANCZOS,
     ).convert("RGBA")
     foreground = ImageOps.contain(
-        foreground,
+        original,
         output_size,
         method=Image.Resampling.LANCZOS,
     )
+    contained_window_alpha = ImageOps.contain(
+        window_alpha,
+        output_size,
+        method=Image.Resampling.LANCZOS,
+    )
+    replacement_alpha = contained_window_alpha.point(
+        lambda value: round(value * WINDOW_BACKGROUND_OPACITY_PERCENT / 100)
+    )
+    foreground.putalpha(replacement_alpha.point(lambda value: 255 - value))
     position = (
         (settings.output_width - foreground.width) // 2,
         (settings.output_height - foreground.height) // 2,
@@ -996,22 +997,19 @@ def process_photo(photo_id: str) -> None:
             background_image = storage.get_object(object_key=background.object_key)
             processing_mode = orientation.processing_mode if orientation else "optimized"
             if processing_mode == "window_background":
-                if image_settings.provider == "photoroom":
-                    ai_cutout = create_photoroom_cutout(
-                        original,
-                        settings,
-                        photoroom_sandbox_active(image_settings, settings),
-                        segmentation_prompt=WINDOW_SEGMENTATION_PROMPT,
-                        segmentation_negative_prompt=WINDOW_SEGMENTATION_NEGATIVE_PROMPT,
-                        segmentation_mode="keepSalientObject",
+                if image_settings.provider != "photoroom":
+                    raise ImageProcessingError(
+                        "Der Scheibenhintergrund benötigt Photoroom"
                     )
-                elif image_settings.provider == "remove_bg":
-                    ai_cutout = remove_vehicle_background(original, settings)
-                else:
-                    raise ImageProcessingError("Die Bildverarbeitung ist deaktiviert")
+                window_mask = create_photoroom_cutout(
+                    original,
+                    settings,
+                    photoroom_sandbox_active(image_settings, settings),
+                    segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
+                )
                 finished = compose_background_through_windows(
                     original,
-                    ai_cutout,
+                    window_mask,
                     background_image,
                     settings,
                 )
@@ -1182,17 +1180,15 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
             if orientation is not None and orientation.processing_mode == "window_background":
-                ai_cutout = create_photoroom_cutout(
+                window_mask = create_photoroom_cutout(
                     original,
                     settings,
                     photoroom_sandbox_active(image_settings, settings),
-                    segmentation_prompt=WINDOW_SEGMENTATION_PROMPT,
-                    segmentation_negative_prompt=WINDOW_SEGMENTATION_NEGATIVE_PROMPT,
-                    segmentation_mode="keepSalientObject",
+                    segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
                 )
                 finished = compose_background_through_windows(
                     original,
-                    ai_cutout,
+                    window_mask,
                     background_image,
                     settings,
                 )

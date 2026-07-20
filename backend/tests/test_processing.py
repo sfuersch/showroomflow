@@ -362,17 +362,17 @@ def test_preview_mask_preserves_original_resolution_and_pixels() -> None:
 
 def test_window_background_preserves_foreground_and_glass_transparency() -> None:
     original = Image.new("RGB", (800, 600), (230, 20, 20))
-    cutout = Image.new("RGBA", (800, 600), (255, 255, 255, 0))
-    alpha = Image.new("L", cutout.size, 0)
+    window_mask = Image.new("RGBA", (800, 600), (255, 255, 255, 0))
+    alpha = Image.new("L", window_mask.size, 255)
     draw = ImageDraw.Draw(alpha)
     draw.rectangle((0, 200, 799, 399), fill=128)
-    draw.rectangle((0, 400, 799, 599), fill=255)
-    cutout.putalpha(alpha)
+    draw.rectangle((0, 400, 799, 599), fill=0)
+    window_mask.putalpha(alpha)
     background = Image.new("RGB", (800, 600), (20, 30, 230))
 
     result = compose_background_through_windows(
         image_bytes(original, "JPEG"),
-        image_bytes(cutout, "PNG"),
+        image_bytes(window_mask, "PNG"),
         image_bytes(background, "JPEG"),
         Settings(output_width=800, output_height=600),
     )
@@ -382,7 +382,7 @@ def test_window_background_preserves_foreground_and_glass_transparency() -> None
     tinted_glass = finished.getpixel((400, 300))
     foreground = finished.getpixel((400, 500))
     assert finished.size == (800, 600)
-    assert transparent_scene[2] > 200 and transparent_scene[0] < 50
+    assert transparent_scene[2] >= 190 and transparent_scene[0] < 70
     assert tinted_glass[0] > 80 and tinted_glass[2] > 80
     assert foreground[0] > 200 and foreground[2] < 50
 
@@ -415,18 +415,35 @@ def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
     assert Image.open(io.BytesIO(result)).size == (800, 600)
 
 
-def test_window_background_rejects_fully_opaque_segmentation() -> None:
+def test_window_background_rejects_empty_window_mask() -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
-    opaque_cutout = image_bytes(
+    empty_window_mask = image_bytes(
+        Image.new("RGBA", (800, 600), (20, 30, 40, 0)),
+        "PNG",
+    )
+    background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+
+    with pytest.raises(ImageProcessingError, match="keine Scheibenfläche"):
+        compose_background_through_windows(
+            original,
+            empty_window_mask,
+            background,
+            Settings(output_width=800, output_height=600),
+        )
+
+
+def test_window_background_rejects_mask_covering_most_of_photo() -> None:
+    original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
+    oversized_window_mask = image_bytes(
         Image.new("RGBA", (800, 600), (20, 30, 40, 255)),
         "PNG",
     )
     background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
 
-    with pytest.raises(ImageProcessingError, match="keine ersetzbare Scheibenfläche"):
+    with pytest.raises(ImageProcessingError, match="zu große Bildbereiche"):
         compose_background_through_windows(
             original,
-            opaque_cutout,
+            oversized_window_mask,
             background,
             Settings(output_width=800, output_height=600),
         )
