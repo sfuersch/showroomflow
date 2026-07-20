@@ -359,13 +359,13 @@ def create_photoroom_cutout(
         request_data["segmentation.prompt"] = segmentation_prompt
     if segmentation_negative_prompt:
         request_data["segmentation.negativePrompt"] = segmentation_negative_prompt
+    headers = {"x-api-key": _photoroom_api_key(settings, photoroom_sandbox)}
+    if not segmentation_prompt and not segmentation_negative_prompt:
+        headers["pr-hd-background-removal"] = "auto"
     try:
         response = request(
             "https://image-api.photoroom.com/v2/edit",
-            headers={
-                "x-api-key": _photoroom_api_key(settings, photoroom_sandbox),
-                "pr-hd-background-removal": "auto",
-            },
+            headers=headers,
             files={"imageFile": ("vehicle.jpg", original_bytes, "image/jpeg")},
             data=request_data,
             timeout=180,
