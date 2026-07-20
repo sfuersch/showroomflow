@@ -19,6 +19,7 @@ from app.processing import (
     calculate_scene_adjustment,
     compose_background_through_windows,
     compose_showroom,
+    create_photoroom_cutout,
     create_photoroom_showroom,
     infer_vehicle_perspective,
     measure_vehicle_contour,
@@ -383,6 +384,31 @@ def test_window_background_preserves_foreground_and_glass_transparency() -> None
     assert transparent_scene[2] > 200 and transparent_scene[0] < 50
     assert tinted_glass[0] > 80 and tinted_glass[2] > 80
     assert foreground[0] > 200 and foreground[2] < 50
+
+
+def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
+    original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
+    cutout = image_bytes(Image.new("RGBA", (800, 600), (20, 30, 40, 255)), "PNG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "pr-hd-background-removal" not in request.headers
+        body = request.content
+        assert b'name="segmentation.prompt"' in body
+        assert b"steering wheel" in body
+        assert b'name="segmentation.negativePrompt"' in body
+        assert b"vehicles outside the car" in body
+        return httpx.Response(200, content=cutout, headers={"content-type": "image/png"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = create_photoroom_cutout(
+            original,
+            Settings(photoroom_api_key="test-key"),
+            segmentation_prompt="car interior including steering wheel",
+            segmentation_negative_prompt="vehicles outside the car",
+            client=client,
+        )
+
+    assert Image.open(io.BytesIO(result)).size == (800, 600)
 
 
 def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
