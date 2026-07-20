@@ -10,6 +10,7 @@ from app.models import Background, BackgroundOrientationComposition
 from app.processing import (
     BackgroundComposition,
     CompositionOptions,
+    ImageProcessingError,
     OverlayLayer,
     SceneAdjustment,
     VehicleContour,
@@ -397,6 +398,8 @@ def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
         assert b"steering wheel" in body
         assert b'name="segmentation.negativePrompt"' in body
         assert b"vehicles outside the car" in body
+        assert b'name="segmentation.mode"' in body
+        assert b"keepSalientObject" in body
         return httpx.Response(200, content=cutout, headers={"content-type": "image/png"})
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -405,10 +408,28 @@ def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
             Settings(photoroom_api_key="test-key"),
             segmentation_prompt="car interior including steering wheel",
             segmentation_negative_prompt="vehicles outside the car",
+            segmentation_mode="keepSalientObject",
             client=client,
         )
 
     assert Image.open(io.BytesIO(result)).size == (800, 600)
+
+
+def test_window_background_rejects_fully_opaque_segmentation() -> None:
+    original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
+    opaque_cutout = image_bytes(
+        Image.new("RGBA", (800, 600), (20, 30, 40, 255)),
+        "PNG",
+    )
+    background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+
+    with pytest.raises(ImageProcessingError, match="keine ersetzbare Scheibenfläche"):
+        compose_background_through_windows(
+            original,
+            opaque_cutout,
+            background,
+            Settings(output_width=800, output_height=600),
+        )
 
 
 def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:

@@ -37,6 +37,14 @@ from app.thumbnails import create_thumbnail, thumbnail_key
 
 logger = logging.getLogger(__name__)
 
+WINDOW_SEGMENTATION_PROMPT = (
+    "steering wheel, dashboard, instrument cluster, infotainment screen, "
+    "center console, door panel, seat, windshield frame, rear-view mirror"
+)
+WINDOW_SEGMENTATION_NEGATIVE_PROMPT = (
+    "windshield, side window, building, sky, scenery, outdoor vehicle"
+)
+
 
 class ImageProcessingError(RuntimeError):
     """An image could not be processed into a showroom image."""
@@ -339,6 +347,7 @@ def create_photoroom_cutout(
     *,
     segmentation_prompt: str | None = None,
     segmentation_negative_prompt: str | None = None,
+    segmentation_mode: str | None = None,
     client: httpx.Client | None = None,
 ) -> bytes:
     """Request a transparent, original-frame cutout for contour measurement."""
@@ -359,6 +368,8 @@ def create_photoroom_cutout(
         request_data["segmentation.prompt"] = segmentation_prompt
     if segmentation_negative_prompt:
         request_data["segmentation.negativePrompt"] = segmentation_negative_prompt
+    if segmentation_mode:
+        request_data["segmentation.mode"] = segmentation_mode
     headers = {"x-api-key": _photoroom_api_key(settings, photoroom_sandbox)}
     if not segmentation_prompt and not segmentation_negative_prompt:
         headers["pr-hd-background-removal"] = "auto"
@@ -568,10 +579,23 @@ def compose_background_through_windows(
     tint and reflections. Unlike the vehicle showroom composition, this mode
     never crops the subject, adds a shadow or changes its position.
     """
-    foreground_bytes = apply_cutout_mask_to_original(original_bytes, cutout_png_bytes)
     try:
+        cutout = Image.open(io.BytesIO(cutout_png_bytes)).convert("RGBA")
+        alpha = cutout.getchannel("A")
+        histogram = alpha.histogram()
+        replaceable_fraction = sum(histogram[:245]) / (alpha.width * alpha.height)
+        if replaceable_fraction < 0.02:
+            raise ImageProcessingError(
+                "Photoroom hat keine ersetzbare Scheibenfläche erkannt"
+            )
+        foreground_bytes = apply_cutout_mask_to_original(
+            original_bytes,
+            cutout_png_bytes,
+        )
         background = Image.open(io.BytesIO(background_bytes)).convert("RGBA")
         foreground = Image.open(io.BytesIO(foreground_bytes)).convert("RGBA")
+    except ImageProcessingError:
+        raise
     except (OSError, ValueError) as exc:
         raise ImageProcessingError("Der Scheibenhintergrund konnte nicht erzeugt werden") from exc
 
@@ -977,13 +1001,9 @@ def process_photo(photo_id: str) -> None:
                         original,
                         settings,
                         photoroom_sandbox_active(image_settings, settings),
-                        segmentation_prompt=(
-                            "car interior including steering wheel, dashboard, "
-                            "windshield glass and door frame"
-                        ),
-                        segmentation_negative_prompt=(
-                            "scenery, buildings, sky and vehicles outside the car"
-                        ),
+                        segmentation_prompt=WINDOW_SEGMENTATION_PROMPT,
+                        segmentation_negative_prompt=WINDOW_SEGMENTATION_NEGATIVE_PROMPT,
+                        segmentation_mode="keepSalientObject",
                     )
                 elif image_settings.provider == "remove_bg":
                     ai_cutout = remove_vehicle_background(original, settings)
@@ -1166,13 +1186,9 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                     original,
                     settings,
                     photoroom_sandbox_active(image_settings, settings),
-                    segmentation_prompt=(
-                        "car interior including steering wheel, dashboard, "
-                        "windshield glass and door frame"
-                    ),
-                    segmentation_negative_prompt=(
-                        "scenery, buildings, sky and vehicles outside the car"
-                    ),
+                    segmentation_prompt=WINDOW_SEGMENTATION_PROMPT,
+                    segmentation_negative_prompt=WINDOW_SEGMENTATION_NEGATIVE_PROMPT,
+                    segmentation_mode="keepSalientObject",
                 )
                 finished = compose_background_through_windows(
                     original,
