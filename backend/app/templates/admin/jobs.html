@@ -8,7 +8,7 @@
 {% endif %}
 <div class="page-heading">
     <div><span class="eyebrow">Fahrzeugaufträge</span><h1>{{ dealership.name }}</h1><p class="muted">Aufnahmen, Verarbeitung und Exporte kontrollieren.</p></div>
-    {% if locations and brands %}<button class="button button-primary" type="button" onclick="document.getElementById('create-job-dialog').showModal()">Auftrag manuell anlegen</button>{% endif %}
+    <div class="asset-actions">{% if current_user.role.value == 'dealership_admin' %}<a class="button button-secondary" href="/admin/dealerships/{{ dealership.id }}/configuration">Fotoablauf & Medien</a>{% endif %}{% if locations and brands %}<button class="button button-primary" type="button" onclick="document.getElementById('create-job-dialog').showModal()">Auftrag manuell anlegen</button>{% endif %}</div>
 </div>
 <section class="card credit-summary" aria-labelledby="credit-heading">
     <div><span class="eyebrow" id="credit-heading">Aktueller Credit-Stand</span><strong>{{ credit_balance.available }}</strong><span>verfügbar</span></div>

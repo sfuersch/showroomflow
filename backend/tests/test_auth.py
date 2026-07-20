@@ -22,6 +22,7 @@ from app.models import (
     ExportRun,
     ImageOverlay,
     Location,
+    Orientation,
     PhotoAsset,
     ProcessingStatus,
     SupplementalImage,
@@ -527,7 +528,7 @@ def test_dealership_admin_logs_into_tenant_interface() -> None:
     assert "Autohaus hinzufügen" not in dashboard.text
 
 
-def test_dealership_admin_cannot_open_or_change_management() -> None:
+def test_dealership_admin_only_opens_limited_photo_configuration() -> None:
     dealership, _ = create_dealership_admin()
     login_page = client.get("/admin/login")
     client.post(
@@ -549,10 +550,80 @@ def test_dealership_admin_cannot_open_or_change_management() -> None:
     )
 
     assert detail_response.status_code == 403
-    assert configuration_response.status_code == 403
+    assert configuration_response.status_code == 200
+    assert 'id="orientations"' in configuration_response.text
+    assert 'id="overlays"' in configuration_response.text
+    assert 'id="supplemental-images"' in configuration_response.text
+    assert 'id="brands"' not in configuration_response.text
+    assert 'id="backgrounds"' not in configuration_response.text
+    assert 'id="capture-steps"' not in configuration_response.text
     assert create_location_response.status_code == 403
     with TestingSession() as db:
         assert db.scalar(select(Location).where(Location.name == "Nicht erlaubt")) is None
+
+
+def test_dealership_admin_configures_separate_app_and_export_orders() -> None:
+    dealership, _ = create_dealership_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+    with TestingSession() as db:
+        orientation = db.scalar(
+            select(Orientation).where(Orientation.name == "Diagonal vorne links")
+        )
+        assert orientation is not None
+        orientation_id = orientation.id
+
+    response = client.post(
+        f"/admin/dealerships/{dealership.id}/orientation-settings",
+        data={
+            "orientation_ids": str(orientation_id),
+            "capture_orders": "7",
+            "export_orders": "2",
+            "required_orientation_ids": str(orientation_id),
+            "active_orientation_ids": str(orientation_id),
+            "csrf_token": csrf_from(configuration_page.text),
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "App- und Exportreihenfolge wurden gespeichert" in response.text
+    with TestingSession() as db:
+        step = db.scalar(
+            select(CaptureStep).where(
+                CaptureStep.dealership_id == dealership.id,
+                CaptureStep.orientation_id == orientation_id,
+            )
+        )
+        assert step is not None
+        assert step.capture_order == 7
+        assert step.export_order == 2
+        assert step.is_active is True
+
+
+def test_dealership_admin_cannot_manage_central_orientation_catalog() -> None:
+    create_dealership_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+
+    response = client.get("/admin/orientations")
+
+    assert response.status_code == 403
 
 
 def test_admin_form_rejects_invalid_csrf_token() -> None:

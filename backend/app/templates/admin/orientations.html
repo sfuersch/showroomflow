@@ -1,0 +1,35 @@
+{% extends "admin/base.html" %}
+{% block title %}Orientierungskatalog{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/admin">Autohäuser</a><span>›</span><span>Orientierungskatalog</span></nav>
+<div class="page-heading"><div><span class="eyebrow">Superadmin</span><h1>Orientierungen</h1><p class="muted">Zentrale Namen, Anweisungen und Standardwerte. Autohaus-Admins wählen daraus ihre aktiven Positionen und pflegen App- und Exportreihenfolge getrennt.</p></div></div>
+<section class="card section-card">
+    <div class="section-heading"><div><h2>Verfügbare Orientierungen</h2><p>Änderungen an Name, Anweisung, Kategorie und Verarbeitung werden auf bereits zugeordnete Autohauspositionen übertragen. Autohausspezifische Reihenfolgen bleiben erhalten.</p></div><span class="count">{{ orientations|length }}</span></div>
+    <div class="step-stack">
+        {% for orientation in orientations %}
+        <form class="step-card" method="post" action="/admin/orientations/{{ orientation.id }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="order-pair"><label>Standard App<input type="number" name="default_capture_order" min="1" value="{{ orientation.default_capture_order }}" required></label><label>Standard Export<input type="number" name="default_export_order" min="1" value="{{ orientation.default_export_order or '' }}" placeholder="Kein Export"></label></div>
+            <div class="step-main"><label>Name<input type="text" name="name" value="{{ orientation.name }}" maxlength="160" required></label><label>Anweisung<input type="text" name="instruction" value="{{ orientation.instruction }}" maxlength="500"></label></div>
+            <label>Kategorie<select name="category"><option value="exterior" {% if orientation.category == 'exterior' %}selected{% endif %}>Außenaufnahme</option><option value="interior" {% if orientation.category == 'interior' %}selected{% endif %}>Innenraum</option><option value="detail" {% if orientation.category == 'detail' %}selected{% endif %}>Detail</option><option value="free" {% if orientation.category == 'free' %}selected{% endif %}>Freie Perspektive</option></select></label>
+            <div class="step-options"><label class="toggle"><input type="checkbox" name="is_required" {% if orientation.is_required %}checked{% endif %}><span>Standardmäßig Pflicht</span></label><label class="toggle"><input type="checkbox" name="requires_processing" {% if orientation.requires_processing %}checked{% endif %}><span>Freistellen</span></label><label class="toggle"><input type="checkbox" name="is_active" {% if orientation.is_active %}checked{% endif %}><span>Verfügbar</span></label></div>
+            <div class="row-between"><span class="muted">Schlüssel: {{ orientation.key }}</span><button class="button button-secondary" type="submit">Speichern</button></div>
+        </form>
+        {% endfor %}
+    </div>
+</section>
+<section class="card section-card compact-card">
+    <div><h2>Orientierung ergänzen</h2><p class="muted">Für weitere feste Perspektiven. Der Schlüssel wird später für technische Optimierungsprofile verwendet.</p></div>
+    <form class="form-grid" method="post" action="/admin/orientations">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>Technischer Schlüssel<input type="text" name="key" maxlength="80" pattern="[a-z0-9-]+" required placeholder="z. B. detail-motorraum"></label>
+        <label>Name<input type="text" name="name" maxlength="160" required></label>
+        <label class="span-2">Anweisung<input type="text" name="instruction" maxlength="500"></label>
+        <label>Kategorie<select name="category"><option value="detail">Detail</option><option value="exterior">Außenaufnahme</option><option value="interior">Innenraum</option><option value="free">Freie Perspektive</option></select></label>
+        <label>Standard App<input type="number" name="default_capture_order" min="1" required></label>
+        <label>Standard Export<input type="number" name="default_export_order" min="1" placeholder="Optional"></label>
+        <div class="choice-row"><label class="toggle"><input type="checkbox" name="is_required"><span>Pflicht</span></label><label class="toggle"><input type="checkbox" name="requires_processing"><span>Freistellen</span></label></div>
+        <div class="form-actions span-2"><button class="button button-primary" type="submit">Orientierung anlegen</button></div>
+    </form>
+</section>
+{% endblock %}
