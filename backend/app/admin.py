@@ -1973,34 +1973,28 @@ def delete_background(
     if background is None:
         raise HTTPException(status_code=404, detail="Hintergrund wurde nicht gefunden")
     dealership = _authorized_dealership(db, admin, background.dealership_id)
-    is_in_use = db.scalar(
-        select(VehicleJob.id).where(VehicleJob.background_id == background.id).limit(1)
+    db.execute(
+        update(VehicleJob)
+        .where(VehicleJob.background_id == background.id)
+        .values(background_id=None)
     )
-    if is_in_use is not None:
+    db.delete(background)
+    try:
+        db.flush()
+        storage.delete_object(object_key=background.object_key)
+        db.commit()
+    except StorageUnavailableError:
+        db.rollback()
         _flash(
             request,
-            "Dieser Hintergrund wird bereits von einem Fahrzeugauftrag verwendet und kann "
-            "nicht gelöscht werden. Sie können ihn stattdessen deaktivieren.",
+            "Der Bildspeicher ist nicht erreichbar. Der Hintergrund wurde nicht gelöscht.",
             "error",
         )
+    except IntegrityError:
+        db.rollback()
+        _flash(request, "Der Hintergrund konnte nicht gelöscht werden.", "error")
     else:
-        db.delete(background)
-        try:
-            db.flush()
-            storage.delete_object(object_key=background.object_key)
-            db.commit()
-        except StorageUnavailableError:
-            db.rollback()
-            _flash(
-                request,
-                "Der Bildspeicher ist nicht erreichbar. Der Hintergrund wurde nicht gelöscht.",
-                "error",
-            )
-        except IntegrityError:
-            db.rollback()
-            _flash(request, "Der Hintergrund konnte nicht gelöscht werden.", "error")
-        else:
-            _flash(request, "Hintergrund wurde dauerhaft gelöscht.")
+        _flash(request, "Hintergrund wurde dauerhaft gelöscht.")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}/configuration#backgrounds",
         status_code=status.HTTP_303_SEE_OTHER,
