@@ -13,12 +13,15 @@ struct CaptureFlowView: View {
     @State private var isCompletingCapture = false
     @State private var showCompletionConfirmation = false
     @State private var isRetakingExistingPhoto = false
+    @State private var queuedPhotoData: [UUID: Data] = [:]
+    @State private var completionQueued = false
     @State private var errorMessage: String?
 
     let job: VehicleJob
     let loadCaptureSession: (UUID) async throws -> CaptureSession
-    let uploadCapturedPhoto: (UUID, UUID, Data) async throws -> CapturedPhoto
-    let completeCapture: (UUID) async throws -> VehicleJob
+    let queueCapturedPhoto: (UUID, UUID, Data) async throws -> PendingPhotoUpload
+    let pendingCapturedPhotos: (UUID) -> [PendingPhotoUpload]
+    let completeCapture: (UUID) async throws -> VehicleJob?
 
     var body: some View {
         NavigationStack {
@@ -67,7 +70,7 @@ struct CaptureFlowView: View {
 
     @ViewBuilder
     private func captureContent(_ data: CaptureSession) -> some View {
-        if data.job.captureCompletedAt != nil {
+        if data.job.captureCompletedAt != nil || completionQueued {
             completedCaptureView
         } else {
             let step = data.captureSteps[currentIndex]
@@ -101,11 +104,7 @@ struct CaptureFlowView: View {
                 .foregroundStyle(.mint)
             Text("Aufnahme abgeschlossen")
                 .font(.title.bold())
-            Text(
-                job.autoExport
-                    ? "Der Export startet automatisch, sobald alle Bilder verarbeitet sind."
-                    : "Die Bilder stehen jetzt zur Prüfung und manuellen Weiterverarbeitung bereit."
-            )
+            Text(completionMessage)
             .multilineTextAlignment(.center)
             .foregroundStyle(.white.opacity(0.75))
             Button("Zur Fahrzeugübersicht", systemImage: "chevron.left") {
@@ -120,6 +119,16 @@ struct CaptureFlowView: View {
         .background(.ultraThinMaterial, in: .rect(cornerRadius: 28))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(30)
+    }
+
+    private var completionMessage: String {
+        if completionQueued {
+            return "Alle Fotos sind sicher auf diesem Gerät gespeichert. "
+                + "Die Übertragung und der Abschluss erfolgen automatisch, sobald Internet verfügbar ist."
+        }
+        return job.autoExport
+            ? "Der Export startet automatisch, sobald alle Bilder verarbeitet sind."
+            : "Die Bilder stehen jetzt zur Prüfung und manuellen Weiterverarbeitung bereit."
     }
 
     private var captureBackground: LinearGradient {
@@ -147,6 +156,20 @@ struct CaptureFlowView: View {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
+                } else if let localData = queuedPhotoData[step.id],
+                          let image = UIImage(data: localData),
+                          !isRetakingExistingPhoto {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .overlay(alignment: .topTrailing) {
+                            Label("Lokal gespeichert", systemImage: "iphone.and.arrow.forward")
+                                .font(.caption.bold())
+                                .foregroundStyle(.white)
+                                .padding(8)
+                                .background(.orange.opacity(0.9), in: .capsule)
+                                .padding(10)
+                        }
                 } else if let photo = existingPhoto(for: step.id),
                           !isRetakingExistingPhoto {
                     existingPhotoView(photo, width: width, height: height)
@@ -408,7 +431,9 @@ struct CaptureFlowView: View {
 
     @ViewBuilder
     private func stepThumbnail(_ step: ConfiguredCaptureStep) -> some View {
-        if let photo = existingPhoto(for: step.id) {
+        if let data = queuedPhotoData[step.id], let image = UIImage(data: data) {
+            Image(uiImage: image).resizable().scaledToFill()
+        } else if let photo = existingPhoto(for: step.id) {
             CachedAsyncImage(url: photo.displayThumbnailURL) { phase in
                 if case let .success(image) = phase {
                     image.resizable().scaledToFill()
@@ -517,7 +542,7 @@ struct CaptureFlowView: View {
                 .foregroundStyle(.mint)
                 .disabled(isUploading)
             }
-        } else if existingPhoto(for: step.id) != nil && !isRetakingExistingPhoto {
+        } else if isCompleted(step.id) && !isRetakingExistingPhoto {
             Button {
                 isRetakingExistingPhoto = true
                 errorMessage = nil
@@ -560,19 +585,23 @@ struct CaptureFlowView: View {
     private var completedCount: Int {
         guard let captureSession else { return 0 }
         let activeStepIDs = Set(captureSession.captureSteps.map(\.id))
-        return captureSession.photos.count { activeStepIDs.contains($0.captureStepID) }
+        let completedStepIDs = Set(captureSession.photos.map(\.captureStepID))
+            .union(queuedPhotoData.keys)
+        return completedStepIDs.count { activeStepIDs.contains($0) }
     }
 
     private var requiredPhotosComplete: Bool {
         guard let captureSession else { return false }
         let photographedStepIDs = Set(captureSession.photos.map(\.captureStepID))
+            .union(queuedPhotoData.keys)
         return captureSession.captureSteps
             .filter(\.isRequired)
             .allSatisfy { photographedStepIDs.contains($0.id) }
     }
 
     private func isCompleted(_ stepID: UUID) -> Bool {
-        captureSession?.photos.contains(where: { $0.captureStepID == stepID }) == true
+        queuedPhotoData[stepID] != nil
+            || captureSession?.photos.contains(where: { $0.captureStepID == stepID }) == true
     }
 
     private func existingPhoto(for stepID: UUID) -> CapturedPhoto? {
@@ -584,8 +613,15 @@ struct CaptureFlowView: View {
         do {
             let loadedSession = try await loadCaptureSession(job.id)
             captureSession = loadedSession
+            for upload in pendingCapturedPhotos(job.id) {
+                if let data = try? Data(contentsOf: upload.fileURL) {
+                    queuedPhotoData[upload.captureStepID] = data
+                }
+            }
             currentIndex = loadedSession.captureSteps.firstIndex {
-                step in !loadedSession.photos.contains { $0.captureStepID == step.id }
+                step in
+                    !loadedSession.photos.contains { $0.captureStepID == step.id }
+                        && queuedPhotoData[step.id] == nil
             } ?? 0
         } catch {
             errorMessage = error.localizedDescription
@@ -610,14 +646,9 @@ struct CaptureFlowView: View {
         errorMessage = nil
         defer { isUploading = false }
         do {
-            let uploadedPhoto = try await uploadCapturedPhoto(job.id, step.id, photoData)
-            guard var updatedSession = captureSession else { return }
-            updatedSession = CaptureSession(
-                job: updatedSession.job,
-                captureSteps: updatedSession.captureSteps,
-                photos: updatedSession.photos.filter { $0.captureStepID != step.id } + [uploadedPhoto]
-            )
-            captureSession = updatedSession
+            _ = try await queueCapturedPhoto(job.id, step.id, photoData)
+            guard let updatedSession = captureSession else { return }
+            queuedPhotoData[step.id] = photoData
             pendingPhotoData = nil
             isRetakingExistingPhoto = false
             moveToNextIncompleteStep(in: updatedSession)
@@ -631,8 +662,12 @@ struct CaptureFlowView: View {
         errorMessage = nil
         defer { isCompletingCapture = false }
         do {
-            _ = try await completeCapture(job.id)
-            dismiss()
+            let completedJob = try await completeCapture(job.id)
+            if completedJob == nil {
+                completionQueued = true
+            } else {
+                dismiss()
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -642,7 +677,7 @@ struct CaptureFlowView: View {
         let laterSteps = data.captureSteps.indices.filter { $0 > currentIndex }
         let earlierSteps = data.captureSteps.indices.filter { $0 <= currentIndex }
         if let nextIndex = (laterSteps + earlierSteps).first(where: { index in
-            !data.photos.contains { $0.captureStepID == data.captureSteps[index].id }
+            !isCompleted(data.captureSteps[index].id)
         }) {
             currentIndex = nextIndex
             isRetakingExistingPhoto = false

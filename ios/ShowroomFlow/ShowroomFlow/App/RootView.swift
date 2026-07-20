@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var session = SessionStore()
 
     var body: some View {
@@ -14,7 +15,9 @@ struct RootView: View {
                     loadConfiguration: session.loadConfiguration,
                     createJob: session.createJob,
                     loadCaptureSession: session.loadCaptureSession,
-                    uploadCapturedPhoto: session.uploadCapturedPhoto,
+                    queueCapturedPhoto: session.queueCapturedPhoto,
+                    pendingCapturedPhotos: session.pendingCapturedPhotos,
+                    pendingUploadCount: session.pendingUploadCount,
                     completeCapture: session.completeCapture,
                     onLogout: session.logout
                 )
@@ -27,6 +30,10 @@ struct RootView: View {
         .tint(.indigo)
         .task {
             await session.restore()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await session.synchronizePendingUploads() }
         }
     }
 }
