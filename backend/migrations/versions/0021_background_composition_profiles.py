@@ -4,7 +4,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0021_background_composition_profiles"
+# Production's Alembic version column is VARCHAR(32).
+revision = "0021_background_composition"
 down_revision = "0020_scene_capture_metadata"
 branch_labels = None
 depends_on = None
