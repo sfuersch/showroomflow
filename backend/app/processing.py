@@ -197,8 +197,20 @@ def perspective_composition_options(
             60, round(options.contour_target_area_percent * 1.10)
         ),
         contour_max_width_percent=min(90, options.contour_max_width_percent + 2),
-        vehicle_bottom_percent=max(55, options.vehicle_bottom_percent - 3),
+        # Three-quarter views need more visual contact with the foreground than
+        # the narrower front/rear and side profiles. Keep the configured ground
+        # line instead of raising them by three percentage points.
+        vehicle_bottom_percent=options.vehicle_bottom_percent,
     )
+
+
+def photoroom_shadow_mode(opacity_percent: int) -> str | None:
+    """Map the dealership shadow strength to Photoroom's supported modes."""
+    if opacity_percent <= 0:
+        return None
+    if opacity_percent < 30:
+        return "ai.soft"
+    return "ai.hard"
 
 
 def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
@@ -422,10 +434,12 @@ def create_photoroom_showroom(
         "verticalAlignment": "bottom",
         "export.format": "jpeg",
     }
-    if shadow_opacity_percent > 0:
-        # Photoroom derives the tyre contact points and perspective itself. Its API
-        # currently exposes a shadow mode but no numeric opacity control.
-        edit_options["shadow.mode"] = "ai.soft"
+    shadow_mode = photoroom_shadow_mode(shadow_opacity_percent)
+    if shadow_mode is not None:
+        # Photoroom derives tyre contact points and perspective. Its API exposes
+        # discrete soft/hard modes instead of numeric opacity, so the configured
+        # intensity selects the closest supported mode.
+        edit_options["shadow.mode"] = shadow_mode
     try:
         response = request(
             "https://image-api.photoroom.com/v2/edit",

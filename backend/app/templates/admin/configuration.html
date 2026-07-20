@@ -41,7 +41,7 @@
             <fieldset class="choice-group"><legend>Standorte</legend>{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in background.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}{% if not locations %}<span class="muted">Noch keine Standorte vorhanden.</span>{% endif %}</fieldset>
             <div class="form-grid">
                 <label>Bodenposition (%)<input type="number" name="vehicle_bottom_percent" min="55" max="98" value="{{ background.vehicle_bottom_percent }}" required></label>
-                <label>Schatten (%)<input type="number" name="shadow_opacity_percent" min="0" max="80" value="{{ background.shadow_opacity_percent }}" required></label>
+                <label>Schattenintensität (%)<input type="number" name="shadow_opacity_percent" min="0" max="80" value="{{ background.shadow_opacity_percent }}" required><small>0 = aus, 1–29 = weich, ab 30 = kräftiger Kontaktschatten</small></label>
                 <label>Reflexion (%)<input type="number" name="reflection_opacity_percent" min="0" max="60" value="{{ background.reflection_opacity_percent }}" required></label>
                 <label>Fahrzeughelligkeit (%)<input type="number" name="brightness_percent" min="50" max="150" value="{{ background.brightness_percent }}" required></label>
             </div>
