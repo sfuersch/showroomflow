@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 
 
-PROCESSING_MODES = {"optimized", "original", "configurable"}
+PROCESSING_MODES = {"optimized", "window_background", "original", "configurable"}
+PROCESSING_REQUIRED_MODES = {"optimized", "window_background"}
 ORIENTATION_CATEGORIES = {"exterior", "interior", "detail", "special"}
 
 
@@ -19,7 +20,7 @@ class StandardOrientation:
 
     @property
     def requires_processing(self) -> bool:
-        return self.processing_mode == "optimized"
+        return self.processing_mode in PROCESSING_REQUIRED_MODES
 
 
 STANDARD_ORIENTATIONS = [
@@ -105,7 +106,7 @@ STANDARD_ORIENTATIONS = [
         "Lenkrad",
         "Lenkrad mittig und ohne Spiegelungen aufnehmen.",
         "interior",
-        "optimized",
+        "window_background",
     ),
     StandardOrientation(
         "instruments",
