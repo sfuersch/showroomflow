@@ -148,8 +148,17 @@ def calculate_scene_adjustment(options: CompositionOptions) -> SceneAdjustment:
 def infer_vehicle_perspective(
     capture_step_name: str,
     contour: VehicleContour,
+    orientation_key: str = "",
 ) -> str:
     """Infer the broad marketing perspective without another AI request."""
+    normalized_key = orientation_key.casefold().strip().replace("_", "-")
+    if normalized_key in {"front-left", "front-right", "rear-left", "rear-right"}:
+        return "diagonal"
+    if normalized_key in {"left", "right"}:
+        return "side"
+    if normalized_key in {"front", "rear"}:
+        return "straight"
+
     normalized_name = " ".join(capture_step_name.casefold().split())
     if "diagonal" in normalized_name:
         return "diagonal"
@@ -171,7 +180,11 @@ def perspective_composition_options(
     contour: VehicleContour,
 ) -> CompositionOptions:
     """Adapt automatic contour framing to the photographed vehicle perspective."""
-    perspective = infer_vehicle_perspective(options.capture_step_name, contour)
+    perspective = infer_vehicle_perspective(
+        options.capture_step_name,
+        contour,
+        options.orientation_key,
+    )
     if perspective == "side":
         return replace(
             options,
@@ -526,7 +539,11 @@ def compose_showroom(
     vehicle = vehicle.crop(alpha_box)
 
     contour = VehicleContour(vehicle.width, vehicle.height)
-    perspective = infer_vehicle_perspective(options.capture_step_name, contour)
+    perspective = infer_vehicle_perspective(
+        options.capture_step_name,
+        contour,
+        options.orientation_key,
+    )
     options = perspective_composition_options(options, contour)
     scene_adjustment = calculate_scene_adjustment(options)
     if abs(scene_adjustment.rotation_degrees) >= 0.05:
