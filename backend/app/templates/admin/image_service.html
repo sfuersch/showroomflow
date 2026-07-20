@@ -23,16 +23,7 @@
         <label>Standard-Credits für neue Autohäuser
             <input type="number" name="default_monthly_vehicle_credits" min="0" max="10000" value="{{ image_settings.default_monthly_vehicle_credits }}" required>
         </label>
-        <fieldset class="choice-group span-2">
-            <legend>Konturbasierte Größenautomatik</legend>
-            <p class="muted">Vor der Verarbeitung wird die tatsächliche Fahrzeugkontur erkannt. Daraus berechnet ShowroomFlow automatisch eine einheitliche Bildwirkung für Front-, Seiten-, Heck- und Diagonalaufnahmen. Diese Werte gelten zentral für alle Autohäuser.</p>
-            <div class="form-grid">
-                <label>Ziel-Flächenanteil (%)<input type="number" name="contour_target_area_percent" min="15" max="60" value="{{ image_settings.contour_target_area_percent }}" required></label>
-                <label>Maximale Breite (%)<input type="number" name="contour_max_width_percent" min="40" max="95" value="{{ image_settings.contour_max_width_percent }}" required></label>
-                <label>Maximale Höhe (%)<input type="number" name="contour_max_height_percent" min="40" max="90" value="{{ image_settings.contour_max_height_percent }}" required></label>
-            </div>
-            <small class="muted">Empfohlener Ausgangspunkt: 36 % Fläche, maximal 78 % Breite und 72 % Höhe. Änderungen sollten mit mehreren Fahrzeugformen geprüft werden.</small>
-        </fieldset>
+        <p class="muted span-2">Größe, Bodenposition, Schatten und weitere Kompositionswerte werden jetzt direkt am jeweiligen Hintergrund verwaltet und können dort pro Orientierung abweichend eingestellt werden.</p>
         <label class="check-row span-2">
             <input type="checkbox" name="photoroom_sandbox" {% if image_settings.photoroom_sandbox %}checked{% endif %}>
             <span><strong>Photoroom Sandbox</strong><small>Kostenlose Tests mit Wasserzeichen. Für produktive Verkaufsbilder deaktivieren.</small></span>

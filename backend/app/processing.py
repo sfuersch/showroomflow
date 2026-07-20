@@ -22,6 +22,7 @@ from app.image_service import (
 )
 from app.models import (
     Background,
+    BackgroundOrientationComposition,
     CaptureStep,
     ImageOverlay,
     JobStatus,
@@ -87,6 +88,38 @@ class SceneAdjustment:
     bottom_shift_fraction: float = 0.0
     rotation_degrees: float = 0.0
     shadow_depth_multiplier: float = 1.0
+
+
+@dataclass(frozen=True)
+class BackgroundComposition:
+    contour_target_area_percent: int
+    contour_max_width_percent: int
+    contour_max_height_percent: int
+    vehicle_bottom_percent: int
+    shadow_opacity_percent: int
+    reflection_opacity_percent: int
+    brightness_percent: int
+
+
+def resolve_background_composition(
+    background: Background,
+    override: BackgroundOrientationComposition | None,
+) -> BackgroundComposition:
+    """Resolve optional orientation values over the background defaults."""
+
+    def value(name: str) -> int:
+        overridden = getattr(override, name, None) if override is not None else None
+        return int(overridden if overridden is not None else getattr(background, name))
+
+    return BackgroundComposition(
+        contour_target_area_percent=value("contour_target_area_percent"),
+        contour_max_width_percent=value("contour_max_width_percent"),
+        contour_max_height_percent=value("contour_max_height_percent"),
+        vehicle_bottom_percent=value("vehicle_bottom_percent"),
+        shadow_opacity_percent=value("shadow_opacity_percent"),
+        reflection_opacity_percent=value("reflection_opacity_percent"),
+        brightness_percent=value("brightness_percent"),
+    )
 
 
 SCENE_TEST_ORIENTATIONS = frozenset({"front-left", "left", "rear-left", "rear"})
@@ -865,6 +898,17 @@ def process_photo(photo_id: str) -> None:
                 raise ImageProcessingError("Für den Auftrag ist kein aktiver Hintergrund gewählt")
             image_settings = get_image_settings(db)
             orientation = db.get(Orientation, step.orientation_id) if step.orientation_id else None
+            composition_override = (
+                db.scalar(
+                    select(BackgroundOrientationComposition).where(
+                        BackgroundOrientationComposition.background_id == background.id,
+                        BackgroundOrientationComposition.orientation_id == orientation.id,
+                    )
+                )
+                if orientation is not None
+                else None
+            )
+            composition = resolve_background_composition(background, composition_override)
             if not provider_is_available(image_settings, settings):
                 raise ImageProcessingError("Der gewählte Bilddienstleister ist nicht verfügbar")
 
@@ -883,13 +927,13 @@ def process_photo(photo_id: str) -> None:
                     background_image,
                     background.content_type,
                     settings,
-                    contour_target_area_percent=image_settings.contour_target_area_percent,
-                    contour_max_width_percent=image_settings.contour_max_width_percent,
-                    contour_max_height_percent=image_settings.contour_max_height_percent,
-                    vehicle_bottom_percent=background.vehicle_bottom_percent,
-                    shadow_opacity_percent=background.shadow_opacity_percent,
-                    reflection_opacity_percent=background.reflection_opacity_percent,
-                    brightness_percent=background.brightness_percent,
+                    contour_target_area_percent=composition.contour_target_area_percent,
+                    contour_max_width_percent=composition.contour_max_width_percent,
+                    contour_max_height_percent=composition.contour_max_height_percent,
+                    vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                    shadow_opacity_percent=composition.shadow_opacity_percent,
+                    reflection_opacity_percent=composition.reflection_opacity_percent,
+                    brightness_percent=composition.brightness_percent,
                     capture_step_name=step.name,
                     orientation_key=orientation.key if orientation else "",
                     capture_metadata=photo.capture_metadata,
@@ -911,13 +955,13 @@ def process_photo(photo_id: str) -> None:
                     CompositionOptions(
                         width=settings.output_width,
                         height=settings.output_height,
-                        contour_target_area_percent=image_settings.contour_target_area_percent,
-                        contour_max_width_percent=image_settings.contour_max_width_percent,
-                        contour_max_height_percent=image_settings.contour_max_height_percent,
-                        vehicle_bottom_percent=background.vehicle_bottom_percent,
-                        shadow_opacity_percent=background.shadow_opacity_percent,
-                        reflection_opacity_percent=background.reflection_opacity_percent,
-                        brightness_percent=background.brightness_percent,
+                        contour_target_area_percent=composition.contour_target_area_percent,
+                        contour_max_width_percent=composition.contour_max_width_percent,
+                        contour_max_height_percent=composition.contour_max_height_percent,
+                        vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                        shadow_opacity_percent=composition.shadow_opacity_percent,
+                        reflection_opacity_percent=composition.reflection_opacity_percent,
+                        brightness_percent=composition.brightness_percent,
                         capture_step_name=step.name,
                         orientation_key=orientation.key if orientation else "",
                         capture_metadata=photo.capture_metadata,
@@ -1014,6 +1058,17 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 raise ImageProcessingError("Für den Auftrag ist kein aktiver Hintergrund gewählt")
             image_settings = get_image_settings(db)
             orientation = db.get(Orientation, step.orientation_id) if step.orientation_id else None
+            composition_override = (
+                db.scalar(
+                    select(BackgroundOrientationComposition).where(
+                        BackgroundOrientationComposition.background_id == background.id,
+                        BackgroundOrientationComposition.orientation_id == orientation.id,
+                    )
+                )
+                if orientation is not None
+                else None
+            )
+            composition = resolve_background_composition(background, composition_override)
 
             variant = db.scalar(
                 select(PhotoProcessingVariant).where(
@@ -1037,13 +1092,13 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 background_image,
                 background.content_type,
                 settings,
-                contour_target_area_percent=image_settings.contour_target_area_percent,
-                contour_max_width_percent=image_settings.contour_max_width_percent,
-                contour_max_height_percent=image_settings.contour_max_height_percent,
-                vehicle_bottom_percent=background.vehicle_bottom_percent,
-                shadow_opacity_percent=background.shadow_opacity_percent,
-                reflection_opacity_percent=background.reflection_opacity_percent,
-                brightness_percent=background.brightness_percent,
+                contour_target_area_percent=composition.contour_target_area_percent,
+                contour_max_width_percent=composition.contour_max_width_percent,
+                contour_max_height_percent=composition.contour_max_height_percent,
+                vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                shadow_opacity_percent=composition.shadow_opacity_percent,
+                reflection_opacity_percent=composition.reflection_opacity_percent,
+                brightness_percent=composition.brightness_percent,
                 capture_step_name=step.name,
                 orientation_key=orientation.key if orientation else "",
                 capture_metadata=photo.capture_metadata,

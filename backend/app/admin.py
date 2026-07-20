@@ -27,6 +27,7 @@ from app.image_service import (
 )
 from app.models import (
     Background,
+    BackgroundOrientationComposition,
     Brand,
     CaptureStep,
     Dealership,
@@ -578,9 +579,6 @@ def update_image_service(
     request: Request,
     provider: str = Form(),
     default_monthly_vehicle_credits: int = Form(),
-    contour_target_area_percent: int = Form(),
-    contour_max_width_percent: int = Form(),
-    contour_max_height_percent: int = Form(),
     photoroom_sandbox: str | None = Form(default=None),
     comparison_mode_enabled: str | None = Form(default=None),
     csrf_token: str = Form(),
@@ -595,9 +593,6 @@ def update_image_service(
     if (
         provider not in IMAGE_PROVIDERS
         or not 0 <= default_monthly_vehicle_credits <= 10000
-        or not 15 <= contour_target_area_percent <= 60
-        or not 40 <= contour_max_width_percent <= 95
-        or not 40 <= contour_max_height_percent <= 90
     ):
         _flash(
             request,
@@ -610,9 +605,6 @@ def update_image_service(
         image_settings.photoroom_sandbox = photoroom_sandbox == "on"
         image_settings.comparison_mode_enabled = comparison_mode_enabled == "on"
         image_settings.default_monthly_vehicle_credits = default_monthly_vehicle_credits
-        image_settings.contour_target_area_percent = contour_target_area_percent
-        image_settings.contour_max_width_percent = contour_max_width_percent
-        image_settings.contour_max_height_percent = contour_max_height_percent
         db.commit()
         if provider_is_available(image_settings, get_settings()) or provider == "disabled":
             _flash(request, "Bilddienstleister-Einstellungen wurden gespeichert.")
@@ -1975,6 +1967,18 @@ def configuration_page(
             .order_by(Background.name)
         )
     )
+    background_ids = [background.id for background in backgrounds]
+    composition_overrides = (
+        list(
+            db.scalars(
+                select(BackgroundOrientationComposition).where(
+                    BackgroundOrientationComposition.background_id.in_(background_ids)
+                )
+            )
+        )
+        if background_ids
+        else []
+    )
     overlays = list(
         db.scalars(
             select(ImageOverlay)
@@ -2044,6 +2048,19 @@ def configuration_page(
             overlay_positions=OVERLAY_POSITIONS,
             default_overlay_step=default_overlay_step,
             orientations=orientations,
+            composition_orientations=[
+                orientation
+                for orientation in orientations
+                if orientation.is_active and orientation.processing_mode != "original"
+            ],
+            composition_overrides_by_background={
+                background.id: {
+                    override.orientation_id: override
+                    for override in composition_overrides
+                    if override.background_id == background.id
+                }
+                for background in backgrounds
+            },
             steps_by_orientation_id={
                 orientation.id: sorted(
                     [step for step in steps if step.orientation_id == orientation.id],
@@ -2177,6 +2194,9 @@ def update_background(
     name: str = Form(),
     brand_id: str = Form(default=""),
     location_ids: list[uuid.UUID] = Form(default=[]),
+    contour_target_area_percent: int = Form(default=36),
+    contour_max_width_percent: int = Form(default=78),
+    contour_max_height_percent: int = Form(default=72),
     vehicle_bottom_percent: int = Form(default=90),
     shadow_opacity_percent: int = Form(default=32),
     reflection_opacity_percent: int = Form(default=10),
@@ -2185,6 +2205,15 @@ def update_background(
     scene_horizon_percent: int = Form(default=43),
     scene_reference_vertical_degrees: int = Form(default=0),
     scene_perspective_strength_percent: int = Form(default=35),
+    composition_orientation_ids: list[uuid.UUID] = Form(default=[]),
+    custom_composition_orientation_ids: list[uuid.UUID] = Form(default=[]),
+    orientation_target_area_percents: list[str] = Form(default=[]),
+    orientation_max_width_percents: list[str] = Form(default=[]),
+    orientation_max_height_percents: list[str] = Form(default=[]),
+    orientation_bottom_percents: list[str] = Form(default=[]),
+    orientation_shadow_percents: list[str] = Form(default=[]),
+    orientation_reflection_percents: list[str] = Form(default=[]),
+    orientation_brightness_percents: list[str] = Form(default=[]),
     is_active: str | None = Form(default=None),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
@@ -2199,7 +2228,10 @@ def update_background(
     dealership = _authorized_dealership(db, admin, background.dealership_id)
     cleaned_name = name.strip()
     values_valid = (
-        55 <= vehicle_bottom_percent <= 98
+        15 <= contour_target_area_percent <= 60
+        and 40 <= contour_max_width_percent <= 95
+        and 40 <= contour_max_height_percent <= 90
+        and 55 <= vehicle_bottom_percent <= 98
         and 0 <= shadow_opacity_percent <= 80
         and 0 <= reflection_opacity_percent <= 60
         and 50 <= brightness_percent <= 150
@@ -2207,13 +2239,53 @@ def update_background(
         and -30 <= scene_reference_vertical_degrees <= 30
         and 0 <= scene_perspective_strength_percent <= 100
     )
-    if not cleaned_name or not values_valid:
+    override_value_lists = [
+        orientation_target_area_percents,
+        orientation_max_width_percents,
+        orientation_max_height_percents,
+        orientation_bottom_percents,
+        orientation_shadow_percents,
+        orientation_reflection_percents,
+        orientation_brightness_percents,
+    ]
+    overrides_well_formed = all(
+        len(values) == len(composition_orientation_ids) for values in override_value_lists
+    )
+
+    def optional_number(raw: str, minimum: int, maximum: int) -> int | None:
+        if not raw.strip():
+            return None
+        value = int(raw)
+        if not minimum <= value <= maximum:
+            raise ValueError
+        return value
+
+    parsed_overrides: dict[uuid.UUID, tuple[int | None, ...]] = {}
+    if overrides_well_formed:
+        try:
+            for index, orientation_id in enumerate(composition_orientation_ids):
+                parsed_overrides[orientation_id] = (
+                    optional_number(orientation_target_area_percents[index], 15, 60),
+                    optional_number(orientation_max_width_percents[index], 40, 95),
+                    optional_number(orientation_max_height_percents[index], 40, 90),
+                    optional_number(orientation_bottom_percents[index], 55, 98),
+                    optional_number(orientation_shadow_percents[index], 0, 80),
+                    optional_number(orientation_reflection_percents[index], 0, 60),
+                    optional_number(orientation_brightness_percents[index], 50, 150),
+                )
+        except (TypeError, ValueError):
+            overrides_well_formed = False
+
+    if not cleaned_name or not values_valid or not overrides_well_formed:
         _flash(request, "Bitte prüfen Sie Name und Showroom-Einstellungen.", "error")
     else:
         selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
         background.name = cleaned_name
         background.brand_id = selected_brand.id if selected_brand else None
         background.locations = _tenant_locations(db, dealership.id, location_ids)
+        background.contour_target_area_percent = contour_target_area_percent
+        background.contour_max_width_percent = contour_max_width_percent
+        background.contour_max_height_percent = contour_max_height_percent
         background.vehicle_bottom_percent = vehicle_bottom_percent
         background.shadow_opacity_percent = shadow_opacity_percent
         background.reflection_opacity_percent = reflection_opacity_percent
@@ -2223,6 +2295,47 @@ def update_background(
         background.scene_reference_vertical_degrees = scene_reference_vertical_degrees
         background.scene_perspective_strength_percent = scene_perspective_strength_percent
         background.is_active = is_active == "on"
+
+        valid_orientations = {
+            orientation.id
+            for orientation in db.scalars(
+                select(Orientation).where(
+                    Orientation.id.in_(composition_orientation_ids),
+                    Orientation.processing_mode != "original",
+                )
+            )
+        }
+        custom_ids = set(custom_composition_orientation_ids) & valid_orientations
+        existing_overrides = {
+            override.orientation_id: override
+            for override in db.scalars(
+                select(BackgroundOrientationComposition).where(
+                    BackgroundOrientationComposition.background_id == background.id
+                )
+            )
+        }
+        for orientation_id in valid_orientations:
+            existing = existing_overrides.get(orientation_id)
+            if orientation_id not in custom_ids:
+                if existing is not None:
+                    db.delete(existing)
+                continue
+            values = parsed_overrides[orientation_id]
+            override = existing or BackgroundOrientationComposition(
+                background_id=background.id,
+                orientation_id=orientation_id,
+            )
+            (
+                override.contour_target_area_percent,
+                override.contour_max_width_percent,
+                override.contour_max_height_percent,
+                override.vehicle_bottom_percent,
+                override.shadow_opacity_percent,
+                override.reflection_opacity_percent,
+                override.brightness_percent,
+            ) = values
+            if existing is None:
+                db.add(override)
         db.commit()
         _flash(request, "Hintergrund wurde gespeichert.")
     return RedirectResponse(
