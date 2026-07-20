@@ -113,6 +113,17 @@ def test_perspective_composition_raises_side_and_straight_views() -> None:
     assert straight.contour_max_width_percent == 64
 
 
+def test_perspective_composition_keeps_diagonal_on_configured_ground_line() -> None:
+    base = CompositionOptions(
+        vehicle_bottom_percent=90,
+        capture_step_name="Diagonal vorne links",
+    )
+
+    diagonal = perspective_composition_options(base, VehicleContour(1400, 900))
+
+    assert diagonal.vehicle_bottom_percent == 90
+
+
 def test_scene_adjustment_uses_pose_only_for_beta_orientations() -> None:
     enabled = CompositionOptions(
         orientation_key="front-left",
@@ -287,7 +298,7 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
         assert b'name="background.color"' in body
         assert b"FFFFFF" in body
         assert b'name="shadow.mode"' in body
-        assert b"ai.soft" in body
+        assert b"ai.hard" in body
         assert b'name="outputSize"' in body
         assert b"1920x1440" in body
         assert b'name="paddingLeft"' in body
@@ -342,7 +353,7 @@ def test_optimized_photoroom_request_uses_perspective_framing_and_ai_shadow() ->
             )
         assert b'name="background.imageFile"' in body
         assert b'name="shadow.mode"' in body
-        assert b"ai.soft" in body
+        assert b"ai.hard" in body
         assert b'name="paddingLeft"' in body
         assert b"0.080" in body
         assert b'name="paddingBottom"' in body
