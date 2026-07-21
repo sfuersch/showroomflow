@@ -1400,11 +1400,30 @@ def process_photo(photo_id: str) -> None:
                 if photo.window_mask_is_manual:
                     photo.quality_review_required = False
                     photo.quality_review_reason = None
+                    photo.quality_score = 100
+                    photo.quality_issues = []
+                    photo.quality_model_version = "window-rules-v1"
                 else:
+                    was_waiting_for_review = photo.quality_review_required
                     photo.quality_review_required = (
                         window_result.quality_review_required
                     )
                     photo.quality_review_reason = window_result.quality_review_reason
+                    photo.quality_score = 55 if window_result.quality_review_required else 100
+                    photo.quality_issues = (
+                        [window_result.quality_review_reason]
+                        if window_result.quality_review_reason
+                        else []
+                    )
+                    photo.quality_model_version = "window-rules-v1"
+                    if window_result.quality_review_required:
+                        if not was_waiting_for_review:
+                            photo.quality_review_created_at = datetime.now(timezone.utc)
+                        photo.quality_reviewed_by_id = None
+                        photo.quality_reviewed_at = None
+                        photo.quality_review_resolution = None
+                    else:
+                        photo.quality_review_resolution = "automatic_pass"
             elif image_settings.provider == "photoroom":
                 finished = create_photoroom_showroom(
                     original,
@@ -1541,12 +1560,63 @@ def process_photo(photo_id: str) -> None:
                         job.status = JobStatus.REVIEW_REQUIRED
                     db.commit()
         return
+    except ImageProcessingError as exc:
+        is_window_review = False
+        with SessionLocal() as db:
+            photo = db.get(PhotoAsset, identifier)
+            if photo is not None:
+                step = db.get(CaptureStep, photo.capture_step_id)
+                orientation = (
+                    db.get(Orientation, step.orientation_id)
+                    if step is not None and step.orientation_id is not None
+                    else None
+                )
+                is_window_review = bool(
+                    orientation is not None
+                    and orientation.processing_mode == "window_background"
+                    and photo.window_mask_object_key
+                )
+                photo.processing_status = ProcessingStatus.FAILED
+                photo.processing_error = str(exc)[:1000]
+                if is_window_review:
+                    photo.quality_review_required = True
+                    photo.quality_review_reason = (
+                        "Die automatische Scheibenverarbeitung konnte kein sicheres Ergebnis "
+                        f"erzeugen: {exc}"
+                    )[:1000]
+                    photo.quality_score = 20
+                    photo.quality_issues = [str(exc)[:500]]
+                    photo.quality_model_version = "window-rules-v1"
+                    photo.quality_review_created_at = datetime.now(timezone.utc)
+                    photo.quality_reviewed_by_id = None
+                    photo.quality_reviewed_at = None
+                    photo.quality_review_resolution = None
+                job = db.get(VehicleJob, photo.vehicle_job_id)
+                if job is not None:
+                    job.status = JobStatus.REVIEW_REQUIRED
+                db.commit()
+        if is_window_review:
+            return
+        raise
     except Exception as exc:
         with SessionLocal() as db:
             photo = db.get(PhotoAsset, identifier)
             if photo is not None:
                 photo.processing_status = ProcessingStatus.FAILED
                 photo.processing_error = str(exc)[:1000]
+                if not photo.quality_review_required:
+                    photo.quality_review_created_at = datetime.now(timezone.utc)
+                photo.quality_review_required = True
+                photo.quality_review_reason = (
+                    "Die automatische Bildverarbeitung ist wiederholt fehlgeschlagen: "
+                    f"{exc}"
+                )[:1000]
+                photo.quality_score = 0
+                photo.quality_issues = [str(exc)[:500]]
+                photo.quality_model_version = "processing-health-v1"
+                photo.quality_reviewed_by_id = None
+                photo.quality_reviewed_at = None
+                photo.quality_review_resolution = None
                 job = db.get(VehicleJob, photo.vehicle_job_id)
                 if job is not None:
                     job.status = JobStatus.REVIEW_REQUIRED

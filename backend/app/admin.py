@@ -16,7 +16,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.config import get_settings
 from app.database import get_db
-from app.exporting import ExportValidationError, resolve_export_items, safe_vin
+from app.exporting import (
+    ExportValidationError,
+    resolve_export_items,
+    safe_vin,
+    try_enqueue_auto_export,
+)
 from app.image_service import (
     IMAGE_PROVIDERS,
     VehicleCreditsExhausted,
@@ -124,7 +129,8 @@ def _current_admin(request: Request, db: Session) -> User | None:
     if (
         user is None
         or not user.is_active
-        or user.role not in {UserRole.SYSTEM_ADMIN, UserRole.DEALERSHIP_ADMIN}
+        or user.role
+        not in {UserRole.SYSTEM_ADMIN, UserRole.OPERATOR, UserRole.DEALERSHIP_ADMIN}
     ):
         request.session.clear()
         return None
@@ -148,6 +154,15 @@ def _require_system_admin(request: Request, db: Session) -> User | RedirectRespo
     if isinstance(user, RedirectResponse):
         return user
     if user.role != UserRole.SYSTEM_ADMIN:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    return user
+
+
+def _require_quality_operator(request: Request, db: Session) -> User | RedirectResponse:
+    user = _require_admin(request, db)
+    if isinstance(user, RedirectResponse):
+        return user
+    if user.role not in {UserRole.SYSTEM_ADMIN, UserRole.OPERATOR}:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     return user
 
@@ -460,7 +475,8 @@ def login(
     if (
         user is None
         or not user.is_active
-        or user.role not in {UserRole.SYSTEM_ADMIN, UserRole.DEALERSHIP_ADMIN}
+        or user.role
+        not in {UserRole.SYSTEM_ADMIN, UserRole.OPERATOR, UserRole.DEALERSHIP_ADMIN}
         or (user.dealership_id is not None and (dealership is None or not dealership.is_active))
         or not verify_password(password, user.password_hash)
     ):
@@ -495,6 +511,10 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             f"/admin/dealerships/{admin.dealership_id}/jobs",
             status_code=status.HTTP_303_SEE_OTHER,
         )
+    if admin.role == UserRole.OPERATOR:
+        return RedirectResponse(
+            "/admin/quality-reviews", status_code=status.HTTP_303_SEE_OTHER
+        )
     statement = select(Dealership).order_by(Dealership.name)
     dealerships = list(db.scalars(statement))
     credit_balances = {dealership.id: credit_balance(db, dealership) for dealership in dealerships}
@@ -515,13 +535,241 @@ def dealerships_page(request: Request, db: Session = Depends(get_db)):
     return dashboard(request, db)
 
 
-@router.get("/image-service", response_class=HTMLResponse)
-def image_service_page(request: Request, db: Session = Depends(get_db)):
-    admin = _require_admin(request, db)
+@router.get("/quality-reviews", response_class=HTMLResponse)
+def quality_reviews_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_quality_operator(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
-    if admin.role != UserRole.SYSTEM_ADMIN:
-        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    rows = list(
+        db.execute(
+            select(PhotoAsset, VehicleJob, CaptureStep, Dealership)
+            .join(VehicleJob, VehicleJob.id == PhotoAsset.vehicle_job_id)
+            .join(CaptureStep, CaptureStep.id == PhotoAsset.capture_step_id)
+            .join(Dealership, Dealership.id == VehicleJob.dealership_id)
+            .where(
+                PhotoAsset.is_selected.is_(True),
+                PhotoAsset.uploaded_at.is_not(None),
+                PhotoAsset.quality_review_required.is_(True),
+            )
+            .order_by(
+                PhotoAsset.quality_review_created_at.asc().nullsfirst(),
+                PhotoAsset.updated_at.asc(),
+            )
+        ).all()
+    )
+    review_items = [
+        {
+            "photo": photo,
+            "job": job,
+            "step": step,
+            "dealership": dealership,
+            "original_url": storage.create_download_url(
+                object_key=photo.original_thumbnail_object_key or photo.original_object_key
+            ),
+            "original_full_url": storage.create_download_url(
+                object_key=photo.original_object_key
+            ),
+            "processed_url": (
+                storage.create_download_url(
+                    object_key=photo.processed_thumbnail_object_key
+                    or photo.processed_object_key
+                )
+                if photo.processed_object_key
+                else None
+            ),
+            "processed_full_url": (
+                storage.create_download_url(object_key=photo.processed_object_key)
+                if photo.processed_object_key
+                else None
+            ),
+        }
+        for photo, job, step, dealership in rows
+    ]
+    operators = (
+        list(
+            db.scalars(
+                select(User)
+                .where(User.role == UserRole.OPERATOR)
+                .order_by(User.email)
+            )
+        )
+        if admin.role == UserRole.SYSTEM_ADMIN
+        else []
+    )
+    live_version = "|".join(
+        f"{item['photo'].id}:{item['photo'].updated_at.isoformat()}"
+        for item in review_items
+    )
+    return templates.TemplateResponse(
+        request,
+        "admin/quality_reviews.html",
+        _context(
+            request,
+            admin,
+            review_items=review_items,
+            operators=operators,
+            reviews_live_version=live_version,
+        ),
+    )
+
+
+@router.post("/quality-reviews/{photo_id}/approve")
+def approve_quality_review(
+    photo_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_quality_operator(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    photo = db.get(PhotoAsset, photo_id)
+    if photo is None or not photo.quality_review_required:
+        raise HTTPException(status_code=404, detail="Prüffall wurde nicht gefunden")
+    if (
+        photo.processing_status != ProcessingStatus.COMPLETED
+        or not photo.processed_object_key
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Ein fehlgeschlagenes Bild muss zuerst korrigiert oder neu verarbeitet werden",
+        )
+    photo.quality_review_required = False
+    photo.quality_reviewed_by_id = admin.id
+    photo.quality_reviewed_at = datetime.now(timezone.utc)
+    photo.quality_review_resolution = "approved"
+    job = db.get(VehicleJob, photo.vehicle_job_id)
+    db.commit()
+    remaining_reviews = db.scalar(
+        select(func.count(PhotoAsset.id)).where(
+            PhotoAsset.vehicle_job_id == photo.vehicle_job_id,
+            PhotoAsset.is_selected.is_(True),
+            PhotoAsset.quality_review_required.is_(True),
+        )
+    )
+    if job is not None and not remaining_reviews:
+        try_enqueue_auto_export(job.id, db)
+    _flash(request, "Bild wurde freigegeben und aus der Warteschlange entfernt.")
+    return RedirectResponse("/admin/quality-reviews", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/quality-reviews/{photo_id}/reprocess")
+def reprocess_quality_review(
+    photo_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_quality_operator(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    photo = db.get(PhotoAsset, photo_id)
+    if photo is None or not photo.quality_review_required:
+        raise HTTPException(status_code=404, detail="Prüffall wurde nicht gefunden")
+    job = db.get(VehicleJob, photo.vehicle_job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    photo.processing_status = ProcessingStatus.QUEUED
+    photo.processing_error = None
+    photo.quality_reviewed_by_id = admin.id
+    photo.quality_reviewed_at = datetime.now(timezone.utc)
+    photo.quality_review_resolution = "reprocessing"
+    job.status = JobStatus.PROCESSING
+    db.commit()
+    try:
+        enqueue_photo_processing(photo.id)
+    except ProcessingQueueUnavailable:
+        photo.processing_status = ProcessingStatus.FAILED
+        photo.processing_error = "Verarbeitungswarteschlange ist nicht erreichbar"
+        job.status = JobStatus.REVIEW_REQUIRED
+        db.commit()
+        _flash(request, "Die erneute Verarbeitung konnte nicht gestartet werden.", "error")
+    else:
+        _flash(request, "Das Bild wird erneut automatisch verarbeitet.")
+    return RedirectResponse("/admin/quality-reviews", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/operators")
+def create_operator(
+    request: Request,
+    email: str = Form(),
+    password: str = Form(),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    normalized_email = _normalized_email(email)
+    if normalized_email is None or len(password) < 16:
+        _flash(request, "E-Mail oder Passwort (mindestens 16 Zeichen) ist ungültig.", "error")
+    else:
+        db.add(
+            User(
+                dealership_id=None,
+                email=normalized_email,
+                password_hash=hash_password(password),
+                role=UserRole.OPERATOR,
+            )
+        )
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            _flash(request, "Diese E-Mail-Adresse ist bereits vorhanden.", "error")
+        else:
+            _flash(request, "Operator wurde angelegt.")
+    return RedirectResponse("/admin/quality-reviews#operators", status_code=303)
+
+
+@router.post("/operators/{operator_id}")
+def update_operator(
+    operator_id: uuid.UUID,
+    request: Request,
+    password: str = Form(default=""),
+    is_active: str | None = Form(default=None),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    operator = db.get(User, operator_id)
+    if operator is None or operator.role != UserRole.OPERATOR:
+        raise HTTPException(status_code=404, detail="Operator wurde nicht gefunden")
+    if password and len(password) < 16:
+        _flash(request, "Das neue Passwort muss mindestens 16 Zeichen lang sein.", "error")
+    else:
+        operator.is_active = is_active == "on"
+        if password:
+            operator.password_hash = hash_password(password)
+        if password or not operator.is_active:
+            db.execute(
+                update(RefreshSession)
+                .where(
+                    RefreshSession.user_id == operator.id,
+                    RefreshSession.revoked_at.is_(None),
+                )
+                .values(revoked_at=datetime.now(timezone.utc))
+            )
+        db.commit()
+        _flash(request, "Operator wurde gespeichert.")
+    return RedirectResponse("/admin/quality-reviews#operators", status_code=303)
+
+
+@router.get("/image-service", response_class=HTMLResponse)
+def image_service_page(request: Request, db: Session = Depends(get_db)):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
     image_settings = get_image_settings(db)
     runtime = get_settings()
     dealerships = list(db.scalars(select(Dealership).order_by(Dealership.name)))
@@ -570,7 +818,7 @@ def update_image_service(
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -1174,7 +1422,7 @@ def create_user(
             f"/admin/dealerships/{dealership.id}#users",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-    if role == UserRole.SYSTEM_ADMIN or len(password) < 16:
+    if role in {UserRole.SYSTEM_ADMIN, UserRole.OPERATOR} or len(password) < 16:
         _flash(request, "Rolle oder Passwort ist nicht zulässig.", "error")
         return RedirectResponse(
             f"/admin/dealerships/{dealership.id}#users",
@@ -1878,7 +2126,8 @@ def _window_correction_photo(
     orientation = db.get(Orientation, step.orientation_id) if step else None
     if job is None or step is None or orientation is None:
         raise HTTPException(status_code=404, detail="Fotoposition wurde nicht gefunden")
-    _authorized_dealership(db, admin, job.dealership_id)
+    if admin.role not in {UserRole.SYSTEM_ADMIN, UserRole.OPERATOR}:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
     if orientation.processing_mode not in MASKED_BACKGROUND_MODES:
         raise HTTPException(
             status_code=400,
@@ -1893,7 +2142,7 @@ def window_correction(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_quality_operator(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     photo, job, step, orientation = _window_correction_photo(db, admin, photo_id)
@@ -1950,7 +2199,7 @@ def window_correction_asset(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_quality_operator(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     photo, _, _, _ = _window_correction_photo(db, admin, photo_id)
@@ -1979,7 +2228,7 @@ def save_window_correction(
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
 ):
-    admin = _require_admin(request, db)
+    admin = _require_quality_operator(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
@@ -2010,8 +2259,9 @@ def save_window_correction(
     photo.window_mask_object_key = mask_key
     photo.window_mask_is_manual = True
     photo.window_background_shift_percent = background_shift_percent
-    photo.quality_review_required = False
-    photo.quality_review_reason = None
+    photo.quality_reviewed_by_id = admin.id
+    photo.quality_reviewed_at = datetime.now(timezone.utc)
+    photo.quality_review_resolution = "corrected"
     photo.processing_status = ProcessingStatus.QUEUED
     photo.processing_error = None
     job.status = JobStatus.PROCESSING
@@ -2025,8 +2275,8 @@ def save_window_correction(
         db.commit()
         _flash(request, "Die Korrektur konnte nicht verarbeitet werden.", "error")
     else:
-        _flash(request, "Die manuelle Korrektur wird jetzt neu verarbeitet.")
-    return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+        _flash(request, "Die Korrektur wird jetzt neu verarbeitet.")
+    return RedirectResponse("/admin/quality-reviews", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/jobs/{job_id}/exports")

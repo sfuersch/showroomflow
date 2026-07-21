@@ -23,6 +23,7 @@ from app.database import Base
 
 class UserRole(str, enum.Enum):
     SYSTEM_ADMIN = "system_admin"
+    OPERATOR = "operator"
     DEALERSHIP_ADMIN = "dealership_admin"
     PHOTOGRAPHER = "photographer"
 
@@ -421,6 +422,21 @@ class PhotoAsset(Timestamped, Base):
     )
     quality_review_required: Mapped[bool] = mapped_column(Boolean, default=False)
     quality_review_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    quality_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quality_issues: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    quality_model_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    quality_review_created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    quality_reviewed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    quality_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    quality_review_resolution: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
 
 
 class PhotoProcessingVariant(Timestamped, Base):
