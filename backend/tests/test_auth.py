@@ -22,6 +22,7 @@ from app.models import (
     Dealership,
     ExportRun,
     ImageOverlay,
+    JobStatus,
     Location,
     Orientation,
     PhotoAsset,
@@ -1867,6 +1868,95 @@ def test_auto_export_waits_for_explicit_capture_completion(monkeypatch: pytest.M
         export_run = db.scalar(select(ExportRun))
         assert export_run is not None
         assert queued_exports == [export_run.id]
+
+
+def test_dealership_admin_can_only_submit_processed_photo_for_improvement() -> None:
+    dealership, user = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Lenkrad",
+            instruction="Lenkrad mittig aufnehmen",
+            category="interior",
+            capture_order=1,
+            export_order=1,
+            is_required=True,
+            requires_processing=True,
+        )
+        db.add_all([location, step])
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=user.id,
+            vin="IMPROVEMENT-VIN",
+            version=1,
+            brand="Ford",
+            status=JobStatus.COMPLETED,
+        )
+        db.add(job)
+        db.flush()
+        photo = PhotoAsset(
+            vehicle_job_id=job.id,
+            capture_step_id=step.id,
+            captured_by_id=user.id,
+            revision=1,
+            original_object_key="originals/improvement.jpg",
+            original_content_type="image/jpeg",
+            expected_size_bytes=1234,
+            original_size_bytes=1234,
+            uploaded_at=datetime.now(timezone.utc),
+            is_selected=True,
+            processed_object_key="processed/improvement.jpg",
+            processed_content_type="image/jpeg",
+            processed_size_bytes=1234,
+            processing_status=ProcessingStatus.COMPLETED,
+        )
+        db.add(photo)
+        db.commit()
+        job_id = job.id
+        photo_id = photo.id
+
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        detail_page = client.get(f"/admin/jobs/{job_id}")
+        assert detail_page.status_code == 200
+        assert "Zur Verbesserung vorlegen" in detail_page.text
+        assert "Scheibenmaske nachbearbeiten" not in detail_page.text
+        assert ">Verarbeitung starten<" not in detail_page.text
+
+        submitted = client.post(
+            f"/admin/photos/{photo_id}/request-improvement",
+            data={"csrf_token": csrf_from(detail_page.text)},
+            follow_redirects=False,
+        )
+        correction_page = client.get(f"/admin/photos/{photo_id}/correction")
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert submitted.status_code == 303
+    assert submitted.headers["location"] == f"/admin/jobs/{job_id}"
+    assert correction_page.status_code == 403
+    with TestingSession() as db:
+        submitted_photo = db.get(PhotoAsset, photo_id)
+        submitted_job = db.get(VehicleJob, job_id)
+        assert submitted_photo is not None
+        assert submitted_job is not None
+        assert submitted_photo.quality_review_required is True
+        assert submitted_photo.quality_review_resolution == "requested_by_dealership"
+        assert submitted_photo.quality_review_created_at is not None
+        assert submitted_job.status == JobStatus.REVIEW_REQUIRED
 
 
 def test_auto_export_resumes_after_last_quality_review_is_approved(

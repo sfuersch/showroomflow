@@ -13,7 +13,8 @@
     <div class="correction-canvas-wrap"><canvas id="correction-canvas" aria-label="Scheibenmaske bearbeiten"></canvas></div>
     <form id="correction-form" method="post" action="/admin/photos/{{ photo.id }}/correction" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der markierten Fläche.</small></label>
+        <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Die Vorschau reagiert sofort. Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der markierten Fläche.</small></label>
+        <label class="checkbox-row"><input type="checkbox" name="refine_edges" value="true" checked><span><strong>Kanten automatisch verfeinern</strong><small>Richtet den gemalten Rand innerhalb eines schmalen Sicherheitsbereichs an sichtbaren Bildkanten aus. Geschützte Flächen außerhalb dieses Bereichs bleiben unverändert.</small></span></label>
         <div class="form-actions"><a class="button button-secondary" href="/admin/quality-reviews">Abbrechen</a><button class="button button-primary" type="submit">Korrektur speichern und neu verarbeiten</button></div>
     </form>
 </section>
@@ -26,6 +27,7 @@
     const initialMaskCanvas = document.createElement('canvas');
     const original = new Image();
     const maskImage = new Image();
+    const background = new Image();
     let mode = 'add';
     let drawing = false;
     let brushCursor = null;
@@ -69,7 +71,44 @@
     function render() {
         if (!initialized) return;
         viewContext.clearRect(0, 0, view.width, view.height);
-        viewContext.drawImage(original, 0, 0, view.width, view.height);
+        if (background.complete && background.naturalWidth) {
+            const shiftAmount = Number(shift.value) / 100;
+            const coverScale = Math.max(
+                view.width / background.naturalWidth,
+                view.height / background.naturalHeight
+            );
+            const fittedBackground = document.createElement('canvas');
+            fittedBackground.width = view.width;
+            fittedBackground.height = view.height;
+            const fittedContext = fittedBackground.getContext('2d');
+            const fittedWidth = background.naturalWidth * coverScale;
+            const fittedHeight = background.naturalHeight * coverScale;
+            fittedContext.drawImage(
+                background,
+                (view.width - fittedWidth) / 2,
+                (view.height - fittedHeight) / 2,
+                fittedWidth,
+                fittedHeight
+            );
+            const zoom = 1 + shiftAmount;
+            viewContext.drawImage(
+                fittedBackground,
+                (view.width - view.width * zoom) / 2,
+                view.height - view.height * zoom,
+                view.width * zoom,
+                view.height * zoom
+            );
+            const foreground = document.createElement('canvas');
+            foreground.width = view.width;
+            foreground.height = view.height;
+            const foregroundContext = foreground.getContext('2d');
+            foregroundContext.drawImage(original, 0, 0, view.width, view.height);
+            foregroundContext.globalCompositeOperation = 'destination-out';
+            foregroundContext.drawImage(maskCanvas, 0, 0);
+            viewContext.drawImage(foreground, 0, 0);
+        } else {
+            viewContext.drawImage(original, 0, 0, view.width, view.height);
+        }
         const tint = document.createElement('canvas');
         tint.width = view.width;
         tint.height = view.height;
@@ -98,7 +137,12 @@
     }
     Promise.all([
         new Promise(resolve => { original.onload = resolve; original.src = '/admin/photos/{{ photo.id }}/correction/original'; }),
-        new Promise(resolve => { maskImage.onload = resolve; maskImage.src = '/admin/photos/{{ photo.id }}/correction/mask'; })
+        new Promise(resolve => { maskImage.onload = resolve; maskImage.src = '/admin/photos/{{ photo.id }}/correction/mask'; }),
+        new Promise(resolve => {
+            background.onload = resolve;
+            background.onerror = resolve;
+            background.src = '/admin/photos/{{ photo.id }}/correction/background';
+        })
     ]).then(initialize);
 
     document.querySelectorAll('.correction-mode').forEach(button => button.addEventListener('click', () => {
@@ -118,7 +162,10 @@
     });
     const shift = document.getElementById('background-shift');
     const shiftOutput = document.getElementById('shift-output');
-    shift.addEventListener('input', () => shiftOutput.value = `${shift.value} %`);
+    shift.addEventListener('input', () => {
+        shiftOutput.value = `${shift.value} %`;
+        render();
+    });
 
     function paint(event) {
         if (!initialized) return;

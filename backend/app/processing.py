@@ -8,7 +8,9 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
+import cv2
 import httpx
+import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -158,6 +160,82 @@ class MaskedBackgroundProfile:
     minimum_fraction: float
     maximum_fraction: float
     steering_wheel_protection: bool = False
+
+
+def refine_manual_background_mask(
+    original_bytes: bytes,
+    mask_png_bytes: bytes,
+    *,
+    boundary_radius_percent: float = 0.008,
+) -> bytes:
+    """Snap a roughly painted replacement mask to nearby visible image edges.
+
+    The operator's mask remains authoritative away from its boundary. GrabCut
+    may only change a narrow band around that boundary, so an uncertain edge
+    can be cleaned up without removing remote pillars, trim or controls.
+    """
+    try:
+        original = ImageOps.exif_transpose(
+            Image.open(io.BytesIO(original_bytes))
+        ).convert("RGB")
+        source_mask = Image.open(io.BytesIO(mask_png_bytes)).convert("RGBA")
+        alpha = source_mask.getchannel("A")
+        if alpha.size != original.size:
+            alpha = alpha.resize(original.size, Image.Resampling.LANCZOS)
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Die Maskenkante konnte nicht verfeinert werden") from exc
+
+    selected = np.asarray(alpha, dtype=np.uint8) >= 128
+    if not selected.any() or selected.all():
+        raise ImageProcessingError("Die Maskenkante konnte nicht verfeinert werden")
+
+    radius = max(4, min(28, round(max(original.size) * boundary_radius_percent)))
+    kernel_size = radius * 2 + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    selected_u8 = selected.astype(np.uint8)
+    sure_selected = cv2.erode(selected_u8, kernel, iterations=1).astype(bool)
+    possible_selected = cv2.dilate(selected_u8, kernel, iterations=1).astype(bool)
+    if not sure_selected.any() or possible_selected.all():
+        # Very thin or border-filling masks do not provide reliable seeds.
+        # Preserve the operator input instead of guessing beyond it.
+        refined_alpha = alpha
+    else:
+        grabcut_mask = np.full(selected.shape, cv2.GC_BGD, dtype=np.uint8)
+        grabcut_mask[possible_selected] = cv2.GC_PR_BGD
+        grabcut_mask[selected] = cv2.GC_PR_FGD
+        grabcut_mask[sure_selected] = cv2.GC_FGD
+        image_bgr = cv2.cvtColor(np.asarray(original), cv2.COLOR_RGB2BGR)
+        background_model = np.zeros((1, 65), np.float64)
+        foreground_model = np.zeros((1, 65), np.float64)
+        try:
+            cv2.grabCut(
+                image_bgr,
+                grabcut_mask,
+                None,
+                background_model,
+                foreground_model,
+                4,
+                cv2.GC_INIT_WITH_MASK,
+            )
+        except cv2.error:
+            # Edge assistance must never block an operator correction. If the
+            # local color model cannot converge, keep the submitted mask.
+            logger.warning("Manual mask edge refinement did not converge")
+            refined_alpha = alpha
+        else:
+            refined = np.isin(grabcut_mask, (cv2.GC_FGD, cv2.GC_PR_FGD))
+            # The model cannot erase the painted core or add pixels beyond the
+            # narrow uncertain edge band.
+            refined[sure_selected] = True
+            refined[~possible_selected] = False
+            refined_alpha = Image.fromarray((refined.astype(np.uint8) * 255), mode="L")
+            refined_alpha = refined_alpha.filter(ImageFilter.GaussianBlur(0.8))
+
+    output_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    output_mask.putalpha(refined_alpha)
+    output = io.BytesIO()
+    output_mask.save(output, format="PNG", optimize=True)
+    return output.getvalue()
 
 
 def masked_background_profile(
@@ -1398,11 +1476,19 @@ def process_photo(photo_id: str) -> None:
                 assert isinstance(window_result, WindowCompositionResult)
                 finished = window_result.content
                 if photo.window_mask_is_manual:
-                    photo.quality_review_required = False
-                    photo.quality_review_reason = None
+                    photo.quality_review_required = True
+                    photo.quality_review_reason = (
+                        "Das nachbearbeitete Ergebnis wartet auf die manuelle "
+                        "Operator-Freigabe."
+                    )
                     photo.quality_score = 100
                     photo.quality_issues = []
                     photo.quality_model_version = "window-rules-v1"
+                    if photo.quality_review_created_at is None:
+                        photo.quality_review_created_at = datetime.now(timezone.utc)
+                    photo.quality_reviewed_by_id = None
+                    photo.quality_reviewed_at = None
+                    photo.quality_review_resolution = "awaiting_operator_approval"
                 else:
                     was_waiting_for_review = photo.quality_review_required
                     photo.quality_review_required = (
@@ -1494,8 +1580,12 @@ def process_photo(photo_id: str) -> None:
                         for overlay in matching_overlays
                     ],
                 )
+            # A new key per processing attempt prevents browsers and object
+            # storage/CDN caches from showing an older correction after the
+            # same photo was processed again.
             processed_key = (
-                f"dealerships/{job.dealership_id}/jobs/{job.id}/processed/{step.id}/{photo.id}.jpg"
+                f"dealerships/{job.dealership_id}/jobs/{job.id}/processed/"
+                f"{step.id}/{photo.id}-a{photo.processing_attempts}.jpg"
             )
             storage.put_object(
                 object_key=processed_key,

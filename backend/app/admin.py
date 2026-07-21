@@ -70,6 +70,7 @@ from app.processing_queue import (
     enqueue_photo_variant,
     enqueue_vehicle_export,
 )
+from app.processing import ImageProcessingError, refine_manual_background_mask
 from app.security import hash_password, verify_password
 from app.sftp_transfer import (
     SftpConfigurationError,
@@ -2115,6 +2116,48 @@ def reprocess_photo(
     return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.post("/photos/{photo_id}/request-improvement")
+def request_photo_improvement(
+    photo_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    if admin.role != UserRole.DEALERSHIP_ADMIN:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    photo = db.get(PhotoAsset, photo_id)
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Foto wurde nicht gefunden")
+    job = db.get(VehicleJob, photo.vehicle_job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Auftrag wurde nicht gefunden")
+    _authorized_dealership(db, admin, job.dealership_id)
+    if not photo.processed_object_key:
+        raise HTTPException(
+            status_code=409,
+            detail="Es liegt noch kein optimiertes Ergebnis zur Prüfung vor",
+        )
+    if photo.quality_review_required:
+        _flash(request, "Das Bild wurde bereits zur Verbesserung vorgelegt.")
+    else:
+        photo.quality_review_required = True
+        photo.quality_review_reason = (
+            "Das Autohaus hat das Ergebnis zur Verbesserung vorgelegt."
+        )
+        photo.quality_review_created_at = datetime.now(timezone.utc)
+        photo.quality_reviewed_by_id = None
+        photo.quality_reviewed_at = None
+        photo.quality_review_resolution = "requested_by_dealership"
+        job.status = JobStatus.REVIEW_REQUIRED
+        db.commit()
+        _flash(request, "Das Bild wurde dem Operator zur Verbesserung vorgelegt.")
+    return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
 def _window_correction_photo(
     db: Session, admin: User, photo_id: uuid.UUID
 ) -> tuple[PhotoAsset, VehicleJob, CaptureStep, Orientation]:
@@ -2202,13 +2245,19 @@ def window_correction_asset(
     admin = _require_quality_operator(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
-    photo, _, _, _ = _window_correction_photo(db, admin, photo_id)
+    photo, job, _, _ = _window_correction_photo(db, admin, photo_id)
     if asset_kind == "original":
         object_key = photo.original_object_key
         content_type = photo.original_content_type
     elif asset_kind == "mask" and photo.window_mask_object_key:
         object_key = photo.window_mask_object_key
         content_type = "image/png"
+    elif asset_kind == "background" and job.background_id:
+        background = db.get(Background, job.background_id)
+        if background is None:
+            raise HTTPException(status_code=404, detail="Hintergrund wurde nicht gefunden")
+        object_key = background.object_key
+        content_type = background.content_type
     else:
         raise HTTPException(status_code=404, detail="Korrekturdatei wurde nicht gefunden")
     return Response(
@@ -2224,6 +2273,7 @@ def save_window_correction(
     request: Request,
     mask: UploadFile = File(),
     background_shift_percent: int = Form(default=14),
+    refine_edges: bool = Form(default=False),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
@@ -2247,21 +2297,35 @@ def save_window_correction(
         raise HTTPException(status_code=400, detail="Die Hintergrundmaske ist leer")
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
+    mask_content = output.getvalue()
+    if refine_edges:
+        try:
+            mask_content = refine_manual_background_mask(
+                storage.get_object(object_key=photo.original_object_key),
+                mask_content,
+            )
+        except ImageProcessingError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     mask_key = (
         f"dealerships/{job.dealership_id}/jobs/{job.id}/"
         f"photos/{photo.id}/window-mask-manual.png"
     )
     storage.put_object(
         object_key=mask_key,
-        content=output.getvalue(),
+        content=mask_content,
         content_type="image/png",
     )
     photo.window_mask_object_key = mask_key
     photo.window_mask_is_manual = True
     photo.window_background_shift_percent = background_shift_percent
-    photo.quality_reviewed_by_id = admin.id
-    photo.quality_reviewed_at = datetime.now(timezone.utc)
-    photo.quality_review_resolution = "corrected"
+    photo.quality_review_required = True
+    photo.quality_review_reason = (
+        "Das nachbearbeitete Ergebnis wartet auf die manuelle Operator-Freigabe."
+    )
+    photo.quality_review_created_at = datetime.now(timezone.utc)
+    photo.quality_reviewed_by_id = None
+    photo.quality_reviewed_at = None
+    photo.quality_review_resolution = "correction_processing"
     photo.processing_status = ProcessingStatus.QUEUED
     photo.processing_error = None
     job.status = JobStatus.PROCESSING

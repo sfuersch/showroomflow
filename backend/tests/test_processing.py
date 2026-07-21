@@ -28,6 +28,7 @@ from app.processing import (
     infer_vehicle_perspective,
     measure_vehicle_contour,
     perspective_composition_options,
+    refine_manual_background_mask,
     resolve_background_composition,
     WindowCompositionResult,
     masked_background_profile,
@@ -462,6 +463,44 @@ def test_window_background_shift_reveals_lower_background_content() -> None:
     shifted_pixel = Image.open(io.BytesIO(shifted)).getpixel((150, 150))
     assert centered_pixel[0] > centered_pixel[2]
     assert shifted_pixel[2] > shifted_pixel[0]
+
+
+def test_manual_mask_refinement_snaps_rough_boundary_to_visible_edge() -> None:
+    original = Image.new("RGB", (240, 140), "navy")
+    ImageDraw.Draw(original).rectangle((0, 0, 119, 139), fill="silver")
+    rough_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    # The intended background starts at x=120, but the rough brush reaches
+    # ten pixels into the protected silver foreground.
+    ImageDraw.Draw(rough_mask).rectangle((110, 0, 239, 139), fill="white")
+
+    refined = refine_manual_background_mask(
+        image_bytes(original, "PNG"),
+        image_bytes(rough_mask, "PNG"),
+        boundary_radius_percent=0.06,
+    )
+
+    alpha = Image.open(io.BytesIO(refined)).convert("RGBA").getchannel("A")
+    assert alpha.getpixel((105, 70)) < 32
+    assert alpha.getpixel((115, 70)) < 128
+    assert alpha.getpixel((125, 70)) > 128
+    assert alpha.getpixel((150, 70)) > 223
+
+
+def test_manual_mask_refinement_cannot_change_pixels_outside_boundary_band() -> None:
+    original = Image.new("RGB", (300, 180), "black")
+    ImageDraw.Draw(original).rectangle((145, 0, 299, 179), fill="white")
+    rough_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(rough_mask).rectangle((135, 0, 299, 179), fill="white")
+
+    refined = refine_manual_background_mask(
+        image_bytes(original, "PNG"),
+        image_bytes(rough_mask, "PNG"),
+        boundary_radius_percent=0.04,
+    )
+
+    alpha = Image.open(io.BytesIO(refined)).convert("RGBA").getchannel("A")
+    assert alpha.getpixel((90, 90)) == 0
+    assert alpha.getpixel((190, 90)) == 255
 
 
 def test_window_background_reports_suspicious_protected_overlap() -> None:
