@@ -1,8 +1,15 @@
 from dataclasses import dataclass
 
 
-PROCESSING_MODES = {"optimized", "window_background", "original", "configurable"}
-PROCESSING_REQUIRED_MODES = {"optimized", "window_background"}
+PROCESSING_MODES = {
+    "optimized",
+    "window_background",
+    "opening_background",
+    "original",
+    "configurable",
+}
+PROCESSING_REQUIRED_MODES = {"optimized", "window_background", "opening_background"}
+MASKED_BACKGROUND_MODES = {"window_background", "opening_background"}
 ORIENTATION_CATEGORIES = {"exterior", "interior", "detail", "special"}
 
 
@@ -99,7 +106,7 @@ STANDARD_ORIENTATIONS = [
         "Einstieg Fahrer",
         "Seitlichen Einblick durch die geöffnete Fahrertür aufnehmen.",
         "interior",
-        "optimized",
+        "opening_background",
     ),
     StandardOrientation(
         "steering-wheel",
@@ -120,21 +127,21 @@ STANDARD_ORIENTATIONS = [
         "Türe Fahrerseite",
         "Innenseite der Fahrertür vollständig aufnehmen.",
         "interior",
-        "original",
+        "opening_background",
     ),
     StandardOrientation(
         "rear-row-driver",
         "Hintere Reihe Fahrer",
         "Rücksitzbereich von der Fahrerseite aufnehmen.",
         "interior",
-        "original",
+        "window_background",
     ),
     StandardOrientation(
         "front-interior",
         "Innenansicht vorne",
         "Gesamteindruck des vorderen Innenraums aufnehmen.",
         "interior",
-        "optimized",
+        "window_background",
     ),
     StandardOrientation(
         "center-console",
@@ -158,42 +165,42 @@ STANDARD_ORIENTATIONS = [
         "Türe Beifahrerseite",
         "Innenseite der Beifahrertür vollständig aufnehmen.",
         "interior",
-        "original",
+        "opening_background",
     ),
     StandardOrientation(
         "passenger-entry",
         "Einstieg Beifahrer",
         "Seitlichen Einblick durch die geöffnete Beifahrertür aufnehmen.",
         "interior",
-        "optimized",
+        "opening_background",
     ),
     StandardOrientation(
         "driver-door-open",
         "Fahrertür geöffnet",
         "Fahrzeug mit geöffneter Fahrertür aufnehmen.",
         "interior",
-        "optimized",
+        "opening_background",
     ),
     StandardOrientation(
         "passenger-door-open",
         "Beifahrertür geöffnet",
         "Fahrzeug mit geöffneter Beifahrertür aufnehmen.",
         "interior",
-        "optimized",
+        "opening_background",
     ),
     StandardOrientation(
         "rear-row-passenger",
         "Hintere Reihe Beifahrer",
         "Rücksitzbereich von der Beifahrerseite aufnehmen.",
         "interior",
-        "configurable",
+        "window_background",
     ),
     StandardOrientation(
         "trunk-open",
         "Kofferraum offen",
         "Geöffneten Kofferraum vollständig aufnehmen.",
         "interior",
-        "configurable",
+        "opening_background",
     ),
     StandardOrientation(
         "engine-bay",

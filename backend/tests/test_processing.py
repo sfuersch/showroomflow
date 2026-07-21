@@ -19,6 +19,7 @@ from app.processing import (
     calculate_contour_framing,
     calculate_scene_adjustment,
     compose_background_through_windows,
+    compose_background_through_mask,
     compose_showroom,
     create_photoroom_cutout,
     format_retry_delay,
@@ -29,6 +30,7 @@ from app.processing import (
     perspective_composition_options,
     resolve_background_composition,
     WindowCompositionResult,
+    masked_background_profile,
 )
 
 
@@ -477,6 +479,52 @@ def test_window_background_reports_suspicious_protected_overlap() -> None:
     assert isinstance(result, WindowCompositionResult)
     assert result.quality_review_required is True
     assert "geschützte Innenraumbereiche" in result.quality_review_reason
+
+
+def test_interior_mask_preserves_original_position_and_only_replaces_windows() -> None:
+    original = Image.new("RGB", (800, 600), (220, 30, 30))
+    mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(mask).rectangle((120, 40, 680, 190), fill="white")
+    profile = masked_background_profile("front-interior", "window_background")
+
+    result = compose_background_through_mask(
+        image_bytes(original, "JPEG"),
+        image_bytes(mask, "PNG"),
+        image_bytes(Image.new("RGB", original.size, (20, 40, 220)), "JPEG"),
+        Settings(output_width=800, output_height=600),
+        profile,
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    assert finished.getpixel((400, 100))[2] > 190
+    assert finished.getpixel((400, 350))[0] > 190
+
+
+def test_opening_mask_can_replace_ground_without_scaling_foreground() -> None:
+    original = Image.new("RGB", (800, 600), (220, 30, 30))
+    mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(mask).rectangle((0, 350, 799, 599), fill="white")
+    profile = masked_background_profile("driver-entry", "opening_background")
+
+    result = compose_background_through_mask(
+        image_bytes(original, "JPEG"),
+        image_bytes(mask, "PNG"),
+        image_bytes(Image.new("RGB", original.size, (20, 40, 220)), "JPEG"),
+        Settings(output_width=800, output_height=600),
+        profile,
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    assert finished.getpixel((400, 100))[0] > 190
+    assert finished.getpixel((400, 500))[2] > 190
+
+
+def test_open_trunk_uses_opening_profile_with_vehicle_protection_prompt() -> None:
+    profile = masked_background_profile("trunk-open", "opening_background")
+
+    assert "trunk opening" in profile.prompt
+    assert "open tailgate" in profile.negative_prompt
+    assert profile.maximum_fraction > 0.80
 
 
 def test_text_guided_cutout_omits_incompatible_hd_header() -> None:

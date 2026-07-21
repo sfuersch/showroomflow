@@ -21,6 +21,7 @@ from app.image_service import (
     photoroom_sandbox_active,
     provider_is_available,
 )
+from app.orientations import MASKED_BACKGROUND_MODES
 from app.models import (
     Background,
     BackgroundOrientationComposition,
@@ -148,6 +149,84 @@ class WindowCompositionResult:
     content: bytes
     quality_review_required: bool = False
     quality_review_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class MaskedBackgroundProfile:
+    prompt: str
+    negative_prompt: str
+    minimum_fraction: float
+    maximum_fraction: float
+    steering_wheel_protection: bool = False
+
+
+def masked_background_profile(
+    orientation_key: str, processing_mode: str
+) -> MaskedBackgroundProfile:
+    """Describe the semantic area that may reveal the configured showroom."""
+    if orientation_key == "steering-wheel":
+        return MaskedBackgroundProfile(
+            prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
+            negative_prompt=(
+                "steering wheel, dashboard, instrument cluster, A-pillar, "
+                "door frame, mirror"
+            ),
+            minimum_fraction=0.02,
+            maximum_fraction=0.75,
+            steering_wheel_protection=True,
+        )
+    if processing_mode == "opening_background":
+        prompts = {
+            "trunk-open": (
+                "outdoor background visible around the vehicle and through the open "
+                "trunk opening"
+            ),
+            "driver-entry": (
+                "outdoor background and ground visible through the open driver door"
+            ),
+            "driver-door": (
+                "window glass, outdoor background and ground visible around the driver door"
+            ),
+            "passenger-entry": (
+                "outdoor background and ground visible through the open passenger door"
+            ),
+            "passenger-door": (
+                "window glass, outdoor background and ground visible around the passenger door"
+            ),
+            "driver-door-open": (
+                "outdoor background and ground visible around and through the open driver door"
+            ),
+            "passenger-door-open": (
+                "outdoor background and ground visible around and through the open passenger door"
+            ),
+        }
+        return MaskedBackgroundProfile(
+            prompt=prompts.get(
+                orientation_key,
+                "outdoor background visible through the open vehicle door",
+            ),
+            negative_prompt=(
+                "vehicle body, open door, open tailgate, cargo area, seats, dashboard, "
+                "pillars, trim, mirrors"
+            ),
+            minimum_fraction=0.004,
+            maximum_fraction=0.88,
+        )
+    prompts = {
+        "front-interior": "windshield and side window glass",
+        "rear-row-driver": "side window and rear window glass",
+        "rear-row-passenger": "side window and rear window glass",
+        "panoramic-roof": "panoramic glass roof and window glass",
+    }
+    return MaskedBackgroundProfile(
+        prompt=prompts.get(orientation_key, WINDOW_MASK_SEGMENTATION_PROMPT),
+        negative_prompt=(
+            "dashboard, seats, steering wheel, instrument cluster, pillars, door frame, "
+            "mirrors, interior trim"
+        ),
+        minimum_fraction=0.003,
+        maximum_fraction=0.68,
+    )
 
 
 def resolve_background_composition(
@@ -801,6 +880,94 @@ def compose_background_through_windows(
     return content
 
 
+def compose_background_through_mask(
+    original_bytes: bytes,
+    mask_png_bytes: bytes,
+    background_bytes: bytes,
+    settings: Settings,
+    profile: MaskedBackgroundProfile,
+    background_shift_percent: int = 14,
+    *,
+    return_diagnostics: bool = False,
+) -> bytes | WindowCompositionResult:
+    """Replace an AI-selected view outside the cabin without moving the photo."""
+    try:
+        original = ImageOps.exif_transpose(
+            Image.open(io.BytesIO(original_bytes))
+        ).convert("RGBA")
+        mask = Image.open(io.BytesIO(mask_png_bytes)).convert("RGBA").getchannel("A")
+        if mask.size != original.size:
+            mask = mask.resize(original.size, Image.Resampling.LANCZOS)
+        # A tiny feather avoids a pasted-on edge while retaining pillars, trim,
+        # the opened hatch and door seals from the untouched original.
+        mask = mask.filter(
+            ImageFilter.GaussianBlur(max(1, round(max(original.size) * 0.00065)))
+        )
+        selected_fraction = sum(mask.histogram()[16:]) / (mask.width * mask.height)
+        if selected_fraction < profile.minimum_fraction:
+            raise ImageProcessingError("Der Bilddienst hat keine Außenfläche erkannt")
+        if selected_fraction > profile.maximum_fraction:
+            raise ImageProcessingError(
+                "Der Bilddienst hat zu große Bildbereiche als Außenfläche erkannt"
+            )
+        background = Image.open(io.BytesIO(background_bytes)).convert("RGBA")
+    except ImageProcessingError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Der maskierte Hintergrund konnte nicht erzeugt werden") from exc
+
+    output_size = (settings.output_width, settings.output_height)
+    canvas = ImageOps.fit(
+        background,
+        output_size,
+        method=Image.Resampling.LANCZOS,
+    ).convert("RGBA")
+    shift = max(0, min(35, background_shift_percent)) / 100
+    if shift:
+        scaled = canvas.resize(
+            (
+                max(1, round(canvas.width * (1 + shift))),
+                max(1, round(canvas.height * (1 + shift))),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+        # Bottom anchoring deliberately reveals more facade and ground through
+        # cabin windows and open doors instead of an implausible sky-only crop.
+        canvas = scaled.crop(
+            (
+                (scaled.width - output_size[0]) // 2,
+                scaled.height - output_size[1],
+                (scaled.width - output_size[0]) // 2 + output_size[0],
+                scaled.height,
+            )
+        )
+
+    foreground = ImageOps.contain(original, output_size, method=Image.Resampling.LANCZOS)
+    contained_mask = ImageOps.contain(mask, output_size, method=Image.Resampling.LANCZOS)
+    foreground.putalpha(contained_mask.point(lambda value: 255 - value))
+    position = (
+        (settings.output_width - foreground.width) // 2,
+        (settings.output_height - foreground.height) // 2,
+    )
+    canvas.alpha_composite(foreground, position)
+
+    output = io.BytesIO()
+    canvas.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
+    content = output.getvalue()
+    quality_reasons: list[str] = []
+    if selected_fraction < max(profile.minimum_fraction * 2, 0.012):
+        quality_reasons.append("Die erkannte Außenfläche ist ungewöhnlich klein.")
+    elif selected_fraction > min(profile.maximum_fraction * 0.82, 0.70):
+        quality_reasons.append("Die erkannte Außenfläche ist ungewöhnlich groß.")
+    if return_diagnostics:
+        return WindowCompositionResult(
+            content=content,
+            quality_review_required=bool(quality_reasons),
+            quality_review_reason=" ".join(quality_reasons) or None,
+        )
+    return content
+
+
 def compose_showroom(
     background_bytes: bytes,
     vehicle_png_bytes: bytes,
@@ -1175,11 +1342,14 @@ def process_photo(photo_id: str) -> None:
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
             processing_mode = orientation.processing_mode if orientation else "optimized"
-            if processing_mode == "window_background":
+            if processing_mode in MASKED_BACKGROUND_MODES:
                 if image_settings.provider != "photoroom":
                     raise ImageProcessingError(
-                        "Der Scheibenhintergrund benötigt Photoroom"
+                        "Die maskierte Hintergrundverarbeitung benötigt Photoroom"
                     )
+                profile = masked_background_profile(
+                    orientation.key if orientation else "", processing_mode
+                )
                 if photo.window_mask_is_manual and photo.window_mask_object_key:
                     window_mask = storage.get_object(
                         object_key=photo.window_mask_object_key
@@ -1189,7 +1359,8 @@ def process_photo(photo_id: str) -> None:
                         original,
                         settings,
                         photoroom_sandbox_active(image_settings, settings),
-                        segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
+                        segmentation_prompt=profile.prompt,
+                        segmentation_negative_prompt=profile.negative_prompt,
                     )
                     mask_key = (
                         f"dealerships/{job.dealership_id}/jobs/{job.id}/"
@@ -1202,17 +1373,27 @@ def process_photo(photo_id: str) -> None:
                     )
                     photo.window_mask_object_key = mask_key
                     photo.window_mask_is_manual = False
-                window_result = compose_background_through_windows(
-                    original,
-                    window_mask,
-                    background_image,
-                    settings,
-                    background_shift_percent=(
+                compose_mask = (
+                    compose_background_through_windows
+                    if profile.steering_wheel_protection
+                    else compose_background_through_mask
+                )
+                compose_kwargs = {
+                    "background_shift_percent": (
                         photo.window_background_shift_percent
                         if photo.window_background_shift_percent is not None
                         else composition.window_background_shift_percent
                     ),
-                    return_diagnostics=True,
+                    "return_diagnostics": True,
+                }
+                if not profile.steering_wheel_protection:
+                    compose_kwargs["profile"] = profile
+                window_result = compose_mask(
+                    original,
+                    window_mask,
+                    background_image,
+                    settings,
+                    **compose_kwargs,
                 )
                 assert isinstance(window_result, WindowCompositionResult)
                 finished = window_result.content
@@ -1432,7 +1613,13 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
-            if orientation is not None and orientation.processing_mode == "window_background":
+            if (
+                orientation is not None
+                and orientation.processing_mode in MASKED_BACKGROUND_MODES
+            ):
+                profile = masked_background_profile(
+                    orientation.key, orientation.processing_mode
+                )
                 if photo.window_mask_is_manual and photo.window_mask_object_key:
                     window_mask = storage.get_object(
                         object_key=photo.window_mask_object_key
@@ -1442,18 +1629,29 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                         original,
                         settings,
                         photoroom_sandbox_active(image_settings, settings),
-                        segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
+                        segmentation_prompt=profile.prompt,
+                        segmentation_negative_prompt=profile.negative_prompt,
                     )
-                finished = compose_background_through_windows(
+                compose_mask = (
+                    compose_background_through_windows
+                    if profile.steering_wheel_protection
+                    else compose_background_through_mask
+                )
+                compose_kwargs = {
+                    "background_shift_percent": (
+                        photo.window_background_shift_percent
+                        if photo.window_background_shift_percent is not None
+                        else composition.window_background_shift_percent
+                    )
+                }
+                if not profile.steering_wheel_protection:
+                    compose_kwargs["profile"] = profile
+                finished = compose_mask(
                     original,
                     window_mask,
                     background_image,
                     settings,
-                    background_shift_percent=(
-                        photo.window_background_shift_percent
-                        if photo.window_background_shift_percent is not None
-                        else composition.window_background_shift_percent
-                    ),
+                    **compose_kwargs,
                 )
             else:
                 finished = create_photoroom_showroom(

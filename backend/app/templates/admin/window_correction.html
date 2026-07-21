@@ -1,10 +1,10 @@
 {% extends "admin/base.html" %}
-{% block title %}Scheibenmaske nachbearbeiten{% endblock %}
+{% block title %}Hintergrundmaske nachbearbeiten{% endblock %}
 {% block content %}
 <nav class="breadcrumb"><a href="/admin">Übersicht</a><span>›</span><a href="/admin/jobs/{{ job.id }}">{{ job.vin }}</a><span>›</span><span>Nachbearbeitung</span></nav>
-<div class="page-heading"><div><span class="eyebrow">{{ step.name }}</span><h1>Scheibenmaske nachbearbeiten</h1><p class="muted">Türkis markierte Flächen werden durch den Showroom-Hintergrund ersetzt. Korrigiere nur die tatsächlich sichtbaren Scheiben.</p></div></div>
+<div class="page-heading"><div><span class="eyebrow">{{ step.name }}</span><h1>Hintergrundmaske nachbearbeiten</h1><p class="muted">Türkis markierte Flächen werden durch den Showroom-Hintergrund ersetzt. Markiere nur sichtbare Scheiben, Türöffnungen oder Außenflächen.</p></div></div>
 <section class="card section-card correction-workspace">
-    <div class="correction-toolbar" role="toolbar" aria-label="Werkzeuge für die Scheibenmaske">
+    <div class="correction-toolbar" role="toolbar" aria-label="Werkzeuge für die Hintergrundmaske">
         <button type="button" class="button button-primary correction-mode active" data-mode="add">Hintergrund einsetzen</button>
         <button type="button" class="button button-secondary correction-mode" data-mode="remove">Original schützen</button>
         <label>Pinselgröße <input id="brush-size" type="range" min="8" max="140" value="45"><output id="brush-output">45</output></label>
@@ -13,7 +13,7 @@
     <div class="correction-canvas-wrap"><canvas id="correction-canvas" aria-label="Scheibenmaske bearbeiten"></canvas></div>
     <form id="correction-form" method="post" action="/admin/photos/{{ photo.id }}/correction" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Ein höherer Wert zeigt mehr Gebäudefassade und weniger Himmel durch die Scheiben.</small></label>
+        <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der markierten Fläche.</small></label>
         <div class="form-actions"><a class="button button-secondary" href="/admin/jobs/{{ job.id }}">Abbrechen</a><button class="button button-primary" type="submit">Korrektur speichern und neu verarbeiten</button></div>
     </form>
 </section>
@@ -100,7 +100,7 @@
         event.preventDefault();
         maskCanvas.toBlob(blob => {
             const data = new FormData(event.target);
-            data.append('mask', blob, 'scheibenmaske.png');
+            data.append('mask', blob, 'hintergrundmaske.png');
             fetch(event.target.action, {method: 'POST', body: data, redirect: 'follow'})
                 .then(response => { window.location.href = response.url; });
         }, 'image/png');
