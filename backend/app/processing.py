@@ -38,7 +38,6 @@ from app.thumbnails import create_thumbnail, thumbnail_key
 logger = logging.getLogger(__name__)
 
 WINDOW_MASK_SEGMENTATION_PROMPT = "windshield, side window"
-INSTRUMENT_CLUSTER_SEGMENTATION_PROMPT = "instrument cluster"
 
 
 class ImageProcessingError(RuntimeError):
@@ -566,8 +565,6 @@ def compose_background_through_windows(
     window_mask_png_bytes: bytes,
     background_bytes: bytes,
     settings: Settings,
-    *,
-    protected_foreground_mask_png_bytes: bytes | None = None,
 ) -> bytes:
     """Replace only AI-selected glass while preserving every other original pixel."""
     try:
@@ -579,54 +576,31 @@ def compose_background_through_windows(
         if window_alpha.size != original.size:
             window_alpha = window_alpha.resize(original.size, Image.Resampling.LANCZOS)
 
+        # This orientation is captured with a guided, stable composition. A
+        # smooth calibrated protection zone is therefore more reliable than a
+        # second semantic mask, which can fragment dark, unlit instrument
+        # clusters. Only glass outside this zone may be replaced.
         protected_alpha = Image.new("L", original.size, 0)
-        if protected_foreground_mask_png_bytes is not None:
-            protected_foreground = Image.open(
-                io.BytesIO(protected_foreground_mask_png_bytes)
-            ).convert("RGBA")
-            ai_protected_alpha = protected_foreground.getchannel("A")
-            if ai_protected_alpha.size != original.size:
-                ai_protected_alpha = ai_protected_alpha.resize(
-                    original.size,
-                    Image.Resampling.LANCZOS,
+        ImageDraw.Draw(protected_alpha).polygon(
+            [
+                (round(original.width * x), round(original.height * y))
+                for x, y in (
+                    (0.30, 0.22),
+                    (0.36, 0.18),
+                    (0.66, 0.18),
+                    (0.74, 0.24),
+                    (0.75, 0.38),
+                    (0.70, 0.43),
+                    (0.32, 0.43),
+                    (0.28, 0.36),
+                    (0.28, 0.27),
                 )
-            ai_protected_histogram = ai_protected_alpha.histogram()
-            ai_protected_fraction = sum(ai_protected_histogram[16:]) / (
-                ai_protected_alpha.width * ai_protected_alpha.height
-            )
-            if 0.002 <= ai_protected_fraction <= 0.25:
-                protected_alpha = ai_protected_alpha
-            else:
-                logger.warning(
-                    "Ignoring implausible instrument-cluster mask covering %.2f%%",
-                    ai_protected_fraction * 100,
-                )
-
-        # A dedicated AI mask normally protects the instrument cluster. This
-        # conservative local fallback also preserves very dark cluster pixels
-        # when the text-guided service misses a black, unlit display.
-        grayscale = ImageOps.grayscale(original.convert("RGB"))
-        dark_pixels = grayscale.point(lambda value: 255 if value < 55 else 0)
-        cluster_region = Image.new("L", original.size, 0)
-        ImageDraw.Draw(cluster_region).rectangle(
-            (
-                round(original.width * 0.27),
-                round(original.height * 0.10),
-                round(original.width * 0.77),
-                round(original.height * 0.48),
-            ),
+            ],
             fill=255,
         )
-        local_cluster_protection = ImageChops.multiply(dark_pixels, cluster_region)
-
-        expansion_size = max(3, round(max(original.size) * 0.012))
-        if expansion_size % 2 == 0:
-            expansion_size += 1
-        local_cluster_protection = local_cluster_protection.filter(
-            ImageFilter.MaxFilter(expansion_size)
-        ).filter(ImageFilter.GaussianBlur(max(1, expansion_size // 6)))
-        protected_alpha = ImageChops.lighter(protected_alpha, local_cluster_protection)
-        protected_alpha = protected_alpha.filter(ImageFilter.MaxFilter(expansion_size))
+        protected_alpha = protected_alpha.filter(
+            ImageFilter.GaussianBlur(max(2, round(max(original.size) * 0.0025)))
+        )
 
         # The service returns alpha=255 for selected glass. Subtract protected
         # foreground before compositing so the dashboard cannot be cut away.
@@ -1064,18 +1038,11 @@ def process_photo(photo_id: str) -> None:
                     photoroom_sandbox_active(image_settings, settings),
                     segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
                 )
-                instrument_cluster_mask = create_photoroom_cutout(
-                    original,
-                    settings,
-                    photoroom_sandbox_active(image_settings, settings),
-                    segmentation_prompt=INSTRUMENT_CLUSTER_SEGMENTATION_PROMPT,
-                )
                 finished = compose_background_through_windows(
                     original,
                     window_mask,
                     background_image,
                     settings,
-                    protected_foreground_mask_png_bytes=instrument_cluster_mask,
                 )
             elif image_settings.provider == "photoroom":
                 finished = create_photoroom_showroom(
@@ -1250,18 +1217,11 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                     photoroom_sandbox_active(image_settings, settings),
                     segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
                 )
-                instrument_cluster_mask = create_photoroom_cutout(
-                    original,
-                    settings,
-                    photoroom_sandbox_active(image_settings, settings),
-                    segmentation_prompt=INSTRUMENT_CLUSTER_SEGMENTATION_PROMPT,
-                )
                 finished = compose_background_through_windows(
                     original,
                     window_mask,
                     background_image,
                     settings,
-                    protected_foreground_mask_png_bytes=instrument_cluster_mask,
                 )
             else:
                 finished = create_photoroom_showroom(
