@@ -3,9 +3,10 @@ from __future__ import annotations
 import io
 import logging
 import math
+import re
 import uuid
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
@@ -42,6 +43,44 @@ WINDOW_MASK_SEGMENTATION_PROMPT = "windshield, side window"
 
 class ImageProcessingError(RuntimeError):
     """An image could not be processed into a showroom image."""
+
+
+class ImageProviderRateLimitError(ImageProcessingError):
+    """The image provider rejected work until a known later point in time."""
+
+    def __init__(self, retry_after_seconds: int):
+        self.retry_after_seconds = max(60, min(retry_after_seconds, 86_400))
+        super().__init__(
+            "Der Bilddienst ist vorübergehend limitiert. "
+            f"Automatischer neuer Versuch in etwa {format_retry_delay(self.retry_after_seconds)}."
+        )
+
+
+def format_retry_delay(seconds: int) -> str:
+    minutes = max(1, math.ceil(seconds / 60))
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours and remaining_minutes:
+        return f"{hours} Std. {remaining_minutes} Min."
+    if hours:
+        return f"{hours} Std."
+    return f"{remaining_minutes} Min."
+
+
+def raise_for_photoroom_rate_limit(response: httpx.Response) -> None:
+    if response.status_code != 429:
+        return
+    retry_after = response.headers.get("retry-after", "").strip()
+    retry_after_seconds = int(retry_after) if retry_after.isdigit() else 0
+    if retry_after_seconds <= 0:
+        match = re.search(
+            r"Expected available in\s+(\d+)\s+seconds",
+            response.text,
+            flags=re.IGNORECASE,
+        )
+        retry_after_seconds = int(match.group(1)) if match else 3600
+    # Give the provider a small buffer so that the scheduled request does not
+    # arrive exactly at the edge of its rolling quota window.
+    raise ImageProviderRateLimitError(retry_after_seconds + 60)
 
 
 @dataclass(frozen=True)
@@ -101,6 +140,14 @@ class BackgroundComposition:
     shadow_opacity_percent: int
     reflection_opacity_percent: int
     brightness_percent: int
+    window_background_shift_percent: int
+
+
+@dataclass(frozen=True)
+class WindowCompositionResult:
+    content: bytes
+    quality_review_required: bool = False
+    quality_review_reason: str | None = None
 
 
 def resolve_background_composition(
@@ -121,6 +168,7 @@ def resolve_background_composition(
         shadow_opacity_percent=value("shadow_opacity_percent"),
         reflection_opacity_percent=value("reflection_opacity_percent"),
         brightness_percent=value("brightness_percent"),
+        window_background_shift_percent=value("window_background_shift_percent"),
     )
 
 
@@ -377,6 +425,7 @@ def create_photoroom_cutout(
         )
     except httpx.HTTPError as exc:
         raise ImageProcessingError("Photoroom ist nicht erreichbar") from exc
+    raise_for_photoroom_rate_limit(response)
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:300]
         raise ImageProcessingError(
@@ -518,6 +567,7 @@ def create_photoroom_showroom(
         )
     except httpx.HTTPError as exc:
         raise ImageProcessingError("Photoroom ist nicht erreichbar") from exc
+    raise_for_photoroom_rate_limit(response)
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:300]
         raise ImageProcessingError(
@@ -565,7 +615,10 @@ def compose_background_through_windows(
     window_mask_png_bytes: bytes,
     background_bytes: bytes,
     settings: Settings,
-) -> bytes:
+    background_shift_percent: int = 14,
+    *,
+    return_diagnostics: bool = False,
+) -> bytes | WindowCompositionResult:
     """Replace only AI-selected glass while preserving every other original pixel."""
     try:
         original = ImageOps.exif_transpose(
@@ -575,6 +628,7 @@ def compose_background_through_windows(
         window_alpha = window_mask.getchannel("A")
         if window_alpha.size != original.size:
             window_alpha = window_alpha.resize(original.size, Image.Resampling.LANCZOS)
+        automatic_window_alpha = window_alpha.copy()
 
         # The open driver's door leaves a small side-window opening at the
         # upper-left edge of this guided orientation. Text-guided segmentation
@@ -661,6 +715,10 @@ def compose_background_through_windows(
 
         # The service returns alpha=255 for selected glass. Subtract protected
         # foreground before compositing so the dashboard cannot be cut away.
+        protected_overlap = ImageChops.multiply(automatic_window_alpha, protected_alpha)
+        protected_overlap_fraction = sum(protected_overlap.histogram()[16:]) / (
+            protected_overlap.width * protected_overlap.height
+        )
         replacement_alpha = ImageChops.multiply(
             window_alpha,
             ImageOps.invert(protected_alpha),
@@ -688,6 +746,23 @@ def compose_background_through_windows(
         output_size,
         method=Image.Resampling.LANCZOS,
     ).convert("RGBA")
+    shift = max(0, min(35, background_shift_percent)) / 100
+    if shift:
+        scaled = canvas.resize(
+            (
+                max(1, round(canvas.width * (1 + shift))),
+                max(1, round(canvas.height * (1 + shift))),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+        canvas = scaled.crop(
+            (
+                (scaled.width - output_size[0]) // 2,
+                scaled.height - output_size[1],
+                (scaled.width - output_size[0]) // 2 + output_size[0],
+                scaled.height,
+            )
+        )
     foreground = ImageOps.contain(
         original,
         output_size,
@@ -707,7 +782,23 @@ def compose_background_through_windows(
 
     output = io.BytesIO()
     canvas.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
-    return output.getvalue()
+    content = output.getvalue()
+    quality_reasons: list[str] = []
+    if protected_overlap_fraction >= 0.008:
+        quality_reasons.append(
+            "Die automatische Scheibenerkennung berührt geschützte Innenraumbereiche."
+        )
+    if selected_fraction < 0.04:
+        quality_reasons.append("Die erkannte Scheibenfläche ist ungewöhnlich klein.")
+    elif selected_fraction > 0.55:
+        quality_reasons.append("Die erkannte Scheibenfläche ist ungewöhnlich groß.")
+    if return_diagnostics:
+        return WindowCompositionResult(
+            content=content,
+            quality_review_required=bool(quality_reasons),
+            quality_review_reason=" ".join(quality_reasons) or None,
+        )
+    return content
 
 
 def compose_showroom(
@@ -1089,18 +1180,50 @@ def process_photo(photo_id: str) -> None:
                     raise ImageProcessingError(
                         "Der Scheibenhintergrund benötigt Photoroom"
                     )
-                window_mask = create_photoroom_cutout(
-                    original,
-                    settings,
-                    photoroom_sandbox_active(image_settings, settings),
-                    segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
-                )
-                finished = compose_background_through_windows(
+                if photo.window_mask_is_manual and photo.window_mask_object_key:
+                    window_mask = storage.get_object(
+                        object_key=photo.window_mask_object_key
+                    )
+                else:
+                    window_mask = create_photoroom_cutout(
+                        original,
+                        settings,
+                        photoroom_sandbox_active(image_settings, settings),
+                        segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
+                    )
+                    mask_key = (
+                        f"dealerships/{job.dealership_id}/jobs/{job.id}/"
+                        f"photos/{photo.id}/window-mask.png"
+                    )
+                    storage.put_object(
+                        object_key=mask_key,
+                        content=window_mask,
+                        content_type="image/png",
+                    )
+                    photo.window_mask_object_key = mask_key
+                    photo.window_mask_is_manual = False
+                window_result = compose_background_through_windows(
                     original,
                     window_mask,
                     background_image,
                     settings,
+                    background_shift_percent=(
+                        photo.window_background_shift_percent
+                        if photo.window_background_shift_percent is not None
+                        else composition.window_background_shift_percent
+                    ),
+                    return_diagnostics=True,
                 )
+                assert isinstance(window_result, WindowCompositionResult)
+                finished = window_result.content
+                if photo.window_mask_is_manual:
+                    photo.quality_review_required = False
+                    photo.quality_review_reason = None
+                else:
+                    photo.quality_review_required = (
+                        window_result.quality_review_required
+                    )
+                    photo.quality_review_reason = window_result.quality_review_reason
             elif image_settings.provider == "photoroom":
                 finished = create_photoroom_showroom(
                     original,
@@ -1195,6 +1318,48 @@ def process_photo(photo_id: str) -> None:
             job.status = _next_job_status(db, job.id)
             db.commit()
             completed_job_id = job.id
+    except ImageProviderRateLimitError as exc:
+        retry_at = datetime.now(timezone.utc) + timedelta(
+            seconds=exc.retry_after_seconds
+        )
+        scheduled = False
+        with SessionLocal() as db:
+            photo = db.get(PhotoAsset, identifier)
+            if photo is not None:
+                photo.processing_status = ProcessingStatus.QUEUED
+                photo.processing_error = (
+                    f"{exc} Frühester neuer Versuch: "
+                    f"{retry_at.astimezone().strftime('%d.%m.%Y %H:%M Uhr')}."
+                )[:1000]
+                job = db.get(VehicleJob, photo.vehicle_job_id)
+                if job is not None:
+                    job.status = JobStatus.PROCESSING
+                db.commit()
+        try:
+            from app.processing_queue import enqueue_photo_processing_at
+
+            enqueue_photo_processing_at(identifier, retry_at)
+            scheduled = True
+        except Exception:
+            logger.exception(
+                "Rate-limited photo %s could not be scheduled for %s",
+                identifier,
+                retry_at,
+            )
+        if not scheduled:
+            with SessionLocal() as db:
+                photo = db.get(PhotoAsset, identifier)
+                if photo is not None:
+                    photo.processing_status = ProcessingStatus.FAILED
+                    photo.processing_error = (
+                        "Der Bilddienst ist vorübergehend limitiert. "
+                        "Der automatische spätere Versuch konnte nicht eingeplant werden."
+                    )
+                    job = db.get(VehicleJob, photo.vehicle_job_id)
+                    if job is not None:
+                        job.status = JobStatus.REVIEW_REQUIRED
+                    db.commit()
+        return
     except Exception as exc:
         with SessionLocal() as db:
             photo = db.get(PhotoAsset, identifier)
@@ -1268,17 +1433,27 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
             if orientation is not None and orientation.processing_mode == "window_background":
-                window_mask = create_photoroom_cutout(
-                    original,
-                    settings,
-                    photoroom_sandbox_active(image_settings, settings),
-                    segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
-                )
+                if photo.window_mask_is_manual and photo.window_mask_object_key:
+                    window_mask = storage.get_object(
+                        object_key=photo.window_mask_object_key
+                    )
+                else:
+                    window_mask = create_photoroom_cutout(
+                        original,
+                        settings,
+                        photoroom_sandbox_active(image_settings, settings),
+                        segmentation_prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
+                    )
                 finished = compose_background_through_windows(
                     original,
                     window_mask,
                     background_image,
                     settings,
+                    background_shift_percent=(
+                        photo.window_background_shift_percent
+                        if photo.window_background_shift_percent is not None
+                        else composition.window_background_shift_percent
+                    ),
                 )
             else:
                 finished = create_photoroom_showroom(

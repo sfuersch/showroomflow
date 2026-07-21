@@ -146,6 +146,7 @@ class Background(Timestamped, Base):
     shadow_opacity_percent: Mapped[int] = mapped_column(Integer, default=32)
     reflection_opacity_percent: Mapped[int] = mapped_column(Integer, default=10)
     brightness_percent: Mapped[int] = mapped_column(Integer, default=100)
+    window_background_shift_percent: Mapped[int] = mapped_column(Integer, default=14)
     scene_projection_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     scene_horizon_percent: Mapped[int] = mapped_column(Integer, default=43)
     scene_reference_vertical_degrees: Mapped[int] = mapped_column(Integer, default=0)
@@ -179,6 +180,9 @@ class BackgroundOrientationComposition(Timestamped, Base):
     shadow_opacity_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reflection_opacity_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     brightness_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    window_background_shift_percent: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
 
     orientation: Mapped["Orientation"] = relationship()
 
@@ -410,6 +414,13 @@ class PhotoAsset(Timestamped, Base):
     processing_completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    window_mask_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    window_mask_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    window_background_shift_percent: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    quality_review_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    quality_review_reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
 
 class PhotoProcessingVariant(Timestamped, Base):

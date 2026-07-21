@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from redis import Redis
 from redis.exceptions import RedisError
@@ -25,6 +26,26 @@ def enqueue_photo_processing(photo_id: uuid.UUID) -> None:
             job_id=f"photo-{photo_id}-{uuid.uuid4()}",
             job_timeout=300,
             retry=Retry(max=3, interval=[30, 120, 300]),
+            result_ttl=86400,
+            failure_ttl=604800,
+        )
+    except RedisError as exc:
+        raise ProcessingQueueUnavailable("Processing queue is unavailable") from exc
+
+
+def enqueue_photo_processing_at(photo_id: uuid.UUID, retry_at: datetime) -> None:
+    """Schedule one provider-limited photo without immediate RQ retries."""
+    settings = get_settings()
+    try:
+        connection = Redis.from_url(settings.redis_url)
+        queue = Queue(settings.processing_queue, connection=connection)
+        delay = max(60, int((retry_at - datetime.now(timezone.utc)).total_seconds()))
+        queue.enqueue_in(
+            timedelta(seconds=delay),
+            process_photo,
+            str(photo_id),
+            job_id=f"photo-rate-limit-{photo_id}-{uuid.uuid4()}",
+            job_timeout=300,
             result_ttl=86400,
             failure_ttl=604800,
         )

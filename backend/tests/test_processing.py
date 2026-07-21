@@ -21,11 +21,14 @@ from app.processing import (
     compose_background_through_windows,
     compose_showroom,
     create_photoroom_cutout,
+    format_retry_delay,
+    ImageProviderRateLimitError,
     create_photoroom_showroom,
     infer_vehicle_perspective,
     measure_vehicle_contour,
     perspective_composition_options,
     resolve_background_composition,
+    WindowCompositionResult,
 )
 
 
@@ -48,6 +51,7 @@ def test_background_composition_uses_background_defaults() -> None:
         shadow_opacity_percent=38,
         reflection_opacity_percent=8,
         brightness_percent=102,
+        window_background_shift_percent=16,
     )
 
     assert resolve_background_composition(background, None) == BackgroundComposition(
@@ -58,6 +62,7 @@ def test_background_composition_uses_background_defaults() -> None:
         shadow_opacity_percent=38,
         reflection_opacity_percent=8,
         brightness_percent=102,
+        window_background_shift_percent=16,
     )
 
 
@@ -74,6 +79,7 @@ def test_background_composition_only_overrides_selected_orientation_values() -> 
         shadow_opacity_percent=32,
         reflection_opacity_percent=10,
         brightness_percent=100,
+        window_background_shift_percent=14,
     )
     override = BackgroundOrientationComposition(
         background_id="00000000-0000-0000-0000-000000000002",
@@ -90,6 +96,7 @@ def test_background_composition_only_overrides_selected_orientation_values() -> 
         shadow_opacity_percent=45,
         reflection_opacity_percent=10,
         brightness_percent=100,
+        window_background_shift_percent=14,
     )
 
 
@@ -427,6 +434,51 @@ def test_window_background_adds_calibrated_driver_side_window_region() -> None:
     assert protected_pillar[0] > 200 and protected_pillar[2] < 50
 
 
+def test_window_background_shift_reveals_lower_background_content() -> None:
+    original = Image.new("RGB", (800, 600), (230, 20, 20))
+    window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(window_mask).rectangle((100, 20, 700, 170), fill="white")
+    background = Image.new("RGB", original.size, "red")
+    ImageDraw.Draw(background).rectangle((0, 250, 799, 599), fill="blue")
+
+    centered = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+        background_shift_percent=0,
+    )
+    shifted = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+        background_shift_percent=35,
+    )
+
+    centered_pixel = Image.open(io.BytesIO(centered)).getpixel((150, 150))
+    shifted_pixel = Image.open(io.BytesIO(shifted)).getpixel((150, 150))
+    assert centered_pixel[0] > centered_pixel[2]
+    assert shifted_pixel[2] > shifted_pixel[0]
+
+
+def test_window_background_reports_suspicious_protected_overlap() -> None:
+    original = Image.new("RGB", (800, 600), (230, 20, 20))
+    window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(window_mask).rectangle((200, 80, 620, 280), fill="white")
+    result = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(Image.new("RGB", original.size, "blue"), "JPEG"),
+        Settings(output_width=800, output_height=600),
+        return_diagnostics=True,
+    )
+
+    assert isinstance(result, WindowCompositionResult)
+    assert result.quality_review_required is True
+    assert "geschützte Innenraumbereiche" in result.quality_review_reason
+
+
 def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     cutout = image_bytes(Image.new("RGBA", (800, 600), (20, 30, 40, 255)), "PNG")
@@ -453,6 +505,33 @@ def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
         )
 
     assert Image.open(io.BytesIO(result)).size == (800, 600)
+
+
+def test_photoroom_throttle_exposes_provider_retry_delay() -> None:
+    original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            json={"error": {"message": "Request was throttled. Expected available in 18429 seconds."}},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ImageProviderRateLimitError) as captured:
+            create_photoroom_cutout(
+                original,
+                Settings(photoroom_api_key="test-key"),
+                client=client,
+            )
+
+    assert captured.value.retry_after_seconds == 18489
+    assert "5 Std. 9 Min." in str(captured.value)
+
+
+def test_retry_delay_formatting() -> None:
+    assert format_retry_delay(30) == "1 Min."
+    assert format_retry_delay(3600) == "1 Std."
+    assert format_retry_delay(3660) == "1 Std. 1 Min."
 
 
 def test_window_background_rejects_empty_window_mask() -> None:

@@ -1,3 +1,4 @@
+import io
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -5,8 +6,9 @@ from hmac import compare_digest
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from PIL import Image
 from email_validator import EmailNotValidError, validate_email
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -1585,6 +1587,16 @@ def job_detail_page(
         (step for step in steps.values() if step.is_active),
         key=lambda step: (step.capture_order, step.name),
     )
+    window_orientation_ids = set(
+        db.scalars(
+            select(Orientation.id).where(
+                Orientation.processing_mode == "window_background"
+            )
+        )
+    )
+    window_background_step_ids = {
+        step.id for step in steps.values() if step.orientation_id in window_orientation_ids
+    }
     variants = (
         list(
             db.scalars(
@@ -1624,6 +1636,7 @@ def job_detail_page(
             photos=photos,
             steps=steps,
             active_steps=active_steps,
+            window_background_step_ids=window_background_step_ids,
             original_urls={
                 photo.id: storage.create_download_url(object_key=photo.original_object_key)
                 for photo in photos
@@ -1823,6 +1836,168 @@ def reprocess_photo(
                 _flash(request, "Die Verarbeitung konnte nicht gestartet werden.", "error")
             else:
                 _flash(request, "Das Foto wurde zur Verarbeitung vorgemerkt.")
+    return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _window_correction_photo(
+    db: Session, admin: User, photo_id: uuid.UUID
+) -> tuple[PhotoAsset, VehicleJob, CaptureStep, Orientation]:
+    photo = db.get(PhotoAsset, photo_id)
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Foto wurde nicht gefunden")
+    job = db.get(VehicleJob, photo.vehicle_job_id)
+    step = db.get(CaptureStep, photo.capture_step_id)
+    orientation = db.get(Orientation, step.orientation_id) if step else None
+    if job is None or step is None or orientation is None:
+        raise HTTPException(status_code=404, detail="Fotoposition wurde nicht gefunden")
+    _authorized_dealership(db, admin, job.dealership_id)
+    if orientation.processing_mode != "window_background":
+        raise HTTPException(
+            status_code=400,
+            detail="Diese Fotoposition verwendet keine Scheibenfreistellung",
+        )
+    return photo, job, step, orientation
+
+
+@router.get("/photos/{photo_id}/correction", response_class=HTMLResponse)
+def window_correction(
+    photo_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    photo, job, step, orientation = _window_correction_photo(db, admin, photo_id)
+    background = db.get(Background, job.background_id) if job.background_id else None
+    if not photo.window_mask_object_key:
+        _flash(
+            request,
+            "Bitte starten Sie zuerst die Verarbeitung, damit eine Scheibenmaske erzeugt wird.",
+            "error",
+        )
+        return RedirectResponse(
+            f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER
+        )
+    override = (
+        db.scalar(
+            select(BackgroundOrientationComposition).where(
+                BackgroundOrientationComposition.background_id == background.id,
+                BackgroundOrientationComposition.orientation_id == orientation.id,
+            )
+        )
+        if background is not None
+        else None
+    )
+    inherited_shift = (
+        override.window_background_shift_percent
+        if override is not None
+        and override.window_background_shift_percent is not None
+        else (background.window_background_shift_percent if background else 14)
+    )
+    shift = (
+        photo.window_background_shift_percent
+        if photo.window_background_shift_percent is not None
+        else inherited_shift
+    )
+    return templates.TemplateResponse(
+        request,
+        "admin/window_correction.html",
+        _context(
+            request,
+            admin,
+            photo=photo,
+            job=job,
+            step=step,
+            background_shift_percent=shift,
+        ),
+    )
+
+
+@router.get("/photos/{photo_id}/correction/{asset_kind}")
+def window_correction_asset(
+    photo_id: uuid.UUID,
+    asset_kind: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    photo, _, _, _ = _window_correction_photo(db, admin, photo_id)
+    if asset_kind == "original":
+        object_key = photo.original_object_key
+        content_type = photo.original_content_type
+    elif asset_kind == "mask" and photo.window_mask_object_key:
+        object_key = photo.window_mask_object_key
+        content_type = "image/png"
+    else:
+        raise HTTPException(status_code=404, detail="Korrekturdatei wurde nicht gefunden")
+    return Response(
+        content=storage.get_object(object_key=object_key),
+        media_type=content_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/photos/{photo_id}/correction")
+def save_window_correction(
+    photo_id: uuid.UUID,
+    request: Request,
+    mask: UploadFile = File(),
+    background_shift_percent: int = Form(default=14),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    photo, job, _, _ = _window_correction_photo(db, admin, photo_id)
+    if not 0 <= background_shift_percent <= 35:
+        raise HTTPException(status_code=400, detail="Ungültige Hintergrundposition")
+    content = mask.file.read(MAX_CONFIGURATION_IMAGE_BYTES + 1)
+    if len(content) > MAX_CONFIGURATION_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Die Scheibenmaske ist zu groß")
+    try:
+        image = Image.open(io.BytesIO(content)).convert("RGBA")
+        image.load()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Die Scheibenmaske ist ungültig") from exc
+    if image.getchannel("A").getbbox() is None:
+        raise HTTPException(status_code=400, detail="Die Scheibenmaske ist leer")
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    mask_key = (
+        f"dealerships/{job.dealership_id}/jobs/{job.id}/"
+        f"photos/{photo.id}/window-mask-manual.png"
+    )
+    storage.put_object(
+        object_key=mask_key,
+        content=output.getvalue(),
+        content_type="image/png",
+    )
+    photo.window_mask_object_key = mask_key
+    photo.window_mask_is_manual = True
+    photo.window_background_shift_percent = background_shift_percent
+    photo.quality_review_required = False
+    photo.quality_review_reason = None
+    photo.processing_status = ProcessingStatus.QUEUED
+    photo.processing_error = None
+    job.status = JobStatus.PROCESSING
+    db.commit()
+    try:
+        enqueue_photo_processing(photo.id)
+    except ProcessingQueueUnavailable:
+        photo.processing_status = ProcessingStatus.FAILED
+        photo.processing_error = "Verarbeitungswarteschlange ist nicht erreichbar"
+        job.status = JobStatus.REVIEW_REQUIRED
+        db.commit()
+        _flash(request, "Die Korrektur konnte nicht verarbeitet werden.", "error")
+    else:
+        _flash(request, "Die manuelle Korrektur wird jetzt neu verarbeitet.")
     return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
@@ -2185,6 +2360,7 @@ def update_background(
     shadow_opacity_percent: int = Form(default=32),
     reflection_opacity_percent: int = Form(default=10),
     brightness_percent: int = Form(default=100),
+    window_background_shift_percent: int = Form(default=14),
     scene_projection_enabled: str | None = Form(default=None),
     scene_horizon_percent: int = Form(default=43),
     scene_reference_vertical_degrees: int = Form(default=0),
@@ -2198,6 +2374,7 @@ def update_background(
     orientation_shadow_percents: list[str] = Form(default=[]),
     orientation_reflection_percents: list[str] = Form(default=[]),
     orientation_brightness_percents: list[str] = Form(default=[]),
+    orientation_window_shift_percents: list[str] = Form(default=[]),
     is_active: str | None = Form(default=None),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
@@ -2219,10 +2396,13 @@ def update_background(
         and 0 <= shadow_opacity_percent <= 80
         and 0 <= reflection_opacity_percent <= 60
         and 50 <= brightness_percent <= 150
+        and 0 <= window_background_shift_percent <= 35
         and 25 <= scene_horizon_percent <= 70
         and -30 <= scene_reference_vertical_degrees <= 30
         and 0 <= scene_perspective_strength_percent <= 100
     )
+    if not orientation_window_shift_percents and composition_orientation_ids:
+        orientation_window_shift_percents = [""] * len(composition_orientation_ids)
     override_value_lists = [
         orientation_target_area_percents,
         orientation_max_width_percents,
@@ -2231,6 +2411,7 @@ def update_background(
         orientation_shadow_percents,
         orientation_reflection_percents,
         orientation_brightness_percents,
+        orientation_window_shift_percents,
     ]
     overrides_well_formed = all(
         len(values) == len(composition_orientation_ids) for values in override_value_lists
@@ -2256,6 +2437,7 @@ def update_background(
                     optional_number(orientation_shadow_percents[index], 0, 80),
                     optional_number(orientation_reflection_percents[index], 0, 60),
                     optional_number(orientation_brightness_percents[index], 50, 150),
+                    optional_number(orientation_window_shift_percents[index], 0, 35),
                 )
         except (TypeError, ValueError):
             overrides_well_formed = False
@@ -2274,6 +2456,7 @@ def update_background(
         background.shadow_opacity_percent = shadow_opacity_percent
         background.reflection_opacity_percent = reflection_opacity_percent
         background.brightness_percent = brightness_percent
+        background.window_background_shift_percent = window_background_shift_percent
         background.scene_projection_enabled = scene_projection_enabled == "on"
         background.scene_horizon_percent = scene_horizon_percent
         background.scene_reference_vertical_degrees = scene_reference_vertical_degrees
@@ -2317,6 +2500,7 @@ def update_background(
                 override.shadow_opacity_percent,
                 override.reflection_opacity_percent,
                 override.brightness_percent,
+                override.window_background_shift_percent,
             ) = values
             if existing is None:
                 db.add(override)
