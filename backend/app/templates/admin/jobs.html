@@ -17,7 +17,7 @@
     <div><strong>{{ credit_balance.monthly_used }}</strong><span>diesen Monat verbraucht</span></div>
     {% if current_user.role.value == 'system_admin' %}<a class="button button-secondary" href="/admin/image-service#dealership-credits">Credits verwalten</a>{% endif %}
 </section>
-<section class="card section-card">
+<section class="card section-card" id="job-list-section" data-live-refresh data-live-version="{{ jobs_live_version }}" aria-live="polite">
     <div class="section-heading"><div><h2>Aufträge</h2><p>{{ jobs|length }} {{ 'Auftrag' if jobs|length == 1 else 'Aufträge' }} vorhanden</p></div><span class="count">{{ jobs|length }}</span></div>
     <div class="job-list">
         {% for job in jobs %}

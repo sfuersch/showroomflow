@@ -6,7 +6,7 @@
 {% else %}
 <nav class="breadcrumb"><a href="/admin">Übersicht</a><span>›</span><a href="/admin/dealerships/{{ dealership.id }}/jobs">Fahrzeugaufträge</a><span>›</span><span>{{ job.vin }}</span></nav>
 {% endif %}
-<div class="page-heading"><div><span class="eyebrow">Fahrzeugauftrag · Version {{ job.version }}</span><h1>{{ job.vin }}</h1><p class="muted">{{ job.brand }} · Status: {{ job.status.value|replace('_', ' ') }}</p></div></div>
+<div class="page-heading" id="job-status-heading" data-live-refresh data-live-version="{{ job_live_version }}" aria-live="polite"><div><span class="eyebrow">Fahrzeugauftrag · Version {{ job.version }}</span><h1>{{ job.vin }}</h1><p class="muted">{{ job.brand }} · Status: {{ job.status.value|replace('_', ' ') }}</p></div></div>
 <div class="credit-inline"><strong>{{ credit_balance.available }} Fahrzeug-Credits verfügbar</strong><span>{{ credit_balance.monthly_available }} monatlich + {{ credit_balance.additional_available }} dauerhaft</span></div>
 {% if not processing_enabled %}<div class="flash flash-error">Der reguläre KI-Dienst ist noch nicht konfiguriert. Originalbilder bleiben verfügbar; Freistellungen können danach manuell gestartet werden.</div>{% endif %}
 <section class="card section-card compact-card">
@@ -22,7 +22,7 @@
     </form>
     {% else %}<p class="empty">Es sind keine aktiven Fotopositionen konfiguriert.</p>{% endif %}
 </section>
-<section class="card section-card compact-card">
+<section class="card section-card compact-card" id="job-export-status" data-live-refresh data-live-version="{{ exports_live_version }}" aria-live="polite">
     <div class="section-heading"><div><h2>ZIP-Export</h2><p>Die Export-Nr. bestimmt den Dateinamen. Doppelt belegte Plätze verhindern die Erstellung.</p></div><form method="post" action="/admin/jobs/{{ job.id }}/exports"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-primary" type="submit" {% if export_runs and export_runs[0].status in ['queued', 'processing'] %}disabled{% endif %}>ZIP erstellen</button></form></div>
     <div class="stack">
         {% for export_run in export_runs %}
@@ -30,7 +30,7 @@
         {% else %}<p class="empty">Noch keine ZIP-Datei erstellt.</p>{% endfor %}
     </div>
 </section>
-<section class="photo-review-grid">
+<section class="photo-review-grid" id="job-photo-review" data-live-refresh data-live-version="{{ photos_live_version }}" aria-live="polite">
     {% for photo in photos %}
     {% set step = steps.get(photo.capture_step_id) %}
     {% set photoroom = photoroom_variants.get(photo.id) %}
