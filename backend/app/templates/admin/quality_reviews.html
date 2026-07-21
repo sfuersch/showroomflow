@@ -1,0 +1,60 @@
+{% extends "admin/base.html" %}
+{% block title %}Qualitätsprüfung{% endblock %}
+{% block content %}
+<div id="quality-review-content" data-live-refresh data-live-version="{{ reviews_live_version }}" aria-live="polite">
+<div class="page-heading">
+    <div><span class="eyebrow">Interner Operator-Bereich</span><h1>Qualitätsprüfung</h1><p class="muted">Auffällige Ergebnisse werden automatisch gesammelt. Das Autohaus muss nicht eingreifen.</p></div>
+    <span class="quality-count">{{ review_items|length }} offen</span>
+</div>
+
+<section class="quality-review-list">
+{% for item in review_items %}
+<article class="card quality-queue-card">
+    <div class="quality-card-heading">
+        <div><span class="eyebrow">{{ item.dealership.name }}</span><h2>{{ item.job.vin }} · {{ item.step.name }}</h2><p>Version {{ item.job.version }} · Foto-Revision {{ item.photo.revision }}</p></div>
+        <span class="status status-inactive">Prüfung erforderlich</span>
+    </div>
+    <div class="quality-comparison">
+        <a href="{{ item.original_full_url }}" target="_blank" rel="noopener"><img src="{{ item.original_url }}" loading="lazy" decoding="async" alt="Original"><span>Original</span></a>
+        {% if item.processed_url %}<a href="{{ item.processed_full_url }}" target="_blank" rel="noopener"><img src="{{ item.processed_url }}" loading="lazy" decoding="async" alt="Optimiertes Ergebnis"><span>Optimiertes Ergebnis</span></a>{% else %}<div class="photo-placeholder"><span>Noch kein Ergebnis</span></div>{% endif %}
+    </div>
+    <div class="quality-diagnostics">
+        <strong>Automatische Prüfung{% if item.photo.quality_score is not none %} · {{ item.photo.quality_score }}/100{% endif %}</strong>
+        <p>{{ item.photo.quality_review_reason or 'Die automatische Qualitätsprüfung hat ein auffälliges Ergebnis erkannt.' }}</p>
+        {% if item.photo.quality_model_version %}<small>Prüfmodell: {{ item.photo.quality_model_version }}</small>{% endif %}
+    </div>
+    <div class="quality-actions">
+        {% if item.photo.window_mask_object_key %}<a class="button button-primary" href="/admin/photos/{{ item.photo.id }}/correction">Maske korrigieren</a>{% endif %}
+        <form method="post" action="/admin/quality-reviews/{{ item.photo.id }}/reprocess"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary" type="submit" {% if item.photo.processing_status.value in ['queued', 'processing'] %}disabled{% endif %}>Automatisch neu verarbeiten</button></form>
+        {% if item.photo.processing_status.value == 'completed' and item.photo.processed_object_key %}<form method="post" action="/admin/quality-reviews/{{ item.photo.id }}/approve"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary" type="submit">Ergebnis freigeben</button></form>{% endif %}
+    </div>
+</article>
+{% else %}
+<div class="card empty-state"><h2>Alles geprüft</h2><p>Aktuell warten keine Bilder auf eine interne Freigabe.</p></div>
+{% endfor %}
+</section>
+</div>
+
+{% if current_user.role.value == 'system_admin' %}
+<section class="card section-card" id="operators">
+    <div class="section-heading"><div><h2>Operator-Konten</h2><p>Operatoren können ausschließlich die interne Qualitätsprüfung und Maskenkorrektur öffnen.</p></div></div>
+    <form method="post" action="/admin/operators" class="inline-form operator-create-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>E-Mail<input type="email" name="email" required autocomplete="off"></label>
+        <label>Startpasswort<input type="password" name="password" minlength="16" required autocomplete="new-password"></label>
+        <button class="button button-primary" type="submit">Operator anlegen</button>
+    </form>
+    <div class="stack">
+    {% for operator in operators %}
+    <form method="post" action="/admin/operators/{{ operator.id }}" class="item-row">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="grow"><strong>{{ operator.email }}</strong><span>{{ 'Aktiv' if operator.is_active else 'Deaktiviert' }}</span></div>
+        <label>Neues Passwort<input type="password" name="password" minlength="16" autocomplete="new-password" placeholder="unverändert"></label>
+        <label class="check-inline"><input type="checkbox" name="is_active" {% if operator.is_active %}checked{% endif %}> Aktiv</label>
+        <button class="button button-secondary" type="submit">Speichern</button>
+    </form>
+    {% else %}<p class="empty">Noch keine Operator-Konten angelegt.</p>{% endfor %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}

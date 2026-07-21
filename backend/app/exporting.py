@@ -124,6 +124,10 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
 
     photo_items: list[ExportItem] = []
     for photo, step in rows:
+        if photo.quality_review_required:
+            raise ExportValidationError(
+                f'Fotoposition "{step.name}" wartet auf die interne Qualitätsfreigabe.'
+            )
         if step.requires_processing:
             if (
                 photo.processing_status != ProcessingStatus.COMPLETED
@@ -226,6 +230,17 @@ def try_enqueue_auto_export(job_id: uuid.UUID, session: Session | None = None) -
         ):
             return
 
+        try:
+            resolve_export_items(db, job)
+        except ExportValidationError:
+            # A quality review is an expected pause, not an export attempt.  In
+            # particular, do not create a failed ExportRun here: its existence
+            # would suppress the automatic export after the operator approves
+            # the last outstanding image.
+            job.status = JobStatus.REVIEW_REQUIRED
+            db.commit()
+            return
+
         export_run = ExportRun(
             vehicle_job_id=job.id,
             attempt=1,
@@ -233,14 +248,6 @@ def try_enqueue_auto_export(job_id: uuid.UUID, session: Session | None = None) -
             status="queued",
         )
         db.add(export_run)
-        try:
-            resolve_export_items(db, job)
-        except ExportValidationError as exc:
-            export_run.status = "failed"
-            export_run.error_message = str(exc)[:1000]
-            job.status = JobStatus.REVIEW_REQUIRED
-            db.commit()
-            return
         db.commit()
         db.refresh(export_run)
 

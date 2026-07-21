@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from app.api.dependencies import CurrentUser, DatabaseSession
-from app.models import Dealership, RefreshSession, User
+from app.models import Dealership, RefreshSession, User, UserRole
 from app.schemas import LoginRequest, RefreshRequest, TokenResponse, UserResponse
 from app.security import (
     create_access_token,
@@ -42,6 +42,7 @@ def login(payload: LoginRequest, db: DatabaseSession) -> TokenResponse:
     if (
         user is None
         or not user.is_active
+        or user.role == UserRole.OPERATOR
         or (user.dealership_id is not None and (dealership is None or not dealership.is_active))
         or not verify_password(payload.password, user.password_hash)
     ):
@@ -68,7 +69,7 @@ def refresh(payload: RefreshRequest, db: DatabaseSession) -> TokenResponse:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sitzung abgelaufen")
 
     user = db.get(User, session.user_id)
-    if user is None or not user.is_active:
+    if user is None or not user.is_active or user.role == UserRole.OPERATOR:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Sitzung abgelaufen")
 
     session.revoked_at = now

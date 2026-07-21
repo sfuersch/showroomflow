@@ -135,6 +135,20 @@ def create_system_admin() -> User:
         return admin
 
 
+def create_operator() -> User:
+    with TestingSession() as db:
+        operator = User(
+            dealership_id=None,
+            email="operator@example.com",
+            password_hash=hash_password("a-secure-operator-password"),
+            role=UserRole.OPERATOR,
+        )
+        db.add(operator)
+        db.commit()
+        db.refresh(operator)
+        return operator
+
+
 def system_login() -> dict[str, str | int]:
     response = client.post(
         "/api/v1/auth/login",
@@ -772,6 +786,39 @@ def test_photographer_cannot_log_into_admin_interface() -> None:
 
     assert response.status_code == 401
     assert "E-Mail-Adresse oder Passwort ist nicht korrekt" in response.text
+
+
+def test_operator_can_only_use_web_quality_review() -> None:
+    create_operator()
+
+    api_response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "operator@example.com",
+            "password": "a-secure-operator-password",
+        },
+    )
+    assert api_response.status_code == 401
+
+    login_page = client.get("/admin/login")
+    login_response = client.post(
+        "/admin/login",
+        data={
+            "email": "operator@example.com",
+            "password": "a-secure-operator-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+        follow_redirects=False,
+    )
+    assert login_response.status_code == 303
+    assert login_response.headers["location"] == "/admin"
+    dashboard = client.get("/admin", follow_redirects=False)
+    assert dashboard.status_code == 303
+    assert dashboard.headers["location"] == "/admin/quality-reviews"
+    quality_page = client.get("/admin/quality-reviews")
+    assert quality_page.status_code == 200
+    assert 'id="quality-review-content"' in quality_page.text
+    assert client.get("/admin/orientations").status_code == 403
 
 
 def test_admin_interface_rejects_invalid_user_email() -> None:
@@ -1818,6 +1865,96 @@ def test_auto_export_waits_for_explicit_capture_completion(monkeypatch: pytest.M
         try_enqueue_auto_export(job.id, db)
 
         export_run = db.scalar(select(ExportRun))
+        assert export_run is not None
+        assert queued_exports == [export_run.id]
+
+
+def test_auto_export_resumes_after_last_quality_review_is_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dealership, user = create_dealership_admin()
+    create_system_admin()
+    queued_exports: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        "app.processing_queue.enqueue_vehicle_export",
+        lambda export_run_id: queued_exports.append(export_run_id),
+    )
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Front",
+            instruction="Gerade aufnehmen",
+            category="exterior",
+            capture_order=1,
+            export_order=1,
+            is_required=True,
+            requires_processing=True,
+        )
+        db.add_all([location, step])
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=user.id,
+            vin="QUALITY-EXPORT-VIN",
+            version=1,
+            brand="Ford",
+            auto_export=True,
+            capture_completed_at=datetime.now(timezone.utc),
+        )
+        db.add(job)
+        db.flush()
+        photo = PhotoAsset(
+            vehicle_job_id=job.id,
+            capture_step_id=step.id,
+            captured_by_id=user.id,
+            revision=1,
+            original_object_key="originals/quality-export.jpg",
+            original_content_type="image/jpeg",
+            expected_size_bytes=1234,
+            original_size_bytes=1234,
+            uploaded_at=datetime.now(timezone.utc),
+            is_selected=True,
+            processed_object_key="processed/quality-export.jpg",
+            processed_content_type="image/jpeg",
+            processed_size_bytes=1234,
+            processing_status=ProcessingStatus.COMPLETED,
+            quality_review_required=True,
+            quality_review_reason="Automatische Prüfung auffällig",
+        )
+        db.add(photo)
+        db.commit()
+        photo_id = photo.id
+        job_id = job.id
+
+        try_enqueue_auto_export(job_id, db)
+        assert db.scalar(select(ExportRun)) is None
+        assert queued_exports == []
+
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    review_page = client.get("/admin/quality-reviews")
+    response = client.post(
+        f"/admin/quality-reviews/{photo_id}/approve",
+        data={"csrf_token": csrf_from(review_page.text)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    with TestingSession() as db:
+        approved_photo = db.get(PhotoAsset, photo_id)
+        export_run = db.scalar(select(ExportRun))
+        assert approved_photo is not None
+        assert approved_photo.quality_review_required is False
+        assert approved_photo.quality_review_resolution == "approved"
         assert export_run is not None
         assert queued_exports == [export_run.id]
 
