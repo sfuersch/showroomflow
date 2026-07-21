@@ -421,8 +421,8 @@ def test_window_background_adds_calibrated_driver_side_window_region() -> None:
     )
 
     finished = Image.open(io.BytesIO(result)).convert("RGB")
-    calibrated_side_window = finished.getpixel((10, 60))
-    protected_pillar = finished.getpixel((40, 60))
+    calibrated_side_window = finished.getpixel((20, 60))
+    protected_pillar = finished.getpixel((35, 60))
     assert calibrated_side_window[2] > 200 and calibrated_side_window[0] < 50
     assert protected_pillar[0] > 200 and protected_pillar[2] < 50
 

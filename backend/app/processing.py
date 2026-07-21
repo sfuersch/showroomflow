@@ -586,18 +586,19 @@ def compose_background_through_windows(
                 (round(original.width * x), round(original.height * y))
                 for x, y in (
                     (0.0, 0.0),
-                    (0.020, 0.0),
-                    (0.030, 0.05),
-                    (0.042, 0.11),
-                    (0.058, 0.18),
-                    (0.075, 0.225),
-                    (0.0, 0.225),
+                    (0.041, 0.0),
+                    (0.042, 0.04),
+                    (0.043, 0.10),
+                    (0.045, 0.16),
+                    (0.047, 0.22),
+                    (0.047, 0.235),
+                    (0.0, 0.235),
                 )
             ],
             fill=255,
         )
         driver_window_alpha = driver_window_alpha.filter(
-            ImageFilter.GaussianBlur(max(1, round(max(original.size) * 0.0015)))
+            ImageFilter.GaussianBlur(max(1, round(max(original.size) * 0.0008)))
         )
         window_alpha = ImageChops.lighter(window_alpha, driver_window_alpha)
 
@@ -623,26 +624,39 @@ def compose_background_through_windows(
             ],
             fill=255,
         )
-        # The calibrated side-window area and the AI mask can both touch the
-        # driver's A-pillar. Preserve its full diagonal contour explicitly so
-        # glass replacement cannot remove interior trim.
-        ImageDraw.Draw(protected_alpha).polygon(
+        protected_alpha = protected_alpha.filter(
+            ImageFilter.GaussianBlur(max(2, round(max(original.size) * 0.0025)))
+        )
+
+        # Keep a separate, almost hard mask for the door frame and A-pillar.
+        # Combining it only after the softer cluster protection prevents the
+        # two blurred masks from creating a bright mixed seam at the edge.
+        a_pillar_alpha = Image.new("L", original.size, 0)
+        ImageDraw.Draw(a_pillar_alpha).polygon(
             [
                 (round(original.width * x), round(original.height * y))
                 for x, y in (
-                    (0.018, 0.0),
+                    (0.038, 0.0),
                     (0.060, 0.0),
                     (0.125, 0.25),
-                    (0.075, 0.27),
-                    (0.058, 0.18),
-                    (0.042, 0.11),
-                    (0.030, 0.05),
+                    (0.065, 0.27),
+                    (0.044, 0.235),
+                    (0.043, 0.16),
+                    (0.041, 0.10),
+                    (0.040, 0.04),
                 )
             ],
             fill=255,
         )
-        protected_alpha = protected_alpha.filter(
-            ImageFilter.GaussianBlur(max(2, round(max(original.size) * 0.0025)))
+        a_pillar_expansion = max(3, round(max(original.size) * 0.0025))
+        if a_pillar_expansion % 2 == 0:
+            a_pillar_expansion += 1
+        a_pillar_alpha = a_pillar_alpha.filter(
+            ImageFilter.MaxFilter(a_pillar_expansion)
+        ).filter(ImageFilter.GaussianBlur(1))
+        protected_alpha = ImageChops.lighter(
+            protected_alpha,
+            a_pillar_alpha,
         )
 
         # The service returns alpha=255 for selected glass. Subtract protected
