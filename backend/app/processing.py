@@ -3,9 +3,10 @@ from __future__ import annotations
 import io
 import logging
 import math
+import re
 import uuid
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
@@ -42,6 +43,44 @@ WINDOW_MASK_SEGMENTATION_PROMPT = "windshield, side window"
 
 class ImageProcessingError(RuntimeError):
     """An image could not be processed into a showroom image."""
+
+
+class ImageProviderRateLimitError(ImageProcessingError):
+    """The image provider rejected work until a known later point in time."""
+
+    def __init__(self, retry_after_seconds: int):
+        self.retry_after_seconds = max(60, min(retry_after_seconds, 86_400))
+        super().__init__(
+            "Der Bilddienst ist vorübergehend limitiert. "
+            f"Automatischer neuer Versuch in etwa {format_retry_delay(self.retry_after_seconds)}."
+        )
+
+
+def format_retry_delay(seconds: int) -> str:
+    minutes = max(1, math.ceil(seconds / 60))
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours and remaining_minutes:
+        return f"{hours} Std. {remaining_minutes} Min."
+    if hours:
+        return f"{hours} Std."
+    return f"{remaining_minutes} Min."
+
+
+def raise_for_photoroom_rate_limit(response: httpx.Response) -> None:
+    if response.status_code != 429:
+        return
+    retry_after = response.headers.get("retry-after", "").strip()
+    retry_after_seconds = int(retry_after) if retry_after.isdigit() else 0
+    if retry_after_seconds <= 0:
+        match = re.search(
+            r"Expected available in\s+(\d+)\s+seconds",
+            response.text,
+            flags=re.IGNORECASE,
+        )
+        retry_after_seconds = int(match.group(1)) if match else 3600
+    # Give the provider a small buffer so that the scheduled request does not
+    # arrive exactly at the edge of its rolling quota window.
+    raise ImageProviderRateLimitError(retry_after_seconds + 60)
 
 
 @dataclass(frozen=True)
@@ -386,6 +425,7 @@ def create_photoroom_cutout(
         )
     except httpx.HTTPError as exc:
         raise ImageProcessingError("Photoroom ist nicht erreichbar") from exc
+    raise_for_photoroom_rate_limit(response)
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:300]
         raise ImageProcessingError(
@@ -527,6 +567,7 @@ def create_photoroom_showroom(
         )
     except httpx.HTTPError as exc:
         raise ImageProcessingError("Photoroom ist nicht erreichbar") from exc
+    raise_for_photoroom_rate_limit(response)
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:300]
         raise ImageProcessingError(
@@ -1277,6 +1318,48 @@ def process_photo(photo_id: str) -> None:
             job.status = _next_job_status(db, job.id)
             db.commit()
             completed_job_id = job.id
+    except ImageProviderRateLimitError as exc:
+        retry_at = datetime.now(timezone.utc) + timedelta(
+            seconds=exc.retry_after_seconds
+        )
+        scheduled = False
+        with SessionLocal() as db:
+            photo = db.get(PhotoAsset, identifier)
+            if photo is not None:
+                photo.processing_status = ProcessingStatus.QUEUED
+                photo.processing_error = (
+                    f"{exc} Frühester neuer Versuch: "
+                    f"{retry_at.astimezone().strftime('%d.%m.%Y %H:%M Uhr')}."
+                )[:1000]
+                job = db.get(VehicleJob, photo.vehicle_job_id)
+                if job is not None:
+                    job.status = JobStatus.PROCESSING
+                db.commit()
+        try:
+            from app.processing_queue import enqueue_photo_processing_at
+
+            enqueue_photo_processing_at(identifier, retry_at)
+            scheduled = True
+        except Exception:
+            logger.exception(
+                "Rate-limited photo %s could not be scheduled for %s",
+                identifier,
+                retry_at,
+            )
+        if not scheduled:
+            with SessionLocal() as db:
+                photo = db.get(PhotoAsset, identifier)
+                if photo is not None:
+                    photo.processing_status = ProcessingStatus.FAILED
+                    photo.processing_error = (
+                        "Der Bilddienst ist vorübergehend limitiert. "
+                        "Der automatische spätere Versuch konnte nicht eingeplant werden."
+                    )
+                    job = db.get(VehicleJob, photo.vehicle_job_id)
+                    if job is not None:
+                        job.status = JobStatus.REVIEW_REQUIRED
+                    db.commit()
+        return
     except Exception as exc:
         with SessionLocal() as db:
             photo = db.get(PhotoAsset, identifier)

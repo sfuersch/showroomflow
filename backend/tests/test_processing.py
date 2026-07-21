@@ -21,6 +21,8 @@ from app.processing import (
     compose_background_through_windows,
     compose_showroom,
     create_photoroom_cutout,
+    format_retry_delay,
+    ImageProviderRateLimitError,
     create_photoroom_showroom,
     infer_vehicle_perspective,
     measure_vehicle_contour,
@@ -503,6 +505,33 @@ def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
         )
 
     assert Image.open(io.BytesIO(result)).size == (800, 600)
+
+
+def test_photoroom_throttle_exposes_provider_retry_delay() -> None:
+    original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            json={"error": {"message": "Request was throttled. Expected available in 18429 seconds."}},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ImageProviderRateLimitError) as captured:
+            create_photoroom_cutout(
+                original,
+                Settings(photoroom_api_key="test-key"),
+                client=client,
+            )
+
+    assert captured.value.retry_after_seconds == 18489
+    assert "5 Std. 9 Min." in str(captured.value)
+
+
+def test_retry_delay_formatting() -> None:
+    assert format_retry_delay(30) == "1 Min."
+    assert format_retry_delay(3600) == "1 Std."
+    assert format_retry_delay(3660) == "1 Std. 1 Min."
 
 
 def test_window_background_rejects_empty_window_mask() -> None:
