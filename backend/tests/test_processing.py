@@ -1,4 +1,5 @@
 import io
+import uuid
 from dataclasses import replace
 
 import httpx
@@ -6,6 +7,8 @@ import pytest
 from PIL import Image, ImageDraw
 
 from app.config import Settings
+from app.api_usage import ExternalApiUsageContext
+import app.processing as processing_module
 from app.models import Background, BackgroundOrientationComposition
 from app.processing import (
     BackgroundComposition,
@@ -566,7 +569,7 @@ def test_open_trunk_uses_opening_profile_with_vehicle_protection_prompt() -> Non
     assert profile.maximum_fraction > 0.80
 
 
-def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
+def test_text_guided_cutout_omits_incompatible_hd_header(monkeypatch) -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     cutout = image_bytes(Image.new("RGBA", (800, 600), (20, 30, 40, 255)), "PNG")
 
@@ -581,6 +584,18 @@ def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
         assert b"keepSalientObject" in body
         return httpx.Response(200, content=cutout, headers={"content-type": "image/png"})
 
+    events: list[dict] = []
+    monkeypatch.setattr(
+        processing_module,
+        "record_external_api_usage",
+        lambda context, **values: events.append({"context": context, **values}),
+    )
+    context = ExternalApiUsageContext(
+        dealership_id=uuid.uuid4(),
+        vehicle_job_id=uuid.uuid4(),
+        photo_asset_id=uuid.uuid4(),
+        processing_attempt=2,
+    )
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         result = create_photoroom_cutout(
             original,
@@ -589,9 +604,15 @@ def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
             segmentation_negative_prompt="vehicles outside the car",
             segmentation_mode="keepSalientObject",
             client=client,
+            usage_context=context,
         )
 
     assert Image.open(io.BytesIO(result)).size == (800, 600)
+    assert len(events) == 1
+    assert events[0]["context"] == context
+    assert events[0]["provider"] == "photoroom"
+    assert events[0]["operation"] == "guided_segmentation"
+    assert events[0]["outcome"] == "success"
 
 
 def test_photoroom_throttle_exposes_provider_retry_delay() -> None:

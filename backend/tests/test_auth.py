@@ -21,6 +21,7 @@ from app.models import (
     CaptureStep,
     Dealership,
     ExportRun,
+    ExternalApiUsage,
     ImageOverlay,
     JobStatus,
     Location,
@@ -169,6 +170,97 @@ def jpeg_bytes(color: str = "navy") -> bytes:
     output = io.BytesIO()
     Image.new("RGB", (1920, 1440), color).save(output, format="JPEG")
     return output.getvalue()
+
+
+def test_external_api_usage_dashboard_is_system_admin_only() -> None:
+    system_admin = create_system_admin()
+    with TestingSession() as db:
+        dealership = Dealership(name="API Autohaus")
+        db.add(dealership)
+        db.flush()
+        location = Location(dealership_id=dealership.id, name="API Standort")
+        db.add(location)
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=system_admin.id,
+            vin="API-DASHBOARD-1",
+            version=1,
+            brand="Ford",
+        )
+        db.add(job)
+        db.flush()
+        db.add_all(
+            [
+                ExternalApiUsage(
+                    provider="photoroom",
+                    operation="guided_segmentation",
+                    dealership_id=dealership.id,
+                    vehicle_job_id=job.id,
+                    sandbox=False,
+                    outcome="success",
+                    http_status=200,
+                    duration_ms=1200,
+                ),
+                ExternalApiUsage(
+                    provider="photoroom",
+                    operation="guided_segmentation",
+                    dealership_id=dealership.id,
+                    vehicle_job_id=job.id,
+                    sandbox=False,
+                    outcome="throttled",
+                    http_status=429,
+                    duration_ms=300,
+                ),
+                ExternalApiUsage(
+                    provider="photoroom",
+                    operation="contour_cutout",
+                    dealership_id=dealership.id,
+                    vehicle_job_id=job.id,
+                    sandbox=True,
+                    outcome="success",
+                    http_status=200,
+                    duration_ms=800,
+                ),
+            ]
+        )
+        db.commit()
+
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    response = client.get("/admin/api-usage")
+
+    assert response.status_code == 200
+    assert "Externe Bilddienst-Aufrufe" in response.text
+    assert "API Autohaus" in response.text
+    assert "API-DASHBOARD-1" in response.text
+    assert "Kostenrelevante Aufrufe" in response.text
+    assert ">2<" in response.text
+    assert "Testaufrufe" in response.text
+
+    client.post(
+        "/admin/logout",
+        data={"csrf_token": csrf_from(response.text)},
+    )
+    create_dealership_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    assert client.get("/admin/api-usage").status_code == 403
 
 
 def test_system_admin_configures_image_service_and_dealership_credits() -> None:

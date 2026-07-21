@@ -513,6 +513,34 @@ class VehicleCreditGrant(Base):
     )
 
 
+class ExternalApiUsage(Base):
+    """One actual outbound request to a potentially chargeable image API."""
+
+    __tablename__ = "external_api_usages"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    operation: Mapped[str] = mapped_column(String(64), index=True)
+    dealership_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dealerships.id", ondelete="CASCADE"), index=True
+    )
+    vehicle_job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("vehicle_jobs.id", ondelete="CASCADE"), index=True
+    )
+    photo_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("photo_assets.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    processing_attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sandbox: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    outcome: Mapped[str] = mapped_column(String(32), index=True)
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
+    )
+
+
 class ExportRun(Timestamped, Base):
     __tablename__ = "export_runs"
 

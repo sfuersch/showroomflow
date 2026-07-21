@@ -4,6 +4,7 @@ import io
 import logging
 import math
 import re
+import time
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings, get_settings
+from app.api_usage import ExternalApiUsageContext, record_external_api_usage
 from app.database import SessionLocal
 from app.exporting import try_enqueue_auto_export
 from app.image_service import (
@@ -466,9 +468,15 @@ def photoroom_shadow_mode(opacity_percent: int) -> str | None:
     return "ai.hard"
 
 
-def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
+def remove_vehicle_background(
+    image: bytes,
+    settings: Settings,
+    *,
+    usage_context: ExternalApiUsageContext | None = None,
+) -> bytes:
     if not settings.remove_bg_api_key:
         raise ImageProcessingError("Kein KI-Dienst für die Freistellung konfiguriert")
+    started = time.perf_counter()
     try:
         response = httpx.post(
             "https://api.remove.bg/v1.0/removebg",
@@ -478,7 +486,26 @@ def remove_vehicle_background(image: bytes, settings: Settings) -> bytes:
             timeout=120,
         )
     except httpx.HTTPError as exc:
+        record_external_api_usage(
+            usage_context,
+            provider="remove_bg",
+            operation="background_removal",
+            sandbox=False,
+            outcome="network_error",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            error_message=str(exc),
+        )
         raise ImageProcessingError("Der KI-Dienst ist nicht erreichbar") from exc
+    record_external_api_usage(
+        usage_context,
+        provider="remove_bg",
+        operation="background_removal",
+        sandbox=False,
+        outcome="success" if response.status_code == 200 else "error",
+        http_status=response.status_code,
+        duration_ms=round((time.perf_counter() - started) * 1000),
+        error_message=None if response.status_code == 200 else response.text,
+    )
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:300]
         raise ImageProcessingError(
@@ -548,6 +575,7 @@ def create_photoroom_cutout(
     segmentation_negative_prompt: str | None = None,
     segmentation_mode: str | None = None,
     client: httpx.Client | None = None,
+    usage_context: ExternalApiUsageContext | None = None,
 ) -> bytes:
     """Request a transparent, original-frame cutout for contour measurement."""
     try:
@@ -572,6 +600,9 @@ def create_photoroom_cutout(
     headers = {"x-api-key": _photoroom_api_key(settings, photoroom_sandbox)}
     if not segmentation_prompt and not segmentation_negative_prompt:
         headers["pr-hd-background-removal"] = "auto"
+    sandbox_active = settings.photoroom_sandbox if photoroom_sandbox is None else photoroom_sandbox
+    operation = "guided_segmentation" if segmentation_prompt else "contour_cutout"
+    started = time.perf_counter()
     try:
         response = request(
             "https://image-api.photoroom.com/v2/edit",
@@ -581,7 +612,32 @@ def create_photoroom_cutout(
             timeout=180,
         )
     except httpx.HTTPError as exc:
+        record_external_api_usage(
+            usage_context,
+            provider="photoroom",
+            operation=operation,
+            sandbox=sandbox_active,
+            outcome="network_error",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            error_message=str(exc),
+        )
         raise ImageProcessingError("Photoroom ist nicht erreichbar") from exc
+    record_external_api_usage(
+        usage_context,
+        provider="photoroom",
+        operation=operation,
+        sandbox=sandbox_active,
+        outcome=(
+            "success"
+            if response.status_code == 200
+            else "throttled"
+            if response.status_code == 429
+            else "error"
+        ),
+        http_status=response.status_code,
+        duration_ms=round((time.perf_counter() - started) * 1000),
+        error_message=None if response.status_code == 200 else response.text,
+    )
     raise_for_photoroom_rate_limit(response)
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:300]
@@ -623,6 +679,7 @@ def create_photoroom_showroom(
     optimized: bool = False,
     *,
     client: httpx.Client | None = None,
+    usage_context: ExternalApiUsageContext | None = None,
 ) -> bytes:
     """Measure the contour, then let Photoroom render the final showroom result."""
     request = client.post if client is not None else httpx.post
@@ -631,6 +688,7 @@ def create_photoroom_showroom(
         settings,
         photoroom_sandbox,
         client=client,
+        usage_context=usage_context,
     )
     contour = measure_vehicle_contour(cutout)
     composition_options = CompositionOptions(
@@ -704,6 +762,8 @@ def create_photoroom_showroom(
         # discrete soft/hard modes instead of numeric opacity, so the configured
         # intensity selects the closest supported mode.
         edit_options["shadow.mode"] = shadow_mode
+    sandbox_active = settings.photoroom_sandbox if photoroom_sandbox is None else photoroom_sandbox
+    started = time.perf_counter()
     try:
         response = request(
             "https://image-api.photoroom.com/v2/edit",
@@ -723,7 +783,32 @@ def create_photoroom_showroom(
             timeout=180,
         )
     except httpx.HTTPError as exc:
+        record_external_api_usage(
+            usage_context,
+            provider="photoroom",
+            operation="showroom_composition",
+            sandbox=sandbox_active,
+            outcome="network_error",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            error_message=str(exc),
+        )
         raise ImageProcessingError("Photoroom ist nicht erreichbar") from exc
+    record_external_api_usage(
+        usage_context,
+        provider="photoroom",
+        operation="showroom_composition",
+        sandbox=sandbox_active,
+        outcome=(
+            "success"
+            if response.status_code == 200
+            else "throttled"
+            if response.status_code == 429
+            else "error"
+        ),
+        http_status=response.status_code,
+        duration_ms=round((time.perf_counter() - started) * 1000),
+        error_message=None if response.status_code == 200 else response.text,
+    )
     raise_for_photoroom_rate_limit(response)
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:300]
@@ -1416,6 +1501,12 @@ def process_photo(photo_id: str) -> None:
             photo.processing_started_at = datetime.now(timezone.utc)
             job.status = JobStatus.PROCESSING
             db.commit()
+            usage_context = ExternalApiUsageContext(
+                dealership_id=job.dealership_id,
+                vehicle_job_id=job.id,
+                photo_asset_id=photo.id,
+                processing_attempt=photo.processing_attempts,
+            )
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
@@ -1439,6 +1530,7 @@ def process_photo(photo_id: str) -> None:
                         photoroom_sandbox_active(image_settings, settings),
                         segmentation_prompt=profile.prompt,
                         segmentation_negative_prompt=profile.negative_prompt,
+                        usage_context=usage_context,
                     )
                     mask_key = (
                         f"dealerships/{job.dealership_id}/jobs/{job.id}/"
@@ -1534,9 +1626,12 @@ def process_photo(photo_id: str) -> None:
                     ),
                     photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                     optimized=True,
+                    usage_context=usage_context,
                 )
             elif image_settings.provider == "remove_bg":
-                ai_cutout = remove_vehicle_background(original, settings)
+                ai_cutout = remove_vehicle_background(
+                    original, settings, usage_context=usage_context
+                )
                 cutout = apply_cutout_mask_to_original(original, ai_cutout)
                 finished = compose_showroom(
                     background_image,
@@ -1770,6 +1865,12 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
             variant.error = None
             variant.started_at = datetime.now(timezone.utc)
             db.commit()
+            usage_context = ExternalApiUsageContext(
+                dealership_id=job.dealership_id,
+                vehicle_job_id=job.id,
+                photo_asset_id=photo.id,
+                processing_attempt=variant.attempts,
+            )
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
@@ -1791,6 +1892,7 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                         photoroom_sandbox_active(image_settings, settings),
                         segmentation_prompt=profile.prompt,
                         segmentation_negative_prompt=profile.negative_prompt,
+                        usage_context=usage_context,
                     )
                 compose_mask = (
                     compose_background_through_windows
@@ -1839,6 +1941,7 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                     ),
                     photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                     optimized=provider == "photoroom_optimized",
+                    usage_context=usage_context,
                 )
             object_key = (
                 f"dealerships/{job.dealership_id}/jobs/{job.id}/comparisons/"

@@ -1,7 +1,7 @@
 import io
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from hmac import compare_digest
 from pathlib import Path
 
@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from PIL import Image
 from email_validator import EmailNotValidError, validate_email
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -40,6 +40,7 @@ from app.models import (
     Dealership,
     DealershipSftpSettings,
     ExportRun,
+    ExternalApiUsage,
     ImageOverlay,
     JobStatus,
     Location,
@@ -534,6 +535,168 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
 @router.get("/dealerships", response_class=HTMLResponse)
 def dealerships_page(request: Request, db: Session = Depends(get_db)):
     return dashboard(request, db)
+
+
+@router.get("/api-usage", response_class=HTMLResponse)
+def external_api_usage_page(
+    request: Request,
+    date_from: str = "",
+    date_to: str = "",
+    dealership_id: str = "",
+    db: Session = Depends(get_db),
+):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+
+    today = datetime.now(timezone.utc).date()
+    try:
+        start_date = date.fromisoformat(date_from) if date_from else today - timedelta(days=29)
+        end_date = date.fromisoformat(date_to) if date_to else today
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Ungültiger Zeitraum") from exc
+    if end_date < start_date or (end_date - start_date).days > 366:
+        raise HTTPException(status_code=400, detail="Ungültiger Zeitraum")
+    start_at = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    end_at = datetime.combine(end_date + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+
+    selected_dealership_id = _optional_uuid(dealership_id)
+    dealerships = list(db.scalars(select(Dealership).order_by(Dealership.name)))
+    if selected_dealership_id is not None and not any(
+        item.id == selected_dealership_id for item in dealerships
+    ):
+        raise HTTPException(status_code=400, detail="Ungültiges Autohaus")
+
+    base_filters = [
+        ExternalApiUsage.occurred_at >= start_at,
+        ExternalApiUsage.occurred_at < end_at,
+    ]
+    if selected_dealership_id is not None:
+        base_filters.append(ExternalApiUsage.dealership_id == selected_dealership_id)
+    paid_filters = [*base_filters, ExternalApiUsage.sandbox.is_(False)]
+
+    paid_calls = db.scalar(
+        select(func.count(ExternalApiUsage.id)).where(*paid_filters)
+    ) or 0
+    successful_calls = db.scalar(
+        select(func.count(ExternalApiUsage.id)).where(
+            *paid_filters, ExternalApiUsage.outcome == "success"
+        )
+    ) or 0
+    throttled_calls = db.scalar(
+        select(func.count(ExternalApiUsage.id)).where(
+            *paid_filters, ExternalApiUsage.outcome == "throttled"
+        )
+    ) or 0
+    failed_calls = paid_calls - successful_calls
+    vehicle_count = db.scalar(
+        select(func.count(func.distinct(ExternalApiUsage.vehicle_job_id))).where(
+            *paid_filters
+        )
+    ) or 0
+    sandbox_calls = db.scalar(
+        select(func.count(ExternalApiUsage.id)).where(
+            *base_filters, ExternalApiUsage.sandbox.is_(True)
+        )
+    ) or 0
+    average_duration = db.scalar(
+        select(func.avg(ExternalApiUsage.duration_ms)).where(*paid_filters)
+    ) or 0
+
+    dealership_rows = list(
+        db.execute(
+            select(
+                Dealership.id,
+                Dealership.name,
+                func.count(ExternalApiUsage.id).label("calls"),
+                func.count(func.distinct(ExternalApiUsage.vehicle_job_id)).label("vehicles"),
+                func.sum(case((ExternalApiUsage.outcome == "success", 1), else_=0)).label(
+                    "successes"
+                ),
+            )
+            .join(ExternalApiUsage, ExternalApiUsage.dealership_id == Dealership.id)
+            .where(*paid_filters)
+            .group_by(Dealership.id, Dealership.name)
+            .order_by(func.count(ExternalApiUsage.id).desc(), Dealership.name)
+        )
+    )
+    vehicle_rows = list(
+        db.execute(
+            select(
+                VehicleJob.id,
+                VehicleJob.vin,
+                VehicleJob.version,
+                Dealership.id.label("dealership_id"),
+                Dealership.name.label("dealership_name"),
+                func.count(ExternalApiUsage.id).label("calls"),
+                func.sum(case((ExternalApiUsage.outcome == "success", 1), else_=0)).label(
+                    "successes"
+                ),
+                func.sum(case((ExternalApiUsage.outcome == "throttled", 1), else_=0)).label(
+                    "throttled"
+                ),
+                func.max(ExternalApiUsage.occurred_at).label("last_call"),
+            )
+            .join(ExternalApiUsage, ExternalApiUsage.vehicle_job_id == VehicleJob.id)
+            .join(Dealership, Dealership.id == VehicleJob.dealership_id)
+            .where(*paid_filters)
+            .group_by(
+                VehicleJob.id,
+                VehicleJob.vin,
+                VehicleJob.version,
+                Dealership.id,
+                Dealership.name,
+            )
+            .order_by(func.count(ExternalApiUsage.id).desc(), VehicleJob.vin)
+            .limit(100)
+        )
+    )
+    operation_rows = list(
+        db.execute(
+            select(
+                ExternalApiUsage.provider,
+                ExternalApiUsage.operation,
+                func.count(ExternalApiUsage.id).label("calls"),
+                func.sum(case((ExternalApiUsage.outcome == "success", 1), else_=0)).label(
+                    "successes"
+                ),
+                func.avg(ExternalApiUsage.duration_ms).label("average_duration"),
+            )
+            .where(*paid_filters)
+            .group_by(ExternalApiUsage.provider, ExternalApiUsage.operation)
+            .order_by(func.count(ExternalApiUsage.id).desc())
+        )
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "admin/api_usage.html",
+        _context(
+            request,
+            admin,
+            dealerships=dealerships,
+            selected_dealership_id=selected_dealership_id,
+            date_from=start_date.isoformat(),
+            date_to=end_date.isoformat(),
+            paid_calls=paid_calls,
+            successful_calls=successful_calls,
+            failed_calls=failed_calls,
+            throttled_calls=throttled_calls,
+            vehicle_count=vehicle_count,
+            sandbox_calls=sandbox_calls,
+            average_duration_ms=round(float(average_duration)),
+            average_calls_per_vehicle=(round(paid_calls / vehicle_count, 1) if vehicle_count else 0),
+            dealership_rows=dealership_rows,
+            vehicle_rows=vehicle_rows,
+            operation_rows=operation_rows,
+            operation_names={
+                "background_removal": "Freistellung",
+                "contour_cutout": "Konturerkennung",
+                "guided_segmentation": "Geführte Maskierung",
+                "showroom_composition": "Showroom-Komposition",
+            },
+        ),
+    )
 
 
 @router.get("/quality-reviews", response_class=HTMLResponse)
