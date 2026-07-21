@@ -50,6 +50,7 @@ from app.models import (
     VehicleJob,
 )
 from app.orientations import (
+    MASKED_BACKGROUND_MODES,
     ORIENTATION_CATEGORIES,
     PROCESSING_MODES,
     PROCESSING_REQUIRED_MODES,
@@ -1594,7 +1595,7 @@ def job_detail_page(
     window_orientation_ids = set(
         db.scalars(
             select(Orientation.id).where(
-                Orientation.processing_mode == "window_background"
+                Orientation.processing_mode.in_(MASKED_BACKGROUND_MODES)
             )
         )
     )
@@ -1878,10 +1879,10 @@ def _window_correction_photo(
     if job is None or step is None or orientation is None:
         raise HTTPException(status_code=404, detail="Fotoposition wurde nicht gefunden")
     _authorized_dealership(db, admin, job.dealership_id)
-    if orientation.processing_mode != "window_background":
+    if orientation.processing_mode not in MASKED_BACKGROUND_MODES:
         raise HTTPException(
             status_code=400,
-            detail="Diese Fotoposition verwendet keine Scheibenfreistellung",
+            detail="Diese Fotoposition verwendet keine maskierte Hintergrundfläche",
         )
     return photo, job, step, orientation
 
@@ -1900,7 +1901,7 @@ def window_correction(
     if not photo.window_mask_object_key:
         _flash(
             request,
-            "Bitte starten Sie zuerst die Verarbeitung, damit eine Scheibenmaske erzeugt wird.",
+            "Bitte starten Sie zuerst die Verarbeitung, damit eine Hintergrundmaske erzeugt wird.",
             "error",
         )
         return RedirectResponse(
@@ -1987,14 +1988,14 @@ def save_window_correction(
         raise HTTPException(status_code=400, detail="Ungültige Hintergrundposition")
     content = mask.file.read(MAX_CONFIGURATION_IMAGE_BYTES + 1)
     if len(content) > MAX_CONFIGURATION_IMAGE_BYTES:
-        raise HTTPException(status_code=413, detail="Die Scheibenmaske ist zu groß")
+        raise HTTPException(status_code=413, detail="Die Hintergrundmaske ist zu groß")
     try:
         image = Image.open(io.BytesIO(content)).convert("RGBA")
         image.load()
     except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Die Scheibenmaske ist ungültig") from exc
+        raise HTTPException(status_code=400, detail="Die Hintergrundmaske ist ungültig") from exc
     if image.getchannel("A").getbbox() is None:
-        raise HTTPException(status_code=400, detail="Die Scheibenmaske ist leer")
+        raise HTTPException(status_code=400, detail="Die Hintergrundmaske ist leer")
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     mask_key = (
