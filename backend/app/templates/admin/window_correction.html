@@ -1,0 +1,110 @@
+{% extends "admin/base.html" %}
+{% block title %}Scheibenmaske nachbearbeiten{% endblock %}
+{% block content %}
+<nav class="breadcrumb"><a href="/admin">Übersicht</a><span>›</span><a href="/admin/jobs/{{ job.id }}">{{ job.vin }}</a><span>›</span><span>Nachbearbeitung</span></nav>
+<div class="page-heading"><div><span class="eyebrow">{{ step.name }}</span><h1>Scheibenmaske nachbearbeiten</h1><p class="muted">Türkis markierte Flächen werden durch den Showroom-Hintergrund ersetzt. Korrigiere nur die tatsächlich sichtbaren Scheiben.</p></div></div>
+<section class="card section-card correction-workspace">
+    <div class="correction-toolbar" role="toolbar" aria-label="Werkzeuge für die Scheibenmaske">
+        <button type="button" class="button button-primary correction-mode active" data-mode="add">Hintergrund einsetzen</button>
+        <button type="button" class="button button-secondary correction-mode" data-mode="remove">Original schützen</button>
+        <label>Pinselgröße <input id="brush-size" type="range" min="8" max="140" value="45"><output id="brush-output">45</output></label>
+        <button type="button" class="button button-quiet" id="reset-mask">Maske zurücksetzen</button>
+    </div>
+    <div class="correction-canvas-wrap"><canvas id="correction-canvas" aria-label="Scheibenmaske bearbeiten"></canvas></div>
+    <form id="correction-form" method="post" action="/admin/photos/{{ photo.id }}/correction" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Ein höherer Wert zeigt mehr Gebäudefassade und weniger Himmel durch die Scheiben.</small></label>
+        <div class="form-actions"><a class="button button-secondary" href="/admin/jobs/{{ job.id }}">Abbrechen</a><button class="button button-primary" type="submit">Korrektur speichern und neu verarbeiten</button></div>
+    </form>
+</section>
+<script>
+(() => {
+    const view = document.getElementById('correction-canvas');
+    const viewContext = view.getContext('2d');
+    const maskCanvas = document.createElement('canvas');
+    const maskContext = maskCanvas.getContext('2d', {willReadFrequently: true});
+    const initialMaskCanvas = document.createElement('canvas');
+    const original = new Image();
+    const maskImage = new Image();
+    let mode = 'add';
+    let drawing = false;
+
+    function render() {
+        viewContext.clearRect(0, 0, view.width, view.height);
+        viewContext.drawImage(original, 0, 0, view.width, view.height);
+        const tint = document.createElement('canvas');
+        tint.width = view.width;
+        tint.height = view.height;
+        const context = tint.getContext('2d');
+        context.drawImage(maskCanvas, 0, 0);
+        context.globalCompositeOperation = 'source-in';
+        context.fillStyle = 'rgba(34, 211, 238, .78)';
+        context.fillRect(0, 0, tint.width, tint.height);
+        viewContext.globalAlpha = .52;
+        viewContext.drawImage(tint, 0, 0);
+        viewContext.globalAlpha = 1;
+    }
+
+    function initialize() {
+        view.width = original.naturalWidth;
+        view.height = original.naturalHeight;
+        maskCanvas.width = view.width;
+        maskCanvas.height = view.height;
+        initialMaskCanvas.width = view.width;
+        initialMaskCanvas.height = view.height;
+        maskContext.drawImage(maskImage, 0, 0, view.width, view.height);
+        initialMaskCanvas.getContext('2d').drawImage(maskCanvas, 0, 0);
+        render();
+    }
+    Promise.all([
+        new Promise(resolve => { original.onload = resolve; original.src = '/admin/photos/{{ photo.id }}/correction/original'; }),
+        new Promise(resolve => { maskImage.onload = resolve; maskImage.src = '/admin/photos/{{ photo.id }}/correction/mask'; })
+    ]).then(initialize);
+
+    document.querySelectorAll('.correction-mode').forEach(button => button.addEventListener('click', () => {
+        mode = button.dataset.mode;
+        document.querySelectorAll('.correction-mode').forEach(item => item.classList.toggle('active', item === button));
+    }));
+    const brush = document.getElementById('brush-size');
+    const brushOutput = document.getElementById('brush-output');
+    brush.addEventListener('input', () => brushOutput.value = brush.value);
+    const shift = document.getElementById('background-shift');
+    const shiftOutput = document.getElementById('shift-output');
+    shift.addEventListener('input', () => shiftOutput.value = `${shift.value} %`);
+
+    function paint(event) {
+        if (!drawing) return;
+        const bounds = view.getBoundingClientRect();
+        const x = (event.clientX - bounds.left) * view.width / bounds.width;
+        const y = (event.clientY - bounds.top) * view.height / bounds.height;
+        const radius = Number(brush.value) * view.width / Math.max(900, bounds.width) / 2;
+        maskContext.save();
+        maskContext.globalCompositeOperation = mode === 'add' ? 'source-over' : 'destination-out';
+        maskContext.fillStyle = '#fff';
+        maskContext.beginPath();
+        maskContext.arc(x, y, radius, 0, Math.PI * 2);
+        maskContext.fill();
+        maskContext.restore();
+        render();
+    }
+    view.addEventListener('pointerdown', event => { drawing = true; view.setPointerCapture(event.pointerId); paint(event); });
+    view.addEventListener('pointermove', paint);
+    view.addEventListener('pointerup', () => drawing = false);
+    view.addEventListener('pointercancel', () => drawing = false);
+    document.getElementById('reset-mask').addEventListener('click', () => {
+        maskContext.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+        maskContext.drawImage(initialMaskCanvas, 0, 0);
+        render();
+    });
+    document.getElementById('correction-form').addEventListener('submit', event => {
+        event.preventDefault();
+        maskCanvas.toBlob(blob => {
+            const data = new FormData(event.target);
+            data.append('mask', blob, 'scheibenmaske.png');
+            fetch(event.target.action, {method: 'POST', body: data, redirect: 'follow'})
+                .then(response => { window.location.href = response.url; });
+        }, 'image/png');
+    });
+})();
+</script>
+{% endblock %}

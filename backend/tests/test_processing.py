@@ -26,6 +26,7 @@ from app.processing import (
     measure_vehicle_contour,
     perspective_composition_options,
     resolve_background_composition,
+    WindowCompositionResult,
 )
 
 
@@ -48,6 +49,7 @@ def test_background_composition_uses_background_defaults() -> None:
         shadow_opacity_percent=38,
         reflection_opacity_percent=8,
         brightness_percent=102,
+        window_background_shift_percent=16,
     )
 
     assert resolve_background_composition(background, None) == BackgroundComposition(
@@ -58,6 +60,7 @@ def test_background_composition_uses_background_defaults() -> None:
         shadow_opacity_percent=38,
         reflection_opacity_percent=8,
         brightness_percent=102,
+        window_background_shift_percent=16,
     )
 
 
@@ -74,6 +77,7 @@ def test_background_composition_only_overrides_selected_orientation_values() -> 
         shadow_opacity_percent=32,
         reflection_opacity_percent=10,
         brightness_percent=100,
+        window_background_shift_percent=14,
     )
     override = BackgroundOrientationComposition(
         background_id="00000000-0000-0000-0000-000000000002",
@@ -90,6 +94,7 @@ def test_background_composition_only_overrides_selected_orientation_values() -> 
         shadow_opacity_percent=45,
         reflection_opacity_percent=10,
         brightness_percent=100,
+        window_background_shift_percent=14,
     )
 
 
@@ -425,6 +430,51 @@ def test_window_background_adds_calibrated_driver_side_window_region() -> None:
     protected_pillar = finished.getpixel((35, 60))
     assert calibrated_side_window[2] > 200 and calibrated_side_window[0] < 50
     assert protected_pillar[0] > 200 and protected_pillar[2] < 50
+
+
+def test_window_background_shift_reveals_lower_background_content() -> None:
+    original = Image.new("RGB", (800, 600), (230, 20, 20))
+    window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(window_mask).rectangle((100, 20, 700, 170), fill="white")
+    background = Image.new("RGB", original.size, "red")
+    ImageDraw.Draw(background).rectangle((0, 250, 799, 599), fill="blue")
+
+    centered = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+        background_shift_percent=0,
+    )
+    shifted = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+        background_shift_percent=35,
+    )
+
+    centered_pixel = Image.open(io.BytesIO(centered)).getpixel((150, 150))
+    shifted_pixel = Image.open(io.BytesIO(shifted)).getpixel((150, 150))
+    assert centered_pixel[0] > centered_pixel[2]
+    assert shifted_pixel[2] > shifted_pixel[0]
+
+
+def test_window_background_reports_suspicious_protected_overlap() -> None:
+    original = Image.new("RGB", (800, 600), (230, 20, 20))
+    window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(window_mask).rectangle((200, 80, 620, 280), fill="white")
+    result = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(Image.new("RGB", original.size, "blue"), "JPEG"),
+        Settings(output_width=800, output_height=600),
+        return_diagnostics=True,
+    )
+
+    assert isinstance(result, WindowCompositionResult)
+    assert result.quality_review_required is True
+    assert "geschützte Innenraumbereiche" in result.quality_review_reason
 
 
 def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
