@@ -1461,6 +1461,9 @@ def test_admin_creates_manual_job_and_uploads_benchmark_photo() -> None:
         },
     )
     jobs_page = client.get(f"/admin/dealerships/{dealership.id}/jobs")
+    assert 'id="job-list-section"' in jobs_page.text
+    assert "data-live-refresh" in jobs_page.text
+    assert "admin-live-refresh.js" in jobs_page.text
     created = client.post(
         f"/admin/dealerships/{dealership.id}/jobs",
         data={
@@ -1505,6 +1508,10 @@ def test_admin_creates_manual_job_and_uploads_benchmark_photo() -> None:
     assert uploaded.status_code == 303
     assert len(storage.uploads) == 4
     assert "Referenzergebnis" in rendered.text
+    assert 'id="job-status-heading"' in rendered.text
+    assert 'id="job-export-status"' in rendered.text
+    assert 'id="job-photo-review"' in rendered.text
+    assert "data-live-version" in rendered.text
     with TestingSession() as db:
         photo = db.scalar(select(PhotoAsset).where(PhotoAsset.vehicle_job_id == job_id))
         assert photo is not None

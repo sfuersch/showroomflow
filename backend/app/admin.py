@@ -1280,6 +1280,9 @@ def jobs_page(
         )
     )
     balance = credit_balance(db, dealership)
+    jobs_live_version = "|".join(
+        f"{job.id}:{job.updated_at.isoformat()}:{job.status.value}" for job in jobs
+    )
     return templates.TemplateResponse(
         request,
         "admin/jobs.html",
@@ -1292,6 +1295,7 @@ def jobs_page(
             brands=brands,
             backgrounds=backgrounds,
             credit_balance=balance,
+            jobs_live_version=jobs_live_version,
         ),
     )
 
@@ -1625,6 +1629,26 @@ def job_detail_page(
             .order_by(ExportRun.attempt.desc(), ExportRun.created_at.desc())
         )
     )
+    job_live_version = f"{job.updated_at.isoformat()}:{job.status.value}"
+    photos_live_version = "|".join(
+        [
+            *(
+                f"{photo.id}:{photo.updated_at.isoformat()}:{photo.processing_status.value}:"
+                f"{photo.processed_object_key or ''}:{photo.processed_thumbnail_object_key or ''}"
+                for photo in photos
+            ),
+            *(
+                f"{variant.id}:{variant.updated_at.isoformat()}:{variant.status}:"
+                f"{variant.object_key or ''}:{variant.thumbnail_object_key or ''}"
+                for variant in variants
+            ),
+        ]
+    )
+    exports_live_version = "|".join(
+        f"{export_run.id}:{export_run.updated_at.isoformat()}:{export_run.status}:"
+        f"{export_run.transfer_status}:{export_run.object_key or ''}"
+        for export_run in export_runs
+    )
     return templates.TemplateResponse(
         request,
         "admin/job_detail.html",
@@ -1737,6 +1761,9 @@ def job_detail_page(
             photoroom_enabled=runtime.photoroom_enabled,
             photoroom_sandbox=photoroom_sandbox_active(image_settings, runtime),
             credit_balance=credit_balance(db, dealership),
+            job_live_version=job_live_version,
+            photos_live_version=photos_live_version,
+            exports_live_version=exports_live_version,
             export_runs=export_runs,
             export_download_urls={
                 export_run.id: storage.create_download_url(
