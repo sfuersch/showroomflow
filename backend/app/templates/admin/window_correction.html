@@ -28,8 +28,46 @@
     const maskImage = new Image();
     let mode = 'add';
     let drawing = false;
+    let brushCursor = null;
+    let initialized = false;
+
+    function brushPoint(event) {
+        const bounds = view.getBoundingClientRect();
+        const scaleX = view.width / bounds.width;
+        const scaleY = view.height / bounds.height;
+        return {
+            x: (event.clientX - bounds.left) * scaleX,
+            y: (event.clientY - bounds.top) * scaleY,
+            radiusX: Number(brush.value) * scaleX / 2,
+            radiusY: Number(brush.value) * scaleY / 2
+        };
+    }
+
+    function drawBrushCursor() {
+        if (!brushCursor) return;
+        viewContext.save();
+        viewContext.beginPath();
+        viewContext.ellipse(
+            brushCursor.x,
+            brushCursor.y,
+            brushCursor.radiusX,
+            brushCursor.radiusY,
+            0,
+            0,
+            Math.PI * 2
+        );
+        const cssScale = view.width / view.getBoundingClientRect().width;
+        viewContext.lineWidth = 3 * cssScale;
+        viewContext.strokeStyle = 'rgba(0, 0, 0, .82)';
+        viewContext.stroke();
+        viewContext.lineWidth = 1.5 * cssScale;
+        viewContext.strokeStyle = '#fff';
+        viewContext.stroke();
+        viewContext.restore();
+    }
 
     function render() {
+        if (!initialized) return;
         viewContext.clearRect(0, 0, view.width, view.height);
         viewContext.drawImage(original, 0, 0, view.width, view.height);
         const tint = document.createElement('canvas');
@@ -43,6 +81,7 @@
         viewContext.globalAlpha = .52;
         viewContext.drawImage(tint, 0, 0);
         viewContext.globalAlpha = 1;
+        drawBrushCursor();
     }
 
     function initialize() {
@@ -54,6 +93,7 @@
         initialMaskCanvas.height = view.height;
         maskContext.drawImage(maskImage, 0, 0, view.width, view.height);
         initialMaskCanvas.getContext('2d').drawImage(maskCanvas, 0, 0);
+        initialized = true;
         render();
     }
     Promise.all([
@@ -67,30 +107,54 @@
     }));
     const brush = document.getElementById('brush-size');
     const brushOutput = document.getElementById('brush-output');
-    brush.addEventListener('input', () => brushOutput.value = brush.value);
+    brush.addEventListener('input', () => {
+        brushOutput.value = brush.value;
+        if (brushCursor) {
+            const bounds = view.getBoundingClientRect();
+            brushCursor.radiusX = Number(brush.value) * view.width / bounds.width / 2;
+            brushCursor.radiusY = Number(brush.value) * view.height / bounds.height / 2;
+            render();
+        }
+    });
     const shift = document.getElementById('background-shift');
     const shiftOutput = document.getElementById('shift-output');
     shift.addEventListener('input', () => shiftOutput.value = `${shift.value} %`);
 
     function paint(event) {
-        if (!drawing) return;
-        const bounds = view.getBoundingClientRect();
-        const x = (event.clientX - bounds.left) * view.width / bounds.width;
-        const y = (event.clientY - bounds.top) * view.height / bounds.height;
-        const radius = Number(brush.value) * view.width / Math.max(900, bounds.width) / 2;
+        if (!initialized) return;
+        brushCursor = brushPoint(event);
+        if (!drawing) {
+            render();
+            return;
+        }
         maskContext.save();
         maskContext.globalCompositeOperation = mode === 'add' ? 'source-over' : 'destination-out';
         maskContext.fillStyle = '#fff';
         maskContext.beginPath();
-        maskContext.arc(x, y, radius, 0, Math.PI * 2);
+        maskContext.ellipse(
+            brushCursor.x,
+            brushCursor.y,
+            brushCursor.radiusX,
+            brushCursor.radiusY,
+            0,
+            0,
+            Math.PI * 2
+        );
         maskContext.fill();
         maskContext.restore();
         render();
     }
+    view.addEventListener('pointerenter', paint);
     view.addEventListener('pointerdown', event => { drawing = true; view.setPointerCapture(event.pointerId); paint(event); });
     view.addEventListener('pointermove', paint);
-    view.addEventListener('pointerup', () => drawing = false);
-    view.addEventListener('pointercancel', () => drawing = false);
+    view.addEventListener('pointerup', event => { drawing = false; paint(event); });
+    view.addEventListener('pointercancel', () => { drawing = false; brushCursor = null; render(); });
+    view.addEventListener('pointerleave', () => {
+        if (!drawing) {
+            brushCursor = null;
+            render();
+        }
+    });
     document.getElementById('reset-mask').addEventListener('click', () => {
         maskContext.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
         maskContext.drawImage(initialMaskCanvas, 0, 0);
