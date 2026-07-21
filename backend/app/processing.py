@@ -586,11 +586,11 @@ def compose_background_through_windows(
                 (round(original.width * x), round(original.height * y))
                 for x, y in (
                     (0.0, 0.0),
-                    (0.034, 0.0),
-                    (0.044, 0.05),
-                    (0.057, 0.11),
-                    (0.074, 0.18),
-                    (0.092, 0.225),
+                    (0.020, 0.0),
+                    (0.030, 0.05),
+                    (0.042, 0.11),
+                    (0.058, 0.18),
+                    (0.075, 0.225),
                     (0.0, 0.225),
                 )
             ],
@@ -619,6 +619,24 @@ def compose_background_through_windows(
                     (0.32, 0.43),
                     (0.28, 0.36),
                     (0.28, 0.27),
+                )
+            ],
+            fill=255,
+        )
+        # The calibrated side-window area and the AI mask can both touch the
+        # driver's A-pillar. Preserve its full diagonal contour explicitly so
+        # glass replacement cannot remove interior trim.
+        ImageDraw.Draw(protected_alpha).polygon(
+            [
+                (round(original.width * x), round(original.height * y))
+                for x, y in (
+                    (0.018, 0.0),
+                    (0.060, 0.0),
+                    (0.125, 0.25),
+                    (0.075, 0.27),
+                    (0.058, 0.18),
+                    (0.042, 0.11),
+                    (0.030, 0.05),
                 )
             ],
             fill=255,

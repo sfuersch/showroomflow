@@ -410,7 +410,7 @@ def test_window_background_preserves_calibrated_instrument_cluster_region() -> N
 def test_window_background_adds_calibrated_driver_side_window_region() -> None:
     original = Image.new("RGB", (800, 600), (230, 220, 20))
     window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
-    ImageDraw.Draw(window_mask).rectangle((200, 0, 599, 199), fill="white")
+    ImageDraw.Draw(window_mask).rectangle((30, 0, 599, 199), fill="white")
     background = Image.new("RGB", original.size, (20, 30, 230))
 
     result = compose_background_through_windows(
@@ -421,8 +421,8 @@ def test_window_background_adds_calibrated_driver_side_window_region() -> None:
     )
 
     finished = Image.open(io.BytesIO(result)).convert("RGB")
-    calibrated_side_window = finished.getpixel((20, 60))
-    protected_pillar = finished.getpixel((100, 60))
+    calibrated_side_window = finished.getpixel((10, 60))
+    protected_pillar = finished.getpixel((40, 60))
     assert calibrated_side_window[2] > 200 and calibrated_side_window[0] < 50
     assert protected_pillar[0] > 200 and protected_pillar[2] < 50
 
