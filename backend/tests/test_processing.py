@@ -407,6 +407,26 @@ def test_window_background_preserves_calibrated_instrument_cluster_region() -> N
     assert protected_cluster[0] > 200 and protected_cluster[2] < 50
 
 
+def test_window_background_adds_calibrated_driver_side_window_region() -> None:
+    original = Image.new("RGB", (800, 600), (230, 220, 20))
+    window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(window_mask).rectangle((200, 0, 599, 199), fill="white")
+    background = Image.new("RGB", original.size, (20, 30, 230))
+
+    result = compose_background_through_windows(
+        image_bytes(original, "JPEG"),
+        image_bytes(window_mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    calibrated_side_window = finished.getpixel((20, 60))
+    protected_pillar = finished.getpixel((100, 60))
+    assert calibrated_side_window[2] > 200 and calibrated_side_window[0] < 50
+    assert protected_pillar[0] > 200 and protected_pillar[2] < 50
+
+
 def test_text_guided_cutout_omits_incompatible_hd_header() -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     cutout = image_bytes(Image.new("RGBA", (800, 600), (20, 30, 40, 255)), "PNG")
