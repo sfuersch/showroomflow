@@ -576,6 +576,31 @@ def compose_background_through_windows(
         if window_alpha.size != original.size:
             window_alpha = window_alpha.resize(original.size, Image.Resampling.LANCZOS)
 
+        # The open driver's door leaves a small side-window opening at the
+        # upper-left edge of this guided orientation. Text-guided segmentation
+        # misses it regularly because it touches the image boundary, so add a
+        # conservative calibrated glass area without reaching the A-pillar.
+        driver_window_alpha = Image.new("L", original.size, 0)
+        ImageDraw.Draw(driver_window_alpha).polygon(
+            [
+                (round(original.width * x), round(original.height * y))
+                for x, y in (
+                    (0.0, 0.0),
+                    (0.034, 0.0),
+                    (0.044, 0.05),
+                    (0.057, 0.11),
+                    (0.074, 0.18),
+                    (0.092, 0.225),
+                    (0.0, 0.225),
+                )
+            ],
+            fill=255,
+        )
+        driver_window_alpha = driver_window_alpha.filter(
+            ImageFilter.GaussianBlur(max(1, round(max(original.size) * 0.0015)))
+        )
+        window_alpha = ImageChops.lighter(window_alpha, driver_window_alpha)
+
         # This orientation is captured with a guided, stable composition. A
         # smooth calibrated protection zone is therefore more reliable than a
         # second semantic mask, which can fragment dark, unlit instrument
