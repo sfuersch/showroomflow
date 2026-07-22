@@ -3234,7 +3234,7 @@ async def create_overlay(
     if (
         not cleaned_name
         or position not in OVERLAY_POSITIONS
-        or not 5 <= width_percent <= 60
+        or not 5 <= width_percent <= 100
         or not 10 <= opacity_percent <= 100
     ):
         _flash(request, "Bitte prüfen Sie Name, Position, Größe und Deckkraft.", "error")
@@ -3300,7 +3300,7 @@ def update_overlay(
     if (
         not cleaned_name
         or position not in OVERLAY_POSITIONS
-        or not 5 <= width_percent <= 60
+        or not 5 <= width_percent <= 100
         or not 10 <= opacity_percent <= 100
     ):
         _flash(request, "Bitte prüfen Sie Name, Position, Größe und Deckkraft.", "error")

@@ -377,6 +377,21 @@ def test_preview_mask_preserves_original_resolution_and_pixels() -> None:
     assert restored.getpixel((600, 400))[3] == 255
 
 
+def test_overlay_can_span_full_canvas_width_without_clipping() -> None:
+    base = Image.new("RGB", (400, 300), "white")
+    logo = Image.new("RGBA", (400, 100), (210, 20, 30, 255))
+
+    result = apply_image_overlays(
+        image_bytes(base, "JPEG"),
+        [OverlayLayer(image_bytes(logo, "PNG"), "bottom_right", 100, 100)],
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    assert finished.size == (400, 300)
+    assert finished.getpixel((2, 250))[0] > 180
+    assert finished.getpixel((397, 250))[0] > 180
+
+
 def test_window_background_preserves_foreground_and_glass_transparency() -> None:
     original = Image.new("RGB", (800, 600), (230, 20, 20))
     window_mask = Image.new("RGBA", (800, 600), (255, 255, 255, 0))

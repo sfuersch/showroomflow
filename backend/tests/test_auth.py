@@ -1337,7 +1337,7 @@ def test_system_admin_manages_tenant_overlay_and_supplemental_image() -> None:
                 "brand_id": str(brand_id),
                 "location_ids": str(location_id),
                 "position": "bottom_right",
-                "width_percent": "18",
+                "width_percent": "100",
                 "opacity_percent": "90",
                 "csrf_token": csrf_from(configuration_page.text),
             },
@@ -1393,7 +1393,7 @@ def test_system_admin_manages_tenant_overlay_and_supplemental_image() -> None:
         assert overlay.dealership_id == dealership.id
         assert overlay.brand_id == brand_id
         assert overlay.position == "bottom_right"
-        assert overlay.width_percent == 18
+        assert overlay.width_percent == 100
         assert overlay.opacity_percent == 90
         assert [item.id for item in overlay.locations] == [location_id]
         assert [item.id for item in overlay.capture_steps] == [step_id]
