@@ -333,8 +333,7 @@ struct CaptureFlowView: View {
                     image
                         .resizable()
                         .scaledToFit()
-                        .padding(24)
-                        .opacity(0.72)
+                        .opacity(0.78)
                         .allowsHitTesting(false)
                 }
             }

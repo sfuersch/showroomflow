@@ -834,7 +834,7 @@ def test_system_admin_sees_grouped_orientation_catalog_with_default_silhouettes(
     assert 'id="category-interior"' in response.text
     assert 'id="category-detail"' in response.text
     assert 'id="category-special"' in response.text
-    assert "/admin/static/orientation-silhouettes/front.png" in response.text
+    assert "/admin/static/orientation-guides/front.png" in response.text
     assert "System-Silhouette" in response.text
     assert 'value="window_background"' in response.text
     assert "Scheibenhintergrund" in response.text
@@ -1509,7 +1509,7 @@ def test_app_configuration_is_location_and_tenant_scoped() -> None:
     assert payload["capture_steps"][0]["export_order"] == 3
     assert payload["capture_steps"][0]["requires_processing"] is True
     assert payload["capture_steps"][0]["silhouette_url"].endswith(
-        "/admin/static/orientation-silhouettes/front.png"
+        "/admin/static/orientation-guides/front.png"
     )
 
 
