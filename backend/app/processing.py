@@ -1610,22 +1610,34 @@ def apply_image_overlays(image_bytes: bytes, layers: list[OverlayLayer]) -> byte
         alpha_box = overlay.getchannel("A").getbbox()
         if alpha_box is None:
             raise ImageProcessingError("Ein Overlay enthält keine sichtbaren Pixel")
-        overlay = overlay.crop(alpha_box)
-        target_width = max(
-            1, round(canvas.width * max(5, min(100, layer.width_percent)) / 100)
+        is_full_canvas = (
+            layer.width_percent >= 100
+            and overlay.width * canvas.height == overlay.height * canvas.width
         )
-        scale = target_width / overlay.width
-        target_size = (target_width, max(1, round(overlay.height * scale)))
-        max_height = max(1, canvas.height - 2 * margin)
-        if target_size[1] > max_height:
-            height_scale = max_height / target_size[1]
-            target_size = (max(1, round(target_size[0] * height_scale)), max_height)
-        overlay = overlay.resize(target_size, Image.Resampling.LANCZOS)
+        if is_full_canvas:
+            if overlay.size != canvas.size:
+                overlay = overlay.resize(canvas.size, Image.Resampling.LANCZOS)
+        else:
+            overlay = overlay.crop(alpha_box)
+            target_width = max(
+                1, round(canvas.width * max(5, min(100, layer.width_percent)) / 100)
+            )
+            scale = target_width / overlay.width
+            target_size = (target_width, max(1, round(overlay.height * scale)))
+            max_height = max(1, canvas.height - 2 * margin)
+            if target_size[1] > max_height:
+                height_scale = max_height / target_size[1]
+                target_size = (max(1, round(target_size[0] * height_scale)), max_height)
+            overlay = overlay.resize(target_size, Image.Resampling.LANCZOS)
         opacity = max(10, min(100, layer.opacity_percent))
         if opacity < 100:
             overlay.putalpha(
                 overlay.getchannel("A").point(lambda value: round(value * opacity / 100))
             )
+
+        if is_full_canvas:
+            canvas.alpha_composite(overlay, (0, 0))
+            continue
 
         horizontal_margin = min(margin, max(0, canvas.width - overlay.width))
         vertical_margin = min(margin, max(0, canvas.height - overlay.height))
