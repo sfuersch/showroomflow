@@ -8,11 +8,30 @@ from rq import Queue, Retry
 from app.config import get_settings
 from app.exporting import process_export_run
 from app.processing import process_photo, process_photo_variant
+from app.push_notifications import send_quality_review_notification
 from app.sftp_transfer import transfer_export_run
 
 
 class ProcessingQueueUnavailable(RuntimeError):
     """The image-processing queue cannot accept work."""
+
+
+def enqueue_quality_review_notification(photo_id: uuid.UUID) -> None:
+    settings = get_settings()
+    try:
+        connection = Redis.from_url(settings.redis_url)
+        queue = Queue(settings.processing_queue, connection=connection)
+        queue.enqueue(
+            send_quality_review_notification,
+            str(photo_id),
+            job_id=f"quality-review-push-{photo_id}-{uuid.uuid4()}",
+            job_timeout=90,
+            retry=Retry(max=3, interval=[30, 120, 300]),
+            result_ttl=86400,
+            failure_ttl=604800,
+        )
+    except RedisError as exc:
+        raise ProcessingQueueUnavailable("Processing queue is unavailable") from exc
 
 
 def enqueue_photo_processing(photo_id: uuid.UUID) -> None:

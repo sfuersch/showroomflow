@@ -2,6 +2,7 @@ from redis import Redis
 from rq import Queue, Worker
 
 from app.config import get_settings
+from app import quality_review_events as _quality_review_events  # noqa: F401
 
 
 def main() -> None:

@@ -246,3 +246,27 @@ Zusatzbilder dürfen denselben Platz nur verwenden, wenn sich ihre Marken- oder 
 sicher ausschließen. Vor jeder ZIP-Erstellung validiert der Worker die für den konkreten Auftrag
 wirksamen Bilder erneut. Doppelte Plätze oder noch nicht verarbeitete Pflichtbilder führen zu einer
 verständlichen Fehlermeldung und niemals zum Überschreiben einer Datei.
+
+## Benachrichtigungen zur Qualitätsprüfung
+
+Ab Migration `0027_web_push_notifications` können Systemadministratoren und Operatoren auf der
+Seite `Qualitätsprüfung` Browserbenachrichtigungen aktivieren. Für jedes Browserprofil wird ein
+eigenes, jederzeit widerrufbares Abonnement gespeichert. Neue Prüfaufträge werden genau einmal
+gemeldet; nicht mehr gültige Browser-Abonnements werden bei der Zustellung deaktiviert.
+
+Vor dem ersten Einsatz wird einmalig ein VAPID-Schlüsselpaar erzeugt:
+
+```bash
+cd /opt/showroomflow
+docker compose --env-file .env.production -f compose.production.yaml \
+  run --rm --no-deps api python -m app.generate_web_push_keys
+```
+
+Die drei ausgegebenen `SHOWROOMFLOW_WEB_PUSH_*`-Zeilen werden in `.env.production` übernommen.
+Danach müssen API und Worker neu erstellt werden. Die Schlüssel dürfen nicht bei jedem Deployment
+neu erzeugt werden, da bestehende Browser-Abonnements an das ursprüngliche Schlüsselpaar gebunden
+sind.
+
+Auf iPhone und iPad steht Web Push für die über Safari zum Home-Bildschirm hinzugefügte
+ShowroomFlow-Web-App zur Verfügung. Die Berechtigung wird anschließend innerhalb dieser Web-App
+über `Benachrichtigungen aktivieren` angefordert.

@@ -1,6 +1,21 @@
 {% extends "admin/base.html" %}
 {% block title %}Qualitätsprüfung{% endblock %}
 {% block content %}
+<section class="card push-notification-card" id="quality-push-settings"
+    data-enabled="{{ 'true' if web_push_enabled else 'false' }}"
+    data-public-key="{{ web_push_public_key }}"
+    data-csrf-token="{{ csrf_token }}">
+    <div>
+        <span class="eyebrow">Benachrichtigungen</span>
+        <h2>Neue Prüfaufträge sofort melden</h2>
+        <p class="muted">Dieser Browser kann Sie informieren, sobald ein neues Bild geprüft werden muss. Auf dem iPhone muss diese Seite zuvor über Safari zum Home-Bildschirm hinzugefügt werden.</p>
+        <p class="push-status" data-push-status aria-live="polite"></p>
+    </div>
+    <div class="push-actions">
+        <button class="button button-primary" type="button" data-push-enable>Benachrichtigungen aktivieren</button>
+        <button class="button button-secondary" type="button" data-push-disable hidden>Deaktivieren</button>
+    </div>
+</section>
 <div id="quality-review-content" data-live-refresh data-live-version="{{ reviews_live_version }}" aria-live="polite">
 <div class="page-heading">
     <div><span class="eyebrow">Interner Operator-Bereich</span><h1>Qualitätsprüfung</h1><p class="muted">Auffällige Ergebnisse werden automatisch gesammelt. Das Autohaus muss nicht eingreifen.</p></div>
@@ -9,7 +24,7 @@
 
 <section class="quality-review-list">
 {% for item in review_items %}
-<article class="card quality-queue-card">
+<article class="card quality-queue-card" id="quality-review-{{ item.photo.id }}">
     <div class="quality-card-heading">
         <div><span class="eyebrow">{{ item.dealership.name }}</span><h2>{{ item.job.vin }} · {{ item.step.name }}</h2><p>Version {{ item.job.version }} · Foto-Revision {{ item.photo.revision }}</p></div>
         <span class="status status-inactive">Prüfung erforderlich</span>
@@ -57,4 +72,5 @@
     </div>
 </section>
 {% endif %}
+<script src="{{ url_for('admin-static', path='/admin-push.js') }}" defer></script>
 {% endblock %}

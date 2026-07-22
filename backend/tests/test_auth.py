@@ -34,6 +34,7 @@ from app.models import (
     UserRole,
     VehicleCreditGrant,
     VehicleJob,
+    WebPushSubscription,
 )
 from app.security import hash_password
 from app.storage import get_object_storage
@@ -911,7 +912,62 @@ def test_operator_can_only_use_web_quality_review() -> None:
     quality_page = client.get("/admin/quality-reviews")
     assert quality_page.status_code == 200
     assert 'id="quality-review-content"' in quality_page.text
+    assert 'id="quality-push-settings"' in quality_page.text
     assert client.get("/admin/orientations").status_code == 403
+
+
+def test_operator_can_manage_own_push_subscription(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.admin as admin_module
+
+    operator = create_operator()
+    monkeypatch.setattr(
+        admin_module,
+        "get_settings",
+        lambda: type(
+            "PushSettings",
+            (),
+            {"web_push_enabled": True, "web_push_vapid_public_key": "public-key"},
+        )(),
+    )
+    monkeypatch.setattr(admin_module, "enqueue_quality_review_notification", lambda _: None)
+
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "operator@example.com",
+            "password": "a-secure-operator-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    quality_page = client.get("/admin/quality-reviews")
+    csrf_token = csrf_from(quality_page.text)
+    endpoint = "https://push.example/subscriptions/operator-device"
+    created = client.post(
+        "/admin/push-subscriptions",
+        json={
+            "csrf_token": csrf_token,
+            "endpoint": endpoint,
+            "keys": {"p256dh": "p" * 32, "auth": "a" * 16},
+        },
+    )
+    assert created.status_code == 200
+    with TestingSession() as db:
+        subscription = db.scalar(
+            select(WebPushSubscription).where(WebPushSubscription.endpoint == endpoint)
+        )
+        assert subscription is not None
+        assert subscription.user_id == operator.id
+
+    removed = client.post(
+        "/admin/push-subscriptions/remove",
+        json={"csrf_token": csrf_token, "endpoint": endpoint},
+    )
+    assert removed.status_code == 200
+    with TestingSession() as db:
+        assert db.scalar(
+            select(WebPushSubscription).where(WebPushSubscription.endpoint == endpoint)
+        ) is None
 
 
 def test_admin_interface_rejects_invalid_user_email() -> None:
