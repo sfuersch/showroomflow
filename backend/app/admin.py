@@ -6,10 +6,11 @@ from hmac import compare_digest
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from PIL import Image
 from email_validator import EmailNotValidError, validate_email
+from pydantic import BaseModel, Field
 from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
@@ -54,6 +55,7 @@ from app.models import (
     UserRole,
     VehicleCreditGrant,
     VehicleJob,
+    WebPushSubscription,
 )
 from app.orientations import (
     MASKED_BACKGROUND_MODES,
@@ -69,6 +71,7 @@ from app.processing_queue import (
     enqueue_export_transfer,
     enqueue_photo_processing,
     enqueue_photo_variant,
+    enqueue_quality_review_notification,
     enqueue_vehicle_export,
 )
 from app.processing import ImageProcessingError, refine_manual_background_mask
@@ -87,6 +90,7 @@ from app.thumbnails import ThumbnailError, create_thumbnail, thumbnail_key
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
 templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
+PUSH_SERVICE_WORKER_PATH = Path(__file__).parent / "static" / "admin-push-service-worker.js"
 
 MAX_CONFIGURATION_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_JOB_PHOTO_BYTES = 30 * 1024 * 1024
@@ -98,6 +102,22 @@ OVERLAY_POSITIONS = {
     "bottom_right": "Unten rechts",
     "center": "Mittig",
 }
+
+
+class PushKeysPayload(BaseModel):
+    p256dh: str = Field(min_length=20, max_length=255)
+    auth: str = Field(min_length=8, max_length=255)
+
+
+class PushSubscriptionPayload(BaseModel):
+    csrf_token: str
+    endpoint: str = Field(min_length=20, max_length=4000)
+    keys: PushKeysPayload
+
+
+class PushRemovalPayload(BaseModel):
+    csrf_token: str
+    endpoint: str = Field(min_length=20, max_length=4000)
 
 
 def _csrf_token(request: Request) -> str:
@@ -699,6 +719,109 @@ def external_api_usage_page(
     )
 
 
+@router.get("/push-service-worker.js", response_class=Response)
+def push_service_worker() -> Response:
+    return Response(
+        PUSH_SERVICE_WORKER_PATH.read_text(encoding="utf-8"),
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/admin/", "Cache-Control": "no-store"},
+    )
+
+
+@router.get("/manifest.webmanifest", response_class=JSONResponse)
+def admin_manifest() -> JSONResponse:
+    return JSONResponse(
+        {
+            "name": "ShowroomFlow Qualitätsprüfung",
+            "short_name": "ShowroomFlow",
+            "start_url": "/admin/quality-reviews",
+            "scope": "/admin/",
+            "display": "standalone",
+            "background_color": "#f6f7fb",
+            "theme_color": "#5865f2",
+        },
+        media_type="application/manifest+json",
+    )
+
+
+@router.post("/push-subscriptions", response_class=JSONResponse)
+def save_push_subscription(
+    payload: PushSubscriptionPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    admin = _require_quality_operator(request, db)
+    if isinstance(admin, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Anmeldung erforderlich")
+    _validate_csrf(request, payload.csrf_token)
+    if not get_settings().web_push_enabled:
+        raise HTTPException(status_code=503, detail="Benachrichtigungen sind nicht konfiguriert")
+
+    subscription = db.scalar(
+        select(WebPushSubscription).where(WebPushSubscription.endpoint == payload.endpoint)
+    )
+    if subscription is None:
+        subscription = WebPushSubscription(
+            user_id=admin.id,
+            endpoint=payload.endpoint,
+            p256dh=payload.keys.p256dh,
+            auth=payload.keys.auth,
+        )
+        db.add(subscription)
+    else:
+        subscription.user_id = admin.id
+        subscription.p256dh = payload.keys.p256dh
+        subscription.auth = payload.keys.auth
+    subscription.user_agent = request.headers.get("user-agent", "")[:500] or None
+    subscription.is_active = True
+    subscription.failure_count = 0
+    db.commit()
+
+    pending_photo_ids = list(
+        db.scalars(
+            select(PhotoAsset.id).where(
+                PhotoAsset.quality_review_required.is_(True),
+                PhotoAsset.quality_review_created_at.is_not(None),
+                (
+                    PhotoAsset.quality_review_notified_at.is_(None)
+                    | (
+                        PhotoAsset.quality_review_notified_at
+                        < PhotoAsset.quality_review_created_at
+                    )
+                ),
+            )
+        )
+    )
+    for photo_id in pending_photo_ids:
+        try:
+            enqueue_quality_review_notification(photo_id)
+        except ProcessingQueueUnavailable:
+            pass
+    return JSONResponse({"status": "ok"})
+
+
+@router.post("/push-subscriptions/remove", response_class=JSONResponse)
+def remove_push_subscription(
+    payload: PushRemovalPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    admin = _require_quality_operator(request, db)
+    if isinstance(admin, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Anmeldung erforderlich")
+    _validate_csrf(request, payload.csrf_token)
+    subscription = db.scalar(
+        select(WebPushSubscription).where(
+            WebPushSubscription.endpoint == payload.endpoint,
+            WebPushSubscription.user_id == admin.id,
+        )
+    )
+    if subscription is not None:
+        db.delete(subscription)
+        db.commit()
+    return JSONResponse({"status": "ok"})
+
+
 @router.get("/quality-reviews", response_class=HTMLResponse)
 def quality_reviews_page(
     request: Request,
@@ -777,6 +900,8 @@ def quality_reviews_page(
             review_items=review_items,
             operators=operators,
             reviews_live_version=live_version,
+            web_push_enabled=get_settings().web_push_enabled,
+            web_push_public_key=get_settings().web_push_vapid_public_key or "",
         ),
     )
 

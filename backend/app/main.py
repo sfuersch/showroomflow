@@ -10,6 +10,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from app.admin import router as admin_router
 from app.api.router import router
 from app.config import get_settings
+from app import quality_review_events as _quality_review_events  # noqa: F401
 
 
 @asynccontextmanager

@@ -42,10 +42,21 @@ class Settings(BaseSettings):
     photoroom_sandbox: bool = True
     output_width: int = Field(default=1920, ge=640, le=7680)
     output_height: int = Field(default=1440, ge=480, le=4320)
+    web_push_vapid_public_key: str | None = None
+    web_push_vapid_private_key: str | None = None
+    web_push_vapid_subject: str | None = None
 
     @property
     def processing_enabled(self) -> bool:
         return self.processing_provider != "disabled"
+
+    @property
+    def web_push_enabled(self) -> bool:
+        return bool(self.web_push_vapid_public_key and self.web_push_vapid_private_key)
+
+    @property
+    def web_push_subject(self) -> str:
+        return self.web_push_vapid_subject or self.public_base_url
 
     @property
     def photoroom_enabled(self) -> bool:
@@ -103,6 +114,12 @@ class Settings(BaseSettings):
             raise ValueError("Bootstrap administrator password is not secure")
         if self.processing_provider == "remove_bg" and not self.remove_bg_api_key:
             raise ValueError("SHOWROOMFLOW_REMOVE_BG_API_KEY is required for remove_bg")
+        if bool(self.web_push_vapid_public_key) != bool(self.web_push_vapid_private_key):
+            raise ValueError("Both SHOWROOMFLOW_WEB_PUSH_VAPID keys must be configured")
+        if self.web_push_vapid_subject and not self.web_push_vapid_subject.startswith(
+            ("https://", "mailto:")
+        ):
+            raise ValueError("SHOWROOMFLOW_WEB_PUSH_VAPID_SUBJECT must be HTTPS or mailto")
         return self
 
 
