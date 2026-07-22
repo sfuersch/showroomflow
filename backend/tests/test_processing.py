@@ -392,6 +392,22 @@ def test_overlay_can_span_full_canvas_width_without_clipping() -> None:
     assert finished.getpixel((397, 250))[0] > 180
 
 
+def test_full_canvas_overlay_preserves_transparent_coordinate_system() -> None:
+    base = Image.new("RGB", (400, 300), "white")
+    overlay = Image.new("RGBA", (400, 300), (0, 0, 0, 0))
+    ImageDraw.Draw(overlay).rectangle((300, 250, 399, 299), fill=(210, 20, 30, 255))
+
+    result = apply_image_overlays(
+        image_bytes(base, "JPEG"),
+        [OverlayLayer(image_bytes(overlay, "PNG"), "top_left", 100, 100)],
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGB")
+    assert finished.getpixel((20, 20))[0] > 240
+    assert finished.getpixel((310, 260))[0] > 180
+    assert finished.getpixel((310, 260))[1] < 60
+
+
 def test_window_background_preserves_foreground_and_glass_transparency() -> None:
     original = Image.new("RGB", (800, 600), (230, 20, 20))
     window_mask = Image.new("RGBA", (800, 600), (255, 255, 255, 0))
