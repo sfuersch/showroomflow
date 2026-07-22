@@ -865,11 +865,13 @@ def quality_reviews_page(
                     or photo.processed_object_key
                 )
                 if photo.processed_object_key
+                and photo.processing_status == ProcessingStatus.COMPLETED
                 else None
             ),
             "processed_full_url": (
                 storage.create_download_url(object_key=photo.processed_object_key)
                 if photo.processed_object_key
+                and photo.processing_status == ProcessingStatus.COMPLETED
                 else None
             ),
         }
@@ -2589,7 +2591,7 @@ def save_window_correction(
     mask_content = output.getvalue()
     mask_key = (
         f"dealerships/{job.dealership_id}/jobs/{job.id}/"
-        f"photos/{photo.id}/window-mask-manual.png"
+        f"photos/{photo.id}/window-mask-manual-{uuid.uuid4()}.png"
     )
     storage.put_object(
         object_key=mask_key,
@@ -2606,7 +2608,10 @@ def save_window_correction(
     photo.quality_review_reason = (
         "Das nachbearbeitete Ergebnis wartet auf die manuelle Operator-Freigabe."
     )
-    photo.quality_review_created_at = datetime.now(timezone.utc)
+    # This photo is already in the operator queue. Keeping the original review
+    # timestamp prevents a correction from being announced as a new review.
+    if photo.quality_review_created_at is None:
+        photo.quality_review_created_at = datetime.now(timezone.utc)
     photo.quality_reviewed_by_id = None
     photo.quality_reviewed_at = None
     photo.quality_review_resolution = "correction_processing"
