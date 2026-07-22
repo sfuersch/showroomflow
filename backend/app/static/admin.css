@@ -234,10 +234,12 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .orientation-create > summary small { margin-top: 3px; color: var(--muted); }
 .orientation-create > form { padding: 22px; border-top: 1px solid var(--line); background: #fbfcff; }
 .job-list { display: grid; gap: 10px; }
+.job-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
 .job-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 18px; align-items: center; padding: 16px; border: 1px solid var(--line); border-radius: 13px; color: inherit; text-decoration: none; }
 .job-row:hover { border-color: #c7ccf6; background: #fbfcff; }
 .job-row strong, .job-row span { display: block; }
 .job-row div span { margin-top: 4px; color: var(--muted); font-size: .82rem; }
+.job-delete-form { margin: 0; }
 .admin-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 32px); padding: 0; border: 0; border-radius: 20px; color: var(--ink); background: var(--surface); box-shadow: 0 28px 80px rgba(16,24,40,.28); }
 .admin-dialog::backdrop { background: rgba(15,23,42,.58); backdrop-filter: blur(4px); }
 .dialog-content { padding: 28px; }
@@ -329,7 +331,9 @@ button:disabled { cursor: not-allowed; opacity: .5; }
     .sequence-grid { grid-template-columns: 1fr; }
     .orientation-order-row > .step-options { grid-column: auto; }
     .background-grid { grid-template-columns: 1fr; }
+    .job-entry { grid-template-columns: 1fr; }
     .job-row { grid-template-columns: 1fr; }
+    .job-delete-form .button { width: 100%; }
     .page-heading { align-items: stretch; flex-direction: column; }
     .page-heading > .button { width: 100%; }
     .dialog-content { padding: 22px; }

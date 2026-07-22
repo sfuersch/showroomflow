@@ -27,12 +27,14 @@ from app.models import (
     Location,
     Orientation,
     PhotoAsset,
+    PhotoProcessingVariant,
     ProcessingStatus,
     SupplementalImage,
     SystemImageSettings,
     User,
     UserRole,
     VehicleCreditGrant,
+    VehicleCreditUsage,
     VehicleJob,
     WebPushSubscription,
 )
@@ -1660,6 +1662,182 @@ def test_job_stores_selected_brand_and_background() -> None:
     assert response.json()["brand"] == "Volkswagen"
     assert response.json()["brand_id"] == str(brand_id)
     assert response.json()["background_id"] == str(background_id)
+
+
+def test_system_admin_deletes_job_and_all_stored_assets() -> None:
+    client.cookies.clear()
+    system_admin = create_system_admin()
+    with TestingSession() as db:
+        dealership = Dealership(name="Löschtest Autohaus")
+        db.add(dealership)
+        db.flush()
+        location = Location(dealership_id=dealership.id, name="Löschtest Standort")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Front",
+            instruction="Front fotografieren",
+            category="exterior",
+            capture_order=1,
+            export_order=1,
+            requires_processing=True,
+        )
+        db.add_all([location, step])
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=system_admin.id,
+            vin="DELETE-TEST-VIN",
+            version=2,
+            brand="Ford",
+        )
+        db.add(job)
+        db.flush()
+        photo = PhotoAsset(
+            vehicle_job_id=job.id,
+            capture_step_id=step.id,
+            captured_by_id=system_admin.id,
+            revision=1,
+            original_object_key="jobs/delete/original.jpg",
+            original_content_type="image/jpeg",
+            expected_size_bytes=1000,
+            original_thumbnail_object_key="jobs/delete/original-thumb.jpg",
+            benchmark_object_key="jobs/delete/benchmark.jpg",
+            benchmark_thumbnail_object_key="jobs/delete/benchmark-thumb.jpg",
+            processed_object_key="jobs/delete/processed.jpg",
+            processed_thumbnail_object_key="jobs/delete/processed-thumb.jpg",
+            window_mask_object_key="jobs/delete/window-mask.png",
+        )
+        db.add(photo)
+        db.flush()
+        variant = PhotoProcessingVariant(
+            photo_asset_id=photo.id,
+            provider="photoroom",
+            object_key="jobs/delete/variant.png",
+            thumbnail_object_key="jobs/delete/variant-thumb.jpg",
+        )
+        export = ExportRun(
+            vehicle_job_id=job.id,
+            zip_filename="DELETE-TEST-VIN.zip",
+            object_key="jobs/delete/export.zip",
+        )
+        usage = ExternalApiUsage(
+            provider="photoroom",
+            operation="cutout",
+            dealership_id=dealership.id,
+            vehicle_job_id=job.id,
+            photo_asset_id=photo.id,
+            outcome="success",
+        )
+        credit = VehicleCreditUsage(
+            dealership_id=dealership.id,
+            vehicle_job_id=job.id,
+            provider="photoroom",
+            period_start=datetime.now(timezone.utc).date(),
+        )
+        db.add_all([variant, export, usage, credit])
+        db.commit()
+        dealership_id = dealership.id
+        job_id = job.id
+        photo_id = photo.id
+        variant_id = variant.id
+        export_id = export.id
+        usage_id = usage.id
+        credit_id = credit.id
+
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    jobs_page = client.get(f"/admin/dealerships/{dealership_id}/jobs")
+    assert f'action="/admin/jobs/{job_id}/delete"' in jobs_page.text
+    assert "Alle zugehörigen Bilder und Exporte" in jobs_page.text
+
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        response = client.post(
+            f"/admin/jobs/{job_id}/delete",
+            data={"csrf_token": csrf_from(jobs_page.text)},
+            follow_redirects=True,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert response.status_code == 200
+    assert "Auftrag DELETE-TEST-VIN · Version 2 wurde dauerhaft gelöscht." in response.text
+    assert set(storage.deleted_keys) == {
+        "jobs/delete/original.jpg",
+        "jobs/delete/original-thumb.jpg",
+        "jobs/delete/benchmark.jpg",
+        "jobs/delete/benchmark-thumb.jpg",
+        "jobs/delete/processed.jpg",
+        "jobs/delete/processed-thumb.jpg",
+        "jobs/delete/window-mask.png",
+        "jobs/delete/variant.png",
+        "jobs/delete/variant-thumb.jpg",
+        "jobs/delete/export.zip",
+    }
+    with TestingSession() as db:
+        assert db.get(VehicleJob, job_id) is None
+        assert db.get(PhotoAsset, photo_id) is None
+        assert db.get(PhotoProcessingVariant, variant_id) is None
+        assert db.get(ExportRun, export_id) is None
+        assert db.get(ExternalApiUsage, usage_id) is None
+        assert db.get(VehicleCreditUsage, credit_id) is None
+
+
+def test_dealership_admin_cannot_delete_job() -> None:
+    client.cookies.clear()
+    dealership, admin = create_dealership_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Geschützter Standort")
+        db.add(location)
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=admin.id,
+            vin="PROTECTED-TEST-VIN",
+            version=1,
+            brand="Ford",
+        )
+        db.add(job)
+        db.commit()
+        job_id = job.id
+
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "admin@example.com",
+            "password": "a-secure-test-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    jobs_page = client.get(f"/admin/dealerships/{dealership.id}/jobs")
+    assert f'action="/admin/jobs/{job_id}/delete"' not in jobs_page.text
+
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        response = client.post(
+            f"/admin/jobs/{job_id}/delete",
+            data={"csrf_token": csrf_from(jobs_page.text)},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert response.status_code == 403
+    assert storage.deleted_keys == []
+    with TestingSession() as db:
+        assert db.get(VehicleJob, job_id) is not None
 
 
 def test_admin_creates_manual_job_and_uploads_benchmark_photo() -> None:
