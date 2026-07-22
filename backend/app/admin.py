@@ -712,6 +712,7 @@ def external_api_usage_page(
                 "background_removal": "Freistellung",
                 "contour_cutout": "Konturerkennung",
                 "guided_segmentation": "Geführte Maskierung",
+                "semantic_mask": "Semantische KI-Maske",
                 "showroom_composition": "Showroom-Komposition",
             },
         ),

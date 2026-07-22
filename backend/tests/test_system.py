@@ -52,6 +52,28 @@ def test_legacy_photoroom_key_remains_compatible() -> None:
     assert settings.photoroom_key_for(sandbox=False) == "legacy-key"
 
 
+def test_openai_semantic_masks_are_opt_in() -> None:
+    settings = Settings()
+    assert settings.openai_mask_enabled is False
+    assert settings.openai_mask_model == "gpt-image-2"
+    assert settings.openai_mask_review_all is True
+
+
+def test_production_requires_openai_key_when_semantic_masks_are_enabled() -> None:
+    with pytest.raises(ValidationError, match="SHOWROOMFLOW_OPENAI_API_KEY"):
+        Settings(
+            environment="production",
+            secret_key="a" * 64,
+            database_url="postgresql+psycopg://user:secret@db:5432/showroomflow",
+            redis_url="redis://:secret@redis:6379/0",
+            storage_endpoint="https://s3.example.com",
+            storage_access_key="production-access-key",
+            storage_secret_key="production-secret-key",
+            storage_bucket="showroomflow-production",
+            openai_mask_enabled=True,
+        )
+
+
 def test_production_rejects_placeholder_secrets() -> None:
     with pytest.raises(ValidationError):
         Settings(environment="production", secret_key="replace-with-an-insecure-placeholder-value")
