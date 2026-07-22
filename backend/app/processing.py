@@ -26,7 +26,7 @@ from app.image_service import (
     photoroom_sandbox_active,
     provider_is_available,
 )
-from app.orientations import MASKED_BACKGROUND_MODES
+from app.orientations import MASKED_BACKGROUND_MODES, mask_prompt_defaults
 from app.models import (
     Background,
     BackgroundOrientationComposition,
@@ -44,7 +44,6 @@ from app.thumbnails import create_thumbnail, thumbnail_key
 
 logger = logging.getLogger(__name__)
 
-WINDOW_MASK_SEGMENTATION_PROMPT = "windshield, side window"
 MASK_REFINEMENT_MAX_DIMENSION = 1600
 OPENAI_MASK_MAX_DIMENSION = 1920
 
@@ -174,8 +173,8 @@ Create a pixel-aligned annotation of this exact photograph. Preserve the origina
 resolution, crop, perspective and every image detail. Do not move, redraw, retouch,
 brighten or replace anything.
 
-Paint only the regions described below with a flat, fully opaque, uniform pure blue
-#0000FF overlay. The blue overlay is a technical segmentation label, not a realistic
+Paint only the regions described below with a flat, fully opaque, uniform pure magenta
+#FF00FF overlay. The magenta overlay is a technical segmentation label, not a realistic
 edit. Every pixel outside the selected regions must remain identical to the input.
 
 SELECT: {profile.prompt}. Select only the exterior environment visible through glass
@@ -211,14 +210,14 @@ def _openai_mask_working_image(original_bytes: bytes) -> tuple[bytes, tuple[int,
     return output.getvalue(), original.size
 
 
-def extract_openai_blue_mask(
+def extract_openai_magenta_mask(
     original_working_bytes: bytes,
     annotated_bytes: bytes,
     *,
     output_size: tuple[int, int],
     profile: MaskedBackgroundProfile,
 ) -> bytes:
-    """Convert only newly painted saturated blue pixels into an alpha mask."""
+    """Convert only newly painted saturated magenta pixels into an alpha mask."""
     try:
         source = Image.open(io.BytesIO(original_working_bytes)).convert("RGB")
         annotated = Image.open(io.BytesIO(annotated_bytes)).convert("RGB")
@@ -234,9 +233,10 @@ def extract_openai_blue_mask(
     blue = result_array[:, :, 2]
     changed = np.max(np.abs(result_array - source_array), axis=2) >= 18
     selected = (
-        (blue >= 145)
-        & ((blue - red) >= 55)
-        & ((blue - green) >= 30)
+        (red >= 145)
+        & (blue >= 145)
+        & ((red - green) >= 55)
+        & ((blue - green) >= 55)
         & changed
     )
     selected_u8 = selected.astype(np.uint8) * 255
@@ -246,7 +246,7 @@ def extract_openai_blue_mask(
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_radius, close_radius))
     selected_u8 = cv2.morphologyEx(selected_u8, cv2.MORPH_CLOSE, kernel)
 
-    # Discard isolated blue details introduced by reflections or badges while
+    # Discard isolated magenta details introduced by reflections or badges while
     # retaining small, genuine edge-connected window/opening regions.
     count, labels, stats, _ = cv2.connectedComponentsWithStats(selected_u8, connectivity=8)
     cleaned = np.zeros_like(selected_u8)
@@ -279,7 +279,7 @@ def create_openai_semantic_mask(
     client: httpx.Client | None = None,
     usage_context: ExternalApiUsageContext | None = None,
 ) -> bytes:
-    """Ask GPT Image for a blue semantic overlay and extract it locally as a mask."""
+    """Ask GPT Image for a magenta semantic overlay and extract it locally as a mask."""
     if not settings.openai_api_key:
         raise ImageProcessingError("Kein OpenAI-Schlüssel für KI-Masken konfiguriert")
     working_bytes, original_size = _openai_mask_working_image(original_bytes)
@@ -339,14 +339,14 @@ def create_openai_semantic_mask(
         annotated_bytes = base64.b64decode(encoded, validate=True)
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise ImageProcessingError("OpenAI hat keine auswertbare KI-Maske geliefert") from exc
-    mask = extract_openai_blue_mask(
+    mask = extract_openai_magenta_mask(
         working_bytes,
         annotated_bytes,
         output_size=original_size,
         profile=profile,
     )
     # The model supplies semantic understanding; local edge refinement snaps
-    # its broad blue annotation back to the unchanged source photograph.
+    # its broad magenta annotation back to the unchanged source photograph.
     return refine_manual_background_mask(
         original_bytes,
         mask,
@@ -447,71 +447,50 @@ def refine_manual_background_mask(
 
 
 def masked_background_profile(
-    orientation_key: str, processing_mode: str
+    orientation_key: str,
+    processing_mode: str,
+    *,
+    custom_prompt: str | None = None,
+    custom_negative_prompt: str | None = None,
 ) -> MaskedBackgroundProfile:
     """Describe the semantic area that may reveal the configured showroom."""
+    default_prompt, default_negative_prompt = mask_prompt_defaults(
+        orientation_key, processing_mode
+    )
     if orientation_key == "steering-wheel":
-        return MaskedBackgroundProfile(
-            prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
-            negative_prompt=(
-                "steering wheel, dashboard, instrument cluster, A-pillar, "
-                "door frame, mirror"
-            ),
+        profile = MaskedBackgroundProfile(
+            prompt=default_prompt,
+            negative_prompt=default_negative_prompt,
             minimum_fraction=0.02,
             maximum_fraction=0.75,
             steering_wheel_protection=True,
         )
-    if processing_mode == "opening_background":
-        prompts = {
-            "trunk-open": (
-                "outdoor background visible around the vehicle and through the open "
-                "trunk opening"
-            ),
-            "driver-entry": (
-                "outdoor background and ground visible through the open driver door"
-            ),
-            "driver-door": (
-                "window glass, outdoor background and ground visible around the driver door"
-            ),
-            "passenger-entry": (
-                "outdoor background and ground visible through the open passenger door"
-            ),
-            "passenger-door": (
-                "window glass, outdoor background and ground visible around the passenger door"
-            ),
-            "driver-door-open": (
-                "outdoor background and ground visible around and through the open driver door"
-            ),
-            "passenger-door-open": (
-                "outdoor background and ground visible around and through the open passenger door"
-            ),
-        }
-        return MaskedBackgroundProfile(
-            prompt=prompts.get(
-                orientation_key,
-                "outdoor background visible through the open vehicle door",
-            ),
-            negative_prompt=(
-                "vehicle body, open door, open tailgate, cargo area, seats, dashboard, "
-                "pillars, trim, mirrors"
-            ),
+    elif processing_mode == "opening_background":
+        profile = MaskedBackgroundProfile(
+            prompt=default_prompt,
+            negative_prompt=default_negative_prompt,
             minimum_fraction=0.004,
             maximum_fraction=0.88,
         )
-    prompts = {
-        "front-interior": "windshield and side window glass",
-        "rear-row-driver": "side window and rear window glass",
-        "rear-row-passenger": "side window and rear window glass",
-        "panoramic-roof": "panoramic glass roof and window glass",
-    }
-    return MaskedBackgroundProfile(
-        prompt=prompts.get(orientation_key, WINDOW_MASK_SEGMENTATION_PROMPT),
-        negative_prompt=(
-            "dashboard, seats, steering wheel, instrument cluster, pillars, door frame, "
-            "mirrors, interior trim"
+    else:
+        profile = MaskedBackgroundProfile(
+            prompt=default_prompt,
+            negative_prompt=default_negative_prompt,
+            minimum_fraction=0.003,
+            maximum_fraction=0.68,
+        )
+    return replace(
+        profile,
+        prompt=(
+            custom_prompt.strip()
+            if custom_prompt and custom_prompt.strip()
+            else profile.prompt
         ),
-        minimum_fraction=0.003,
-        maximum_fraction=0.68,
+        negative_prompt=(
+            f"{profile.negative_prompt}, {custom_negative_prompt.strip()}"
+            if custom_negative_prompt and custom_negative_prompt.strip()
+            else profile.negative_prompt
+        ),
     )
 
 
@@ -1765,7 +1744,12 @@ def process_photo(photo_id: str) -> None:
                         "Die maskierte Hintergrundverarbeitung benötigt Photoroom"
                     )
                 profile = masked_background_profile(
-                    orientation.key if orientation else "", processing_mode
+                    orientation.key if orientation else "",
+                    processing_mode,
+                    custom_prompt=orientation.mask_prompt if orientation else None,
+                    custom_negative_prompt=(
+                        orientation.mask_negative_prompt if orientation else None
+                    ),
                 )
                 used_openai_mask = False
                 if photo.window_mask_is_manual and photo.window_mask_object_key:
@@ -2173,7 +2157,10 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 and orientation.processing_mode in MASKED_BACKGROUND_MODES
             ):
                 profile = masked_background_profile(
-                    orientation.key, orientation.processing_mode
+                    orientation.key,
+                    orientation.processing_mode,
+                    custom_prompt=orientation.mask_prompt,
+                    custom_negative_prompt=orientation.mask_negative_prompt,
                 )
                 if photo.window_mask_is_manual and photo.window_mask_object_key:
                     window_mask = storage.get_object(

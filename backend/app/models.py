@@ -277,6 +277,8 @@ class Orientation(Timestamped, Base):
     is_required: Mapped[bool] = mapped_column(Boolean, default=True)
     requires_processing: Mapped[bool] = mapped_column(Boolean, default=False)
     processing_mode: Mapped[str] = mapped_column(String(32), default="original")
+    mask_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    mask_negative_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_repeatable: Mapped[bool] = mapped_column(Boolean, default=False)
     default_instance_count: Mapped[int] = mapped_column(Integer, default=1)
     max_instances: Mapped[int] = mapped_column(Integer, default=1)

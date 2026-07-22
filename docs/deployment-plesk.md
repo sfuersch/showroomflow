@@ -180,7 +180,7 @@ werden.
 ### Semantische KI-Masken erproben
 
 Für Fotos mit Scheiben- oder Öffnungshintergrund kann ShowroomFlow zunächst GPT Image um eine
-pixelgleiche blaue Bereichsmarkierung bitten. Das System gewinnt daraus lokal die technische Maske
+pixelgleiche magentafarbene Bereichsmarkierung bitten. Das System gewinnt daraus lokal die technische Maske
 und verfeinert deren Kante am unveränderten Original. Unplausible, leere oder nicht verfügbare
 KI-Ergebnisse fallen automatisch auf die bestehende Photoroom-Maskierung zurück.
 
@@ -198,6 +198,11 @@ Mit `SHOWROOMFLOW_OPENAI_MASK_REVIEW_ALL=true` landet jedes auf dieser Weise erz
 vor Export und Freigabe in der Operator-Prüfung. Das sollte während der Qualitätserprobung aktiv
 bleiben. Die kostenpflichtigen Maskenaufrufe erscheinen im SuperAdmin-Kostendashboard als
 `Semantische KI-Maske`.
+
+Im zentralen Orientierungskatalog kann der Superadmin je Perspektive zusätzlich beschreiben,
+welche Bildbereiche maskiert und welche Details besonders geschützt werden müssen. Leere Felder
+verwenden weiterhin die Systemvorgaben. Der Schutzprompt ergänzt die festen Sicherheitsregeln; er
+ersetzt sie nicht.
 
 ## Foto-Thumbnails
 

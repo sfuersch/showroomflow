@@ -28,7 +28,7 @@ from app.processing import (
     create_automatic_background_mask,
     create_openai_semantic_mask,
     create_photoroom_cutout,
-    extract_openai_blue_mask,
+    extract_openai_magenta_mask,
     format_retry_delay,
     ImageProviderRateLimitError,
     create_photoroom_showroom,
@@ -615,6 +615,20 @@ def test_open_trunk_uses_opening_profile_with_vehicle_protection_prompt() -> Non
     assert profile.maximum_fraction > 0.80
 
 
+def test_orientation_mask_prompts_override_selection_and_extend_protection() -> None:
+    profile = masked_background_profile(
+        "steering-wheel",
+        "window_background",
+        custom_prompt="only the exterior visible through the windshield",
+        custom_negative_prompt="preserve the head-up display",
+    )
+
+    assert profile.prompt == "only the exterior visible through the windshield"
+    assert "steering wheel" in profile.negative_prompt
+    assert "preserve the head-up display" in profile.negative_prompt
+    assert profile.steering_wheel_protection is True
+
+
 def test_text_guided_cutout_omits_incompatible_hd_header(monkeypatch) -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     cutout = image_bytes(Image.new("RGBA", (800, 600), (20, 30, 40, 255)), "PNG")
@@ -661,14 +675,14 @@ def test_text_guided_cutout_omits_incompatible_hd_header(monkeypatch) -> None:
     assert events[0]["outcome"] == "success"
 
 
-def test_openai_blue_overlay_is_extracted_without_original_blue_pixels() -> None:
+def test_openai_magenta_overlay_ignores_original_magenta_pixels() -> None:
     original = Image.new("RGB", (800, 600), (80, 100, 130))
-    ImageDraw.Draw(original).rectangle((20, 20, 180, 180), fill=(10, 60, 210))
+    ImageDraw.Draw(original).rectangle((20, 20, 180, 180), fill=(220, 20, 210))
     annotated = original.copy()
-    ImageDraw.Draw(annotated).rectangle((260, 120, 680, 420), fill=(0, 0, 255))
+    ImageDraw.Draw(annotated).rectangle((260, 120, 680, 420), fill=(255, 0, 255))
     profile = masked_background_profile("front-interior", "window_background")
 
-    mask_bytes = extract_openai_blue_mask(
+    mask_bytes = extract_openai_magenta_mask(
         image_bytes(original, "PNG"),
         image_bytes(annotated, "PNG"),
         output_size=original.size,
@@ -684,7 +698,7 @@ def test_openai_blue_overlay_is_extracted_without_original_blue_pixels() -> None
 def test_openai_semantic_mask_sends_aligned_image_edit_request(monkeypatch) -> None:
     original = Image.new("RGB", (800, 600), (90, 100, 110))
     annotated = original.copy()
-    ImageDraw.Draw(annotated).rectangle((250, 120, 650, 430), fill=(0, 0, 255))
+    ImageDraw.Draw(annotated).rectangle((250, 120, 650, 430), fill=(255, 0, 255))
     encoded = base64.b64encode(image_bytes(annotated, "PNG")).decode("ascii")
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -694,7 +708,7 @@ def test_openai_semantic_mask_sends_aligned_image_edit_request(monkeypatch) -> N
         assert b'name="model"' in body
         assert b"gpt-image-2" in body
         assert b'name="prompt"' in body
-        assert b"#0000FF" in body
+        assert b"#FF00FF" in body
         assert b"A/B/C pillars" in body
         assert b'name="size"' in body
         assert b"800x592" in body
