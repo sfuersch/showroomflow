@@ -141,12 +141,13 @@ remove.bg-Ergebnis und der Export werden dadurch nicht ersetzt. Für kostenlose,
 versehene Sandbox-Tests werden diese Werte ergänzt:
 
 ```dotenv
-SHOWROOMFLOW_PHOTOROOM_API_KEY=<API-Schlüssel>
+SHOWROOMFLOW_PHOTOROOM_SANDBOX_API_KEY=<Sandbox-API-Schlüssel>
+SHOWROOMFLOW_PHOTOROOM_LIVE_API_KEY=<Live-API-Schlüssel>
 SHOWROOMFLOW_PHOTOROOM_SANDBOX=true
 ```
 
-Der Schlüssel kann ohne `sandbox_` eingetragen werden; ShowroomFlow ergänzt den Präfix im
-Sandbox-Modus. Danach API und Worker neu erstellen. In der Auftragsansicht erscheint für jedes
+ShowroomFlow wählt anhand des im SuperAdmin-Backend gesetzten Sandbox-Schalters automatisch den
+passenden Schlüssel. Danach API und Worker neu erstellen. In der Auftragsansicht erscheint für jedes
 freizustellende Foto die Schaltfläche `Photoroom testen`. Original, remove.bg und Photoroom werden
 nebeneinander angezeigt. In dieser ersten Teststufe nutzt Photoroom einen weichen KI-Schatten,
 aber bewusst kein generatives Relighting, damit Fahrzeugfarbe und Details unverändert bleiben.

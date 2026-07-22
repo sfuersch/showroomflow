@@ -517,12 +517,14 @@ def remove_vehicle_background(
 
 
 def _photoroom_api_key(settings: Settings, sandbox: bool | None = None) -> str:
-    if not settings.photoroom_api_key:
-        raise ImageProcessingError("Photoroom ist nicht konfiguriert")
     use_sandbox = settings.photoroom_sandbox if sandbox is None else sandbox
-    if use_sandbox and not settings.photoroom_api_key.startswith("sandbox_"):
-        return f"sandbox_{settings.photoroom_api_key}"
-    return settings.photoroom_api_key
+    key = settings.photoroom_key_for(sandbox=use_sandbox)
+    if not key:
+        environment_name = "Sandbox" if use_sandbox else "Live-Betrieb"
+        raise ImageProcessingError(
+            f"Photoroom ist für den {environment_name} nicht konfiguriert"
+        )
+    return key
 
 
 def measure_vehicle_contour(cutout_png_bytes: bytes) -> VehicleContour:

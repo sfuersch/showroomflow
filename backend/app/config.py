@@ -35,7 +35,10 @@ class Settings(BaseSettings):
     processing_queue: str = "showroomflow-processing"
     remove_bg_api_key: str | None = None
     remove_bg_size: Literal["preview", "auto", "full", "50MP"] = "preview"
+    # `photoroom_api_key` remains as a backwards-compatible transition path.
     photoroom_api_key: str | None = None
+    photoroom_live_api_key: str | None = None
+    photoroom_sandbox_api_key: str | None = None
     photoroom_sandbox: bool = True
     output_width: int = Field(default=1920, ge=640, le=7680)
     output_height: int = Field(default=1440, ge=480, le=4320)
@@ -46,7 +49,27 @@ class Settings(BaseSettings):
 
     @property
     def photoroom_enabled(self) -> bool:
-        return bool(self.photoroom_api_key)
+        return bool(
+            self.photoroom_live_api_key
+            or self.photoroom_sandbox_api_key
+            or self.photoroom_api_key
+        )
+
+    def photoroom_key_for(self, *, sandbox: bool) -> str | None:
+        """Select the explicit key for the requested Photoroom environment."""
+        if sandbox:
+            if self.photoroom_sandbox_api_key:
+                return self.photoroom_sandbox_api_key
+            if not self.photoroom_api_key:
+                return None
+            if self.photoroom_api_key.startswith("sandbox_"):
+                return self.photoroom_api_key
+            return f"sandbox_{self.photoroom_api_key}"
+        if self.photoroom_live_api_key:
+            return self.photoroom_live_api_key
+        if self.photoroom_api_key and not self.photoroom_api_key.startswith("sandbox_"):
+            return self.photoroom_api_key
+        return None
 
     @property
     def allowed_hosts_list(self) -> list[str]:

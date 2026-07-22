@@ -8,7 +8,8 @@
     <div class="section-heading"><div><h2>Bildverarbeitung</h2><p>API-Schlüssel bleiben geschützt in der VPS-Konfiguration.</p></div></div>
     <div class="service-status-grid">
         <div><span>remove.bg-Schlüssel</span><strong>{{ "Konfiguriert" if remove_bg_key_configured else "Fehlt" }}</strong></div>
-        <div><span>Photoroom-Schlüssel</span><strong>{{ ("Sandbox-Schlüssel" if photoroom_key_is_sandbox else "Konfiguriert") if photoroom_key_configured else "Fehlt" }}</strong></div>
+        <div><span>Photoroom Live-Schlüssel</span><strong>{{ "Konfiguriert" if photoroom_live_key_configured else "Fehlt" }}</strong></div>
+        <div><span>Photoroom Sandbox-Schlüssel</span><strong>{{ "Konfiguriert" if photoroom_sandbox_key_configured else "Fehlt" }}</strong></div>
         <div><span>Aktiver Dienst</span><strong>{{ image_settings.provider|replace('remove_bg', 'remove.bg')|capitalize }}</strong></div>
     </div>
     <form class="form-grid add-row" method="post" action="/admin/image-service">
@@ -32,7 +33,7 @@
             <input type="checkbox" name="comparison_mode_enabled" {% if image_settings.comparison_mode_enabled %}checked{% endif %}>
             <span><strong>Bildvergleiche aktivieren</strong><small>Zeigt zusätzliche Testvarianten in der Auftragsansicht. Bei Deaktivierung ist nur die reguläre Verarbeitung verfügbar.</small></span>
         </label>
-        {% if photoroom_key_is_sandbox %}<p class="muted span-2">Der VPS verwendet derzeit einen Sandbox-Schlüssel. Für Verkaufsbilder muss dort später ein Live-Schlüssel hinterlegt und die Sandbox hier deaktiviert werden.</p>{% endif %}
+        {% if image_settings.photoroom_sandbox and not photoroom_sandbox_key_configured %}<p class="muted span-2">Der Sandbox-Modus ist aktiv, aber es ist kein Sandbox-Schlüssel auf dem VPS hinterlegt.</p>{% elif not image_settings.photoroom_sandbox and not photoroom_live_key_configured %}<p class="muted span-2">Der Live-Modus ist aktiv, aber es ist kein Live-Schlüssel auf dem VPS hinterlegt.</p>{% endif %}
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Grundeinstellungen speichern</button></div>
     </form>
 </section>
