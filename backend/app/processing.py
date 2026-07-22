@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import math
@@ -25,7 +26,7 @@ from app.image_service import (
     photoroom_sandbox_active,
     provider_is_available,
 )
-from app.orientations import MASKED_BACKGROUND_MODES
+from app.orientations import MASKED_BACKGROUND_MODES, mask_prompt_defaults
 from app.models import (
     Background,
     BackgroundOrientationComposition,
@@ -43,8 +44,8 @@ from app.thumbnails import create_thumbnail, thumbnail_key
 
 logger = logging.getLogger(__name__)
 
-WINDOW_MASK_SEGMENTATION_PROMPT = "windshield, side window"
 MASK_REFINEMENT_MAX_DIMENSION = 1600
+OPENAI_MASK_MAX_DIMENSION = 1920
 
 
 class ImageProcessingError(RuntimeError):
@@ -165,6 +166,194 @@ class MaskedBackgroundProfile:
     steering_wheel_protection: bool = False
 
 
+def openai_semantic_mask_prompt(profile: MaskedBackgroundProfile) -> str:
+    """Build the visual annotation prompt used for deterministic local extraction."""
+    return f"""
+Create a pixel-aligned annotation of this exact photograph. Preserve the original
+resolution, crop, perspective and every image detail. Do not move, redraw, retouch,
+brighten or replace anything.
+
+Paint only the regions described below with a flat, fully opaque, uniform pure magenta
+#FF00FF overlay. The magenta overlay is a technical segmentation label, not a realistic
+edit. Every pixel outside the selected regions must remain identical to the input.
+
+SELECT: {profile.prompt}. Select only the exterior environment visible through glass
+or through a physical vehicle opening. Include every disconnected matching region,
+including small side-window and door-opening regions at an image edge.
+
+NEVER SELECT: {profile.negative_prompt}. Also preserve all vehicle structure and
+interior components, including A/B/C pillars, roof liner, dashboard, instrument
+cluster, steering wheel, seats, door panels, mirrors, window seals, frames, screens,
+controls and trim. Preserve reflections and glass edges; mark the view through the
+glass, not the surrounding vehicle parts.
+
+Return the annotated photograph only. Do not add text, legends, outlines or new
+objects.
+""".strip()
+
+
+def _openai_mask_working_image(original_bytes: bytes) -> tuple[bytes, tuple[int, int]]:
+    """Normalize a source photograph for an aligned, bounded-cost image edit request."""
+    try:
+        original = ImageOps.exif_transpose(Image.open(io.BytesIO(original_bytes))).convert("RGB")
+        original.load()
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Das Originalbild ist für die KI-Maske ungültig") from exc
+    scale = min(1.0, OPENAI_MASK_MAX_DIMENSION / max(original.size))
+    # GPT Image accepts dimensions divisible by 16. Round down so mask
+    # preparation never invents pixels or exceeds the working resolution.
+    width = max(16, int(original.width * scale) // 16 * 16)
+    height = max(16, int(original.height * scale) // 16 * 16)
+    working = original.resize((width, height), Image.Resampling.LANCZOS)
+    output = io.BytesIO()
+    working.save(output, format="PNG", optimize=True)
+    return output.getvalue(), original.size
+
+
+def extract_openai_magenta_mask(
+    original_working_bytes: bytes,
+    annotated_bytes: bytes,
+    *,
+    output_size: tuple[int, int],
+    profile: MaskedBackgroundProfile,
+) -> bytes:
+    """Convert only newly painted saturated magenta pixels into an alpha mask."""
+    try:
+        source = Image.open(io.BytesIO(original_working_bytes)).convert("RGB")
+        annotated = Image.open(io.BytesIO(annotated_bytes)).convert("RGB")
+        if annotated.size != source.size:
+            annotated = annotated.resize(source.size, Image.Resampling.LANCZOS)
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("OpenAI hat kein gültiges Maskenbild geliefert") from exc
+
+    source_array = np.asarray(source, dtype=np.int16)
+    result_array = np.asarray(annotated, dtype=np.int16)
+    red = result_array[:, :, 0]
+    green = result_array[:, :, 1]
+    blue = result_array[:, :, 2]
+    changed = np.max(np.abs(result_array - source_array), axis=2) >= 18
+    selected = (
+        (red >= 145)
+        & (blue >= 145)
+        & ((red - green) >= 55)
+        & ((blue - green) >= 55)
+        & changed
+    )
+    selected_u8 = selected.astype(np.uint8) * 255
+    close_radius = max(3, round(max(source.size) * 0.0035))
+    if close_radius % 2 == 0:
+        close_radius += 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_radius, close_radius))
+    selected_u8 = cv2.morphologyEx(selected_u8, cv2.MORPH_CLOSE, kernel)
+
+    # Discard isolated magenta details introduced by reflections or badges while
+    # retaining small, genuine edge-connected window/opening regions.
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(selected_u8, connectivity=8)
+    cleaned = np.zeros_like(selected_u8)
+    minimum_area = max(24, round(selected_u8.size * 0.00012))
+    for label in range(1, count):
+        if stats[label, cv2.CC_STAT_AREA] >= minimum_area:
+            cleaned[labels == label] = 255
+
+    fraction = float(np.count_nonzero(cleaned)) / cleaned.size
+    if fraction < profile.minimum_fraction:
+        raise ImageProcessingError("OpenAI hat keine ausreichende Maskenfläche erkannt")
+    if fraction > profile.maximum_fraction:
+        raise ImageProcessingError("OpenAI hat eine unplausibel große Maskenfläche erkannt")
+
+    alpha = Image.fromarray(cleaned, mode="L")
+    if alpha.size != output_size:
+        alpha = alpha.resize(output_size, Image.Resampling.LANCZOS)
+    mask = Image.new("RGBA", output_size, (255, 255, 255, 0))
+    mask.putalpha(alpha)
+    output = io.BytesIO()
+    mask.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def create_openai_semantic_mask(
+    original_bytes: bytes,
+    settings: Settings,
+    profile: MaskedBackgroundProfile,
+    *,
+    client: httpx.Client | None = None,
+    usage_context: ExternalApiUsageContext | None = None,
+) -> bytes:
+    """Ask GPT Image for a magenta semantic overlay and extract it locally as a mask."""
+    if not settings.openai_api_key:
+        raise ImageProcessingError("Kein OpenAI-Schlüssel für KI-Masken konfiguriert")
+    working_bytes, original_size = _openai_mask_working_image(original_bytes)
+    with Image.open(io.BytesIO(working_bytes)) as working:
+        working_size = working.size
+    request = client.post if client is not None else httpx.post
+    started = time.perf_counter()
+    try:
+        response = request(
+            "https://api.openai.com/v1/images/edits",
+            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            files={"image": ("source.png", working_bytes, "image/png")},
+            data={
+                "model": settings.openai_mask_model,
+                "prompt": openai_semantic_mask_prompt(profile),
+                "size": f"{working_size[0]}x{working_size[1]}",
+                "quality": "high",
+                "output_format": "png",
+                "n": "1",
+            },
+            timeout=settings.openai_mask_timeout_seconds,
+        )
+    except httpx.HTTPError as exc:
+        record_external_api_usage(
+            usage_context,
+            provider="openai",
+            operation="semantic_mask",
+            sandbox=False,
+            outcome="network_error",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            error_message=str(exc),
+        )
+        raise ImageProcessingError("OpenAI ist für die Maskenerzeugung nicht erreichbar") from exc
+    record_external_api_usage(
+        usage_context,
+        provider="openai",
+        operation="semantic_mask",
+        sandbox=False,
+        outcome=(
+            "success"
+            if response.status_code == 200
+            else "throttled"
+            if response.status_code == 429
+            else "error"
+        ),
+        http_status=response.status_code,
+        duration_ms=round((time.perf_counter() - started) * 1000),
+        error_message=None if response.status_code == 200 else response.text,
+    )
+    if response.status_code != 200:
+        detail = response.text.replace("\n", " ")[:300]
+        raise ImageProcessingError(
+            f"OpenAI-Maskenerzeugung fehlgeschlagen (HTTP {response.status_code}): {detail}"
+        )
+    try:
+        encoded = response.json()["data"][0]["b64_json"]
+        annotated_bytes = base64.b64decode(encoded, validate=True)
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ImageProcessingError("OpenAI hat keine auswertbare KI-Maske geliefert") from exc
+    mask = extract_openai_magenta_mask(
+        working_bytes,
+        annotated_bytes,
+        output_size=original_size,
+        profile=profile,
+    )
+    # The model supplies semantic understanding; local edge refinement snaps
+    # its broad magenta annotation back to the unchanged source photograph.
+    return refine_manual_background_mask(
+        original_bytes,
+        mask,
+        boundary_radius_percent=0.006,
+    )
+
+
 def refine_manual_background_mask(
     original_bytes: bytes,
     mask_png_bytes: bytes,
@@ -258,71 +447,50 @@ def refine_manual_background_mask(
 
 
 def masked_background_profile(
-    orientation_key: str, processing_mode: str
+    orientation_key: str,
+    processing_mode: str,
+    *,
+    custom_prompt: str | None = None,
+    custom_negative_prompt: str | None = None,
 ) -> MaskedBackgroundProfile:
     """Describe the semantic area that may reveal the configured showroom."""
+    default_prompt, default_negative_prompt = mask_prompt_defaults(
+        orientation_key, processing_mode
+    )
     if orientation_key == "steering-wheel":
-        return MaskedBackgroundProfile(
-            prompt=WINDOW_MASK_SEGMENTATION_PROMPT,
-            negative_prompt=(
-                "steering wheel, dashboard, instrument cluster, A-pillar, "
-                "door frame, mirror"
-            ),
+        profile = MaskedBackgroundProfile(
+            prompt=default_prompt,
+            negative_prompt=default_negative_prompt,
             minimum_fraction=0.02,
             maximum_fraction=0.75,
             steering_wheel_protection=True,
         )
-    if processing_mode == "opening_background":
-        prompts = {
-            "trunk-open": (
-                "outdoor background visible around the vehicle and through the open "
-                "trunk opening"
-            ),
-            "driver-entry": (
-                "outdoor background and ground visible through the open driver door"
-            ),
-            "driver-door": (
-                "window glass, outdoor background and ground visible around the driver door"
-            ),
-            "passenger-entry": (
-                "outdoor background and ground visible through the open passenger door"
-            ),
-            "passenger-door": (
-                "window glass, outdoor background and ground visible around the passenger door"
-            ),
-            "driver-door-open": (
-                "outdoor background and ground visible around and through the open driver door"
-            ),
-            "passenger-door-open": (
-                "outdoor background and ground visible around and through the open passenger door"
-            ),
-        }
-        return MaskedBackgroundProfile(
-            prompt=prompts.get(
-                orientation_key,
-                "outdoor background visible through the open vehicle door",
-            ),
-            negative_prompt=(
-                "vehicle body, open door, open tailgate, cargo area, seats, dashboard, "
-                "pillars, trim, mirrors"
-            ),
+    elif processing_mode == "opening_background":
+        profile = MaskedBackgroundProfile(
+            prompt=default_prompt,
+            negative_prompt=default_negative_prompt,
             minimum_fraction=0.004,
             maximum_fraction=0.88,
         )
-    prompts = {
-        "front-interior": "windshield and side window glass",
-        "rear-row-driver": "side window and rear window glass",
-        "rear-row-passenger": "side window and rear window glass",
-        "panoramic-roof": "panoramic glass roof and window glass",
-    }
-    return MaskedBackgroundProfile(
-        prompt=prompts.get(orientation_key, WINDOW_MASK_SEGMENTATION_PROMPT),
-        negative_prompt=(
-            "dashboard, seats, steering wheel, instrument cluster, pillars, door frame, "
-            "mirrors, interior trim"
+    else:
+        profile = MaskedBackgroundProfile(
+            prompt=default_prompt,
+            negative_prompt=default_negative_prompt,
+            minimum_fraction=0.003,
+            maximum_fraction=0.68,
+        )
+    return replace(
+        profile,
+        prompt=(
+            custom_prompt.strip()
+            if custom_prompt and custom_prompt.strip()
+            else profile.prompt
         ),
-        minimum_fraction=0.003,
-        maximum_fraction=0.68,
+        negative_prompt=(
+            f"{profile.negative_prompt}, {custom_negative_prompt.strip()}"
+            if custom_negative_prompt and custom_negative_prompt.strip()
+            else profile.negative_prompt
+        ),
     )
 
 
@@ -673,6 +841,46 @@ def create_photoroom_cutout(
     output = io.BytesIO()
     result.save(output, format="PNG", optimize=True)
     return output.getvalue()
+
+
+def create_automatic_background_mask(
+    original_bytes: bytes,
+    settings: Settings,
+    profile: MaskedBackgroundProfile,
+    *,
+    photoroom_sandbox: bool,
+    client: httpx.Client | None = None,
+    usage_context: ExternalApiUsageContext | None = None,
+) -> tuple[bytes, bool]:
+    """Prefer the semantic OpenAI mask while retaining the proven provider fallback."""
+    if settings.openai_mask_enabled:
+        try:
+            return (
+                create_openai_semantic_mask(
+                    original_bytes,
+                    settings,
+                    profile,
+                    client=client,
+                    usage_context=usage_context,
+                ),
+                True,
+            )
+        except ImageProcessingError:
+            logger.exception(
+                "OpenAI semantic mask was rejected; falling back to Photoroom"
+            )
+    return (
+        create_photoroom_cutout(
+            original_bytes,
+            settings,
+            photoroom_sandbox,
+            segmentation_prompt=profile.prompt,
+            segmentation_negative_prompt=profile.negative_prompt,
+            client=client,
+            usage_context=usage_context,
+        ),
+        False,
+    )
 
 
 def create_photoroom_showroom(
@@ -1536,8 +1744,14 @@ def process_photo(photo_id: str) -> None:
                         "Die maskierte Hintergrundverarbeitung benötigt Photoroom"
                     )
                 profile = masked_background_profile(
-                    orientation.key if orientation else "", processing_mode
+                    orientation.key if orientation else "",
+                    processing_mode,
+                    custom_prompt=orientation.mask_prompt if orientation else None,
+                    custom_negative_prompt=(
+                        orientation.mask_negative_prompt if orientation else None
+                    ),
                 )
+                used_openai_mask = False
                 if photo.window_mask_is_manual and photo.window_mask_object_key:
                     window_mask = storage.get_object(
                         object_key=photo.window_mask_object_key
@@ -1574,12 +1788,13 @@ def process_photo(photo_id: str) -> None:
                             # expensive full-resolution GrabCut pass.
                             db.commit()
                 else:
-                    window_mask = create_photoroom_cutout(
+                    window_mask, used_openai_mask = create_automatic_background_mask(
                         original,
                         settings,
-                        photoroom_sandbox_active(image_settings, settings),
-                        segmentation_prompt=profile.prompt,
-                        segmentation_negative_prompt=profile.negative_prompt,
+                        profile,
+                        photoroom_sandbox=photoroom_sandbox_active(
+                            image_settings, settings
+                        ),
                         usage_context=usage_context,
                     )
                     mask_key = (
@@ -1633,18 +1848,31 @@ def process_photo(photo_id: str) -> None:
                     photo.quality_review_resolution = "awaiting_operator_approval"
                 else:
                     was_waiting_for_review = photo.quality_review_required
-                    photo.quality_review_required = (
+                    photo.quality_review_required = bool(
                         window_result.quality_review_required
+                        or (used_openai_mask and settings.openai_mask_review_all)
                     )
-                    photo.quality_review_reason = window_result.quality_review_reason
-                    photo.quality_score = 55 if window_result.quality_review_required else 100
+                    photo.quality_review_reason = (
+                        window_result.quality_review_reason
+                        or (
+                            "Die neue KI-Maske wartet während der Qualitätserprobung "
+                            "auf die Operator-Freigabe."
+                            if used_openai_mask and settings.openai_mask_review_all
+                            else None
+                        )
+                    )
+                    photo.quality_score = 55 if photo.quality_review_required else 100
                     photo.quality_issues = (
-                        [window_result.quality_review_reason]
-                        if window_result.quality_review_reason
+                        [photo.quality_review_reason]
+                        if photo.quality_review_reason
                         else []
                     )
-                    photo.quality_model_version = "masked-background-rules-v2"
-                    if window_result.quality_review_required:
+                    photo.quality_model_version = (
+                        "openai-semantic-mask-pilot-v1"
+                        if used_openai_mask
+                        else "masked-background-rules-v2"
+                    )
+                    if photo.quality_review_required:
                         if not was_waiting_for_review:
                             photo.quality_review_created_at = datetime.now(timezone.utc)
                         photo.quality_reviewed_by_id = None
@@ -1929,19 +2157,23 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                 and orientation.processing_mode in MASKED_BACKGROUND_MODES
             ):
                 profile = masked_background_profile(
-                    orientation.key, orientation.processing_mode
+                    orientation.key,
+                    orientation.processing_mode,
+                    custom_prompt=orientation.mask_prompt,
+                    custom_negative_prompt=orientation.mask_negative_prompt,
                 )
                 if photo.window_mask_is_manual and photo.window_mask_object_key:
                     window_mask = storage.get_object(
                         object_key=photo.window_mask_object_key
                     )
                 else:
-                    window_mask = create_photoroom_cutout(
+                    window_mask, _ = create_automatic_background_mask(
                         original,
                         settings,
-                        photoroom_sandbox_active(image_settings, settings),
-                        segmentation_prompt=profile.prompt,
-                        segmentation_negative_prompt=profile.negative_prompt,
+                        profile,
+                        photoroom_sandbox=photoroom_sandbox_active(
+                            image_settings, settings
+                        ),
                         usage_context=usage_context,
                     )
                 compose_mask = (

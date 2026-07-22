@@ -65,6 +65,7 @@ from app.orientations import (
     STANDARD_ORIENTATIONS,
     default_silhouette_path,
     instance_name,
+    mask_prompt_defaults,
 )
 from app.processing_queue import (
     ProcessingQueueUnavailable,
@@ -712,6 +713,7 @@ def external_api_usage_page(
                 "background_removal": "Freistellung",
                 "contour_cutout": "Konturerkennung",
                 "guided_segmentation": "Geführte Maskierung",
+                "semantic_mask": "Semantische KI-Maske",
                 "showroom_composition": "Showroom-Komposition",
             },
         ),
@@ -1295,7 +1297,11 @@ def orientations_page(
         for category in ("exterior", "interior", "detail", "special")
     ]
     silhouette_previews = {}
+    mask_prompt_system_defaults = {}
     for orientation in orientations:
+        mask_prompt_system_defaults[orientation.id] = mask_prompt_defaults(
+            orientation.key, orientation.processing_mode
+        )
         if orientation.silhouette_object_key:
             silhouette_previews[orientation.id] = storage.create_download_url(
                 object_key=orientation.silhouette_object_key
@@ -1315,6 +1321,7 @@ def orientations_page(
             orientations=orientations,
             orientation_groups=orientation_groups,
             silhouette_previews=silhouette_previews,
+            mask_prompt_system_defaults=mask_prompt_system_defaults,
         ),
     )
 
@@ -1330,6 +1337,8 @@ async def create_orientation(
     default_export_order: int | None = Form(default=None),
     is_required: str | None = Form(default=None),
     processing_mode: str = Form(default="original"),
+    mask_prompt: str = Form(default=""),
+    mask_negative_prompt: str = Form(default=""),
     is_repeatable: str | None = Form(default=None),
     default_instance_count: int = Form(default=1),
     max_instances: int = Form(default=1),
@@ -1347,6 +1356,8 @@ async def create_orientation(
         or not name.strip()
         or category not in ORIENTATION_CATEGORIES
         or processing_mode not in PROCESSING_MODES
+        or len(mask_prompt) > 4000
+        or len(mask_negative_prompt) > 4000
         or default_capture_order < 1
         or (default_export_order is not None and default_export_order < 1)
         or default_instance_count < 1
@@ -1368,6 +1379,8 @@ async def create_orientation(
             is_required=is_required == "on",
             requires_processing=processing_mode in PROCESSING_REQUIRED_MODES,
             processing_mode=processing_mode,
+            mask_prompt=mask_prompt.strip() or None,
+            mask_negative_prompt=mask_negative_prompt.strip() or None,
             is_repeatable=is_repeatable == "on",
             default_instance_count=default_instance_count,
             max_instances=max_instances if is_repeatable == "on" else 1,
@@ -1403,6 +1416,8 @@ async def update_orientation(
     default_export_order: int | None = Form(default=None),
     is_required: str | None = Form(default=None),
     processing_mode: str = Form(default="original"),
+    mask_prompt: str = Form(default=""),
+    mask_negative_prompt: str = Form(default=""),
     is_repeatable: str | None = Form(default=None),
     default_instance_count: int = Form(default=1),
     max_instances: int = Form(default=1),
@@ -1423,6 +1438,8 @@ async def update_orientation(
         not name.strip()
         or category not in ORIENTATION_CATEGORIES
         or processing_mode not in PROCESSING_MODES
+        or len(mask_prompt) > 4000
+        or len(mask_negative_prompt) > 4000
         or default_capture_order < 1
         or (default_export_order is not None and default_export_order < 1)
         or default_instance_count < 1
@@ -1439,6 +1456,8 @@ async def update_orientation(
         orientation.default_export_order = default_export_order
         orientation.is_required = is_required == "on"
         orientation.processing_mode = processing_mode
+        orientation.mask_prompt = mask_prompt.strip() or None
+        orientation.mask_negative_prompt = mask_negative_prompt.strip() or None
         orientation.requires_processing = processing_mode in PROCESSING_REQUIRED_MODES
         orientation.is_repeatable = is_repeatable == "on"
         orientation.default_instance_count = default_instance_count

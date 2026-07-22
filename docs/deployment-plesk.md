@@ -177,6 +177,33 @@ Dienstleisternamen werden in der Auftragsansicht nicht angezeigt. Original und `
 bei aktivem Vergleichsmodus über das Download-Symbol mit einem eindeutigen Dateinamen geladen
 werden.
 
+### Semantische KI-Masken erproben
+
+Für Fotos mit Scheiben- oder Öffnungshintergrund kann ShowroomFlow zunächst GPT Image um eine
+pixelgleiche magentafarbene Bereichsmarkierung bitten. Das System gewinnt daraus lokal die technische Maske
+und verfeinert deren Kante am unveränderten Original. Unplausible, leere oder nicht verfügbare
+KI-Ergebnisse fallen automatisch auf die bestehende Photoroom-Maskierung zurück.
+
+Der Pilot wird über VPS-Secrets aktiviert; der API-Schlüssel wird niemals im Backend angezeigt:
+
+```dotenv
+SHOWROOMFLOW_OPENAI_MASK_ENABLED=true
+SHOWROOMFLOW_OPENAI_API_KEY=<OpenAI-API-Schlüssel>
+SHOWROOMFLOW_OPENAI_MASK_MODEL=gpt-image-2
+SHOWROOMFLOW_OPENAI_MASK_TIMEOUT_SECONDS=240
+SHOWROOMFLOW_OPENAI_MASK_REVIEW_ALL=true
+```
+
+Mit `SHOWROOMFLOW_OPENAI_MASK_REVIEW_ALL=true` landet jedes auf dieser Weise erzeugte Ergebnis
+vor Export und Freigabe in der Operator-Prüfung. Das sollte während der Qualitätserprobung aktiv
+bleiben. Die kostenpflichtigen Maskenaufrufe erscheinen im SuperAdmin-Kostendashboard als
+`Semantische KI-Maske`.
+
+Im zentralen Orientierungskatalog kann der Superadmin je Perspektive zusätzlich beschreiben,
+welche Bildbereiche maskiert und welche Details besonders geschützt werden müssen. Leere Felder
+verwenden weiterhin die Systemvorgaben. Der Schutzprompt ergänzt die festen Sicherheitsregeln; er
+ersetzt sie nicht.
+
 ## Foto-Thumbnails
 
 Ab Migration `0015_photo_thumbnails` werden für neue Originale, optimierte Ergebnisse und

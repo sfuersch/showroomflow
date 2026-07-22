@@ -839,6 +839,56 @@ def test_system_admin_sees_grouped_orientation_catalog_with_default_silhouettes(
     assert "System-Silhouette" in response.text
     assert 'value="window_background"' in response.text
     assert "Scheibenhintergrund" in response.text
+    assert "KI-Maskenprompt" in response.text
+    assert "KI-Schutzprompt" in response.text
+
+
+def test_system_admin_updates_orientation_mask_prompts() -> None:
+    create_system_admin()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    page = client.get("/admin/orientations")
+    with TestingSession() as db:
+        orientation = db.scalar(
+            select(Orientation).where(Orientation.key == "steering-wheel")
+        )
+        assert orientation is not None
+        orientation_id = orientation.id
+
+    response = client.post(
+        f"/admin/orientations/{orientation_id}",
+        data={
+            "name": "Lenkrad",
+            "instruction": "Lenkrad mittig aufnehmen.",
+            "category": "interior",
+            "default_capture_order": "12",
+            "default_export_order": "12",
+            "is_required": "on",
+            "processing_mode": "window_background",
+            "mask_prompt": "nur der Außenbereich hinter der Frontscheibe",
+            "mask_negative_prompt": "Head-up-Display vollständig schützen",
+            "default_instance_count": "1",
+            "max_instances": "1",
+            "is_active": "on",
+            "csrf_token": csrf_from(page.text),
+        },
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert "Orientierung wurde gespeichert" in response.text
+    with TestingSession() as db:
+        updated = db.get(Orientation, orientation_id)
+        assert updated is not None
+        assert updated.mask_prompt == "nur der Außenbereich hinter der Frontscheibe"
+        assert updated.mask_negative_prompt == "Head-up-Display vollständig schützen"
 
 
 def test_admin_form_rejects_invalid_csrf_token() -> None:

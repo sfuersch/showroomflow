@@ -11,6 +11,62 @@ PROCESSING_MODES = {
 PROCESSING_REQUIRED_MODES = {"optimized", "window_background", "opening_background"}
 MASKED_BACKGROUND_MODES = {"window_background", "opening_background"}
 ORIENTATION_CATEGORIES = {"exterior", "interior", "detail", "special"}
+WINDOW_MASK_PROMPT = "windshield, side window"
+
+
+def mask_prompt_defaults(orientation_key: str, processing_mode: str) -> tuple[str, str]:
+    """Return the visible system defaults for semantic mask selection and protection."""
+    if orientation_key == "steering-wheel":
+        return (
+            WINDOW_MASK_PROMPT,
+            "steering wheel, dashboard, instrument cluster, A-pillar, door frame, mirror",
+        )
+    if processing_mode == "opening_background":
+        prompts = {
+            "trunk-open": (
+                "outdoor background visible around the vehicle and through the open "
+                "trunk opening"
+            ),
+            "driver-entry": "outdoor background and ground visible through the open driver door",
+            "driver-door": (
+                "window glass, outdoor background and ground visible around the driver door"
+            ),
+            "passenger-entry": (
+                "outdoor background and ground visible through the open passenger door"
+            ),
+            "passenger-door": (
+                "window glass, outdoor background and ground visible around the passenger door"
+            ),
+            "driver-door-open": (
+                "outdoor background and ground visible around and through the open driver door"
+            ),
+            "passenger-door-open": (
+                "outdoor background and ground visible around and through the open passenger door"
+            ),
+        }
+        return (
+            prompts.get(
+                orientation_key,
+                "outdoor background visible through the open vehicle door",
+            ),
+            (
+                "vehicle body, open door, open tailgate, cargo area, seats, dashboard, "
+                "pillars, trim, mirrors"
+            ),
+        )
+    prompts = {
+        "front-interior": "windshield and side window glass",
+        "rear-row-driver": "side window and rear window glass",
+        "rear-row-passenger": "side window and rear window glass",
+        "panoramic-roof": "panoramic glass roof and window glass",
+    }
+    return (
+        prompts.get(orientation_key, WINDOW_MASK_PROMPT),
+        (
+            "dashboard, seats, steering wheel, instrument cluster, pillars, door frame, "
+            "mirrors, interior trim"
+        ),
+    )
 
 
 @dataclass(frozen=True)
