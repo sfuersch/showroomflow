@@ -2113,6 +2113,7 @@ def test_manual_mask_refinement_is_queued_instead_of_running_in_http_request(
     dealership, user = create_dealership_admin()
     create_system_admin()
     queued_photos: list[uuid.UUID] = []
+    review_notifications: list[uuid.UUID] = []
     monkeypatch.setattr(
         "app.admin.enqueue_photo_processing",
         lambda photo_id: queued_photos.append(photo_id),
@@ -2168,11 +2169,23 @@ def test_manual_mask_refinement_is_queued_instead_of_running_in_http_request(
             is_selected=True,
             window_mask_object_key="masks/automatic.png",
             quality_review_required=True,
+            quality_review_created_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            processed_object_key="processed/previous-result.jpg",
+            processed_thumbnail_object_key="processed/previous-result.thumbnail.jpg",
             processing_status=ProcessingStatus.COMPLETED,
         )
         db.add(photo)
         db.commit()
         photo_id = photo.id
+
+    monkeypatch.setattr(
+        "app.quality_review_events.get_settings",
+        lambda: type("PushSettings", (), {"web_push_enabled": True})(),
+    )
+    monkeypatch.setattr(
+        "app.processing_queue.enqueue_quality_review_notification",
+        lambda photo_id: review_notifications.append(photo_id),
+    )
 
     client.cookies.clear()
     login_page = client.get("/admin/login")
@@ -2203,6 +2216,7 @@ def test_manual_mask_refinement_is_queued_instead_of_running_in_http_request(
             headers={"Accept": "application/json"},
             follow_redirects=False,
         )
+        quality_page = client.get("/admin/quality-reviews")
     finally:
         app.dependency_overrides.pop(get_object_storage, None)
 
@@ -2212,11 +2226,18 @@ def test_manual_mask_refinement_is_queued_instead_of_running_in_http_request(
         "redirect": "/admin/quality-reviews",
     }
     assert queued_photos == [photo_id]
+    assert review_notifications == []
+    assert "Korrigiertes Ergebnis wird erstellt" in quality_page.text
+    assert "previous-result.thumbnail.jpg" not in quality_page.text
     with TestingSession() as db:
         saved_photo = db.get(PhotoAsset, photo_id)
         assert saved_photo is not None
         assert saved_photo.window_mask_is_manual is True
         assert saved_photo.window_mask_refine_edges is True
+        assert saved_photo.window_mask_object_key is not None
+        assert "window-mask-manual-" in saved_photo.window_mask_object_key
+        assert saved_photo.window_mask_object_key != "masks/automatic.png"
+        assert saved_photo.quality_review_created_at == datetime(2026, 7, 1)
         assert saved_photo.processing_status == ProcessingStatus.QUEUED
         assert saved_photo.quality_review_resolution == "correction_processing"
 

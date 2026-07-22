@@ -31,7 +31,7 @@
     </div>
     <div class="quality-comparison">
         <a href="{{ item.original_full_url }}" target="_blank" rel="noopener"><img src="{{ item.original_url }}" loading="lazy" decoding="async" alt="Original"><span>Original</span></a>
-        {% if item.processed_url %}<a href="{{ item.processed_full_url }}" target="_blank" rel="noopener"><img src="{{ item.processed_url }}" loading="lazy" decoding="async" alt="Optimiertes Ergebnis"><span>Optimiertes Ergebnis</span></a>{% else %}<div class="photo-placeholder"><span>Noch kein Ergebnis</span></div>{% endif %}
+        {% if item.processed_url %}<a href="{{ item.processed_full_url }}" target="_blank" rel="noopener"><img src="{{ item.processed_url }}" loading="lazy" decoding="async" alt="Optimiertes Ergebnis"><span>Optimiertes Ergebnis</span></a>{% else %}<div class="photo-placeholder"><span>{% if item.photo.processing_status.value in ['queued', 'processing'] %}Korrigiertes Ergebnis wird erstellt …{% else %}Noch kein Ergebnis{% endif %}</span></div>{% endif %}
     </div>
     <div class="quality-diagnostics">
         <strong>Automatische Prüfung{% if item.photo.quality_score is not none %} · {{ item.photo.quality_score }}/100{% endif %}</strong>
