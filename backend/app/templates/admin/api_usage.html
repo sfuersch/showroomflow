@@ -1,0 +1,70 @@
+{% extends "admin/base.html" %}
+{% block title %}API-Auswertung{% endblock %}
+{% block content %}
+<div class="page-heading">
+    <div>
+        <span class="eyebrow">SuperAdmin · Kostenkontrolle</span>
+        <h1>Externe Bilddienst-Aufrufe</h1>
+        <p class="muted">Gezählt werden ausschließlich tatsächlich gesendete Anfragen an externe Bildanbieter. Sandbox-Aufrufe sind separat ausgewiesen.</p>
+    </div>
+</div>
+
+<section class="card section-card api-filter-card">
+    <form class="api-filter-form" method="get" action="/admin/api-usage">
+        <label>Von<input type="date" name="date_from" value="{{ date_from }}" required></label>
+        <label>Bis<input type="date" name="date_to" value="{{ date_to }}" required></label>
+        <label>Autohaus
+            <select name="dealership_id">
+                <option value="">Alle Autohäuser</option>
+                {% for dealership in dealerships %}
+                <option value="{{ dealership.id }}" {% if selected_dealership_id == dealership.id %}selected{% endif %}>{{ dealership.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button class="button button-primary" type="submit">Auswerten</button>
+    </form>
+</section>
+
+<section class="api-kpi-grid">
+    <article class="card api-kpi"><span>Kostenrelevante Aufrufe</span><strong>{{ paid_calls }}</strong><small>Sandbox nicht enthalten</small></article>
+    <article class="card api-kpi"><span>Verarbeitete Fahrzeuge</span><strong>{{ vehicle_count }}</strong><small>Ø {{ average_calls_per_vehicle }} Aufrufe je Fahrzeug</small></article>
+    <article class="card api-kpi"><span>Erfolgreich</span><strong>{{ successful_calls }}</strong><small>{{ failed_calls }} fehlgeschlagen · {{ throttled_calls }} limitiert</small></article>
+    <article class="card api-kpi"><span>Testaufrufe</span><strong>{{ sandbox_calls }}</strong><small>Sandbox, nicht kostenrelevant</small></article>
+</section>
+
+<section class="card section-card">
+    <div class="section-heading"><div><h2>Nach Autohaus</h2><p class="muted">Kostenrelevante Produktionsaufrufe im gewählten Zeitraum.</p></div></div>
+    <div class="table-scroll"><table class="api-table">
+        <thead><tr><th>Autohaus</th><th>Fahrzeuge</th><th>Aufrufe</th><th>Erfolgreich</th><th>Fehlerquote</th></tr></thead>
+        <tbody>
+        {% for row in dealership_rows %}
+        <tr><td>{{ row.name }}</td><td>{{ row.vehicles }}</td><td><strong>{{ row.calls }}</strong></td><td>{{ row.successes }}</td><td>{{ ((row.calls - row.successes) * 100 / row.calls)|round(1) }} %</td></tr>
+        {% else %}<tr><td colspan="5" class="muted">Im gewählten Zeitraum liegen keine kostenrelevanten Aufrufe vor.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+</section>
+
+<section class="card section-card">
+    <div class="section-heading"><div><h2>Nach Fahrzeug</h2><p class="muted">Bis zu 100 Fahrzeuge mit den meisten Provider-Aufrufen.</p></div></div>
+    <div class="table-scroll"><table class="api-table">
+        <thead><tr><th>Fahrzeug</th><th>Autohaus</th><th>Aufrufe</th><th>Erfolgreich</th><th>Limitiert</th><th>Letzter Aufruf</th></tr></thead>
+        <tbody>
+        {% for row in vehicle_rows %}
+        <tr><td><a href="/admin/dealerships/{{ row.dealership_id }}/jobs">{{ row.vin }} · V{{ row.version }}</a></td><td>{{ row.dealership_name }}</td><td><strong>{{ row.calls }}</strong></td><td>{{ row.successes }}</td><td>{{ row.throttled }}</td><td>{{ row.last_call.strftime('%d.%m.%Y %H:%M') if row.last_call else '–' }}</td></tr>
+        {% else %}<tr><td colspan="6" class="muted">Keine Fahrzeuge im gewählten Zeitraum.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+</section>
+
+<section class="card section-card">
+    <div class="section-heading"><div><h2>Nach Verarbeitungsschritt</h2><p class="muted">Damit wird sichtbar, welche Funktionen die meisten externen Aufrufe verursachen. Durchschnittliche Antwortzeit: {{ average_duration_ms }} ms.</p></div></div>
+    <div class="table-scroll"><table class="api-table">
+        <thead><tr><th>Dienst</th><th>Verarbeitung</th><th>Aufrufe</th><th>Erfolgreich</th><th>Ø Dauer</th></tr></thead>
+        <tbody>
+        {% for row in operation_rows %}
+        <tr><td>{{ row.provider }}</td><td>{{ operation_names.get(row.operation, row.operation) }}</td><td><strong>{{ row.calls }}</strong></td><td>{{ row.successes }}</td><td>{{ (row.average_duration / 1000)|round(1) }} s</td></tr>
+        {% else %}<tr><td colspan="5" class="muted">Keine Verarbeitungsschritte im gewählten Zeitraum.</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+</section>
+{% endblock %}

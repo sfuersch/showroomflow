@@ -26,6 +26,10 @@
 </section>
 
 {% if current_user.role.value == "system_admin" %}
+<a class="card configuration-link" href="/admin/api-usage">
+    <div><span class="eyebrow">Kostenkontrolle</span><h2>Externe API-Aufrufe</h2><p>Kostenrelevante Bilddienst-Aufrufe nach Zeitraum, Autohaus und Fahrzeug auswerten.</p></div>
+    <span class="button button-primary">Auswertung öffnen</span>
+</a>
 <a class="card configuration-link" href="/admin/image-service">
     <div><span class="eyebrow">Systemkonfiguration</span><h2>Bilddienstleister und Credits</h2><p>Standardanbieter, Betriebsmodus und Monatskontingente verwalten.</p></div>
     <span class="button button-primary">Einstellungen öffnen</span>
