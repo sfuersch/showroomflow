@@ -438,6 +438,7 @@ class PhotoAsset(Timestamped, Base):
     )
     window_mask_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     window_mask_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    window_mask_refine_edges: Mapped[bool] = mapped_column(Boolean, default=False)
     window_background_shift_percent: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )

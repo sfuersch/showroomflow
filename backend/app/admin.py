@@ -74,7 +74,6 @@ from app.processing_queue import (
     enqueue_quality_review_notification,
     enqueue_vehicle_export,
 )
-from app.processing import ImageProcessingError, refine_manual_background_mask
 from app.security import hash_password, verify_password
 from app.sftp_transfer import (
     SftpConfigurationError,
@@ -2588,14 +2587,6 @@ def save_window_correction(
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     mask_content = output.getvalue()
-    if refine_edges:
-        try:
-            mask_content = refine_manual_background_mask(
-                storage.get_object(object_key=photo.original_object_key),
-                mask_content,
-            )
-        except ImageProcessingError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
     mask_key = (
         f"dealerships/{job.dealership_id}/jobs/{job.id}/"
         f"photos/{photo.id}/window-mask-manual.png"
@@ -2607,6 +2598,9 @@ def save_window_correction(
     )
     photo.window_mask_object_key = mask_key
     photo.window_mask_is_manual = True
+    # GrabCut is deliberately deferred to the image worker. Running it in this
+    # request can exceed the reverse-proxy timeout for full-resolution photos.
+    photo.window_mask_refine_edges = refine_edges
     photo.window_background_shift_percent = background_shift_percent
     photo.quality_review_required = True
     photo.quality_review_reason = (
@@ -2630,7 +2624,10 @@ def save_window_correction(
         _flash(request, "Die Korrektur konnte nicht verarbeitet werden.", "error")
     else:
         _flash(request, "Die Korrektur wird jetzt neu verarbeitet.")
-    return RedirectResponse("/admin/quality-reviews", status_code=status.HTTP_303_SEE_OTHER)
+    redirect_url = "/admin/quality-reviews"
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"status": "queued", "redirect": redirect_url})
+    return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/jobs/{job_id}/exports")
