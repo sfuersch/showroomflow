@@ -1611,7 +1611,9 @@ def apply_image_overlays(image_bytes: bytes, layers: list[OverlayLayer]) -> byte
         if alpha_box is None:
             raise ImageProcessingError("Ein Overlay enthält keine sichtbaren Pixel")
         overlay = overlay.crop(alpha_box)
-        target_width = max(1, round(canvas.width * max(5, min(60, layer.width_percent)) / 100))
+        target_width = max(
+            1, round(canvas.width * max(5, min(100, layer.width_percent)) / 100)
+        )
         scale = target_width / overlay.width
         target_size = (target_width, max(1, round(overlay.height * scale)))
         max_height = max(1, canvas.height - 2 * margin)
@@ -1625,13 +1627,21 @@ def apply_image_overlays(image_bytes: bytes, layers: list[OverlayLayer]) -> byte
                 overlay.getchannel("A").point(lambda value: round(value * opacity / 100))
             )
 
+        horizontal_margin = min(margin, max(0, canvas.width - overlay.width))
+        vertical_margin = min(margin, max(0, canvas.height - overlay.height))
         positions = {
-            "top_left": (margin, margin),
-            "top_right": (canvas.width - overlay.width - margin, margin),
-            "bottom_left": (margin, canvas.height - overlay.height - margin),
+            "top_left": (horizontal_margin, vertical_margin),
+            "top_right": (
+                canvas.width - overlay.width - horizontal_margin,
+                vertical_margin,
+            ),
+            "bottom_left": (
+                horizontal_margin,
+                canvas.height - overlay.height - vertical_margin,
+            ),
             "bottom_right": (
-                canvas.width - overlay.width - margin,
-                canvas.height - overlay.height - margin,
+                canvas.width - overlay.width - horizontal_margin,
+                canvas.height - overlay.height - vertical_margin,
             ),
             "center": (
                 (canvas.width - overlay.width) // 2,
