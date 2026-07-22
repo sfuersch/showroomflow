@@ -44,6 +44,7 @@ from app.thumbnails import create_thumbnail, thumbnail_key
 logger = logging.getLogger(__name__)
 
 WINDOW_MASK_SEGMENTATION_PROMPT = "windshield, side window"
+MASK_REFINEMENT_MAX_DIMENSION = 1600
 
 
 class ImageProcessingError(RuntimeError):
@@ -177,13 +178,27 @@ def refine_manual_background_mask(
     can be cleaned up without removing remote pillars, trim or controls.
     """
     try:
-        original = ImageOps.exif_transpose(
-            Image.open(io.BytesIO(original_bytes))
-        ).convert("RGB")
-        source_mask = Image.open(io.BytesIO(mask_png_bytes)).convert("RGBA")
-        alpha = source_mask.getchannel("A")
-        if alpha.size != original.size:
-            alpha = alpha.resize(original.size, Image.Resampling.LANCZOS)
+        with Image.open(io.BytesIO(original_bytes)) as opened_original:
+            oriented_original = ImageOps.exif_transpose(opened_original)
+            original_size = oriented_original.size
+            scale = min(
+                1.0,
+                MASK_REFINEMENT_MAX_DIMENSION / max(original_size),
+            )
+            working_size = (
+                max(1, round(original_size[0] * scale)),
+                max(1, round(original_size[1] * scale)),
+            )
+            if working_size != original_size:
+                original = oriented_original.resize(
+                    working_size, Image.Resampling.LANCZOS
+                ).convert("RGB")
+            else:
+                original = oriented_original.convert("RGB")
+        with Image.open(io.BytesIO(mask_png_bytes)) as source_mask:
+            alpha = source_mask.convert("RGBA").getchannel("A")
+            if alpha.size != working_size:
+                alpha = alpha.resize(working_size, Image.Resampling.LANCZOS)
     except (OSError, ValueError) as exc:
         raise ImageProcessingError("Die Maskenkante konnte nicht verfeinert werden") from exc
 
@@ -233,7 +248,9 @@ def refine_manual_background_mask(
             refined_alpha = Image.fromarray((refined.astype(np.uint8) * 255), mode="L")
             refined_alpha = refined_alpha.filter(ImageFilter.GaussianBlur(0.8))
 
-    output_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    if refined_alpha.size != original_size:
+        refined_alpha = refined_alpha.resize(original_size, Image.Resampling.LANCZOS)
+    output_mask = Image.new("RGBA", original_size, (255, 255, 255, 0))
     output_mask.putalpha(refined_alpha)
     output = io.BytesIO()
     output_mask.save(output, format="PNG", optimize=True)

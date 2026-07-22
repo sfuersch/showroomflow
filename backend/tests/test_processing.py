@@ -506,6 +506,27 @@ def test_manual_mask_refinement_cannot_change_pixels_outside_boundary_band() -> 
     assert alpha.getpixel((190, 90)) == 255
 
 
+def test_manual_mask_refinement_limits_grabcut_working_resolution(monkeypatch) -> None:
+    original = Image.new("RGB", (2400, 1600), "navy")
+    rough_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(rough_mask).rectangle((1100, 0, 2399, 1599), fill="white")
+    observed_sizes: list[tuple[int, int]] = []
+
+    def record_grabcut_size(image, *_args, **_kwargs) -> None:
+        observed_sizes.append((image.shape[1], image.shape[0]))
+
+    monkeypatch.setattr("app.processing.cv2.grabCut", record_grabcut_size)
+
+    refined = refine_manual_background_mask(
+        image_bytes(original, "JPEG"),
+        image_bytes(rough_mask, "PNG"),
+    )
+
+    assert observed_sizes
+    assert max(observed_sizes[0]) == 1600
+    assert Image.open(io.BytesIO(refined)).size == original.size
+
+
 def test_window_background_reports_suspicious_protected_overlap() -> None:
     original = Image.new("RGB", (800, 600), (230, 20, 20))
     window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
