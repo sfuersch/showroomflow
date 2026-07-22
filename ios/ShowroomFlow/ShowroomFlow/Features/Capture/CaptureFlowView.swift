@@ -207,11 +207,20 @@ struct CaptureFlowView: View {
             }
             .shadow(color: .black.opacity(0.42), radius: 18, y: 10)
             .overlay(alignment: .top) {
-                VStack(spacing: 5) {
+                VStack(spacing: 6) {
                     Text(step.name)
                         .font(.headline)
-                    Text("\(currentIndex + 1) von \(data.captureSteps.count)")
-                        .font(.caption.bold())
+                    HStack(spacing: 8) {
+                        Text("\(currentIndex + 1) von \(data.captureSteps.count)")
+                        Divider()
+                            .frame(height: 12)
+                            .overlay(.white.opacity(0.35))
+                        Text(job.vin)
+                            .font(.caption.monospaced().bold())
+                            .lineLimit(1)
+                        Text("V\(job.version)")
+                    }
+                    .font(.caption.bold())
                     if step.usesScenePrototype {
                         Label("Szenenmessung", systemImage: "view.3d")
                             .font(.caption2.bold())
@@ -229,20 +238,15 @@ struct CaptureFlowView: View {
                     Text(step.instruction)
                         .font(.subheadline.bold())
                         .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: .capsule)
+                        .frame(maxWidth: width - 48)
+                        .background(.ultraThinMaterial, in: .rect(cornerRadius: 12))
                         .padding(10)
                 }
-            }
-            .overlay(alignment: .bottomLeading) {
-                Text("\(job.vin) · V\(job.version)")
-                    .font(.caption.monospaced().bold())
-                    .foregroundStyle(.white)
-                    .padding(8)
-                    .background(.ultraThinMaterial, in: .rect(cornerRadius: 9))
-                    .padding(10)
             }
             .overlay(alignment: .bottomTrailing) {
                 if let errorMessage {

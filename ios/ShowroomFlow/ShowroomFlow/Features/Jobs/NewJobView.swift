@@ -270,78 +270,98 @@ private struct VINScannerView: View {
     let onError: (String) -> Void
 
     var body: some View {
-        ZStack {
-            VINDataScanner(
-                onRecognized: onRecognized,
-                onError: onError
-            )
-            .ignoresSafeArea()
+        GeometryReader { proxy in
+            let scanFrame = VINScanLayout.scanFrame(in: proxy.size)
 
-            VStack {
-                HStack(spacing: 12) {
-                    Button(action: onCancel) {
-                        Label("Zurück", systemImage: "chevron.left")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .frame(height: 46)
-                            .background(.ultraThinMaterial, in: .capsule)
-                    }
-
-                    Spacer()
-
-                    HStack(spacing: 9) {
-                        ShowroomFlowBrandMark(size: 34)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("VIN scannen")
-                                .font(.subheadline.bold())
-                            Text("Nummer in den Rahmen halten")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.72))
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 13)
-                    .frame(height: 50)
-                    .background(.ultraThinMaterial, in: .capsule)
-                }
-                .padding()
-
-                Spacer()
+            ZStack {
+                VINDataScanner(
+                    scanRegion: scanFrame,
+                    onRecognized: onRecognized,
+                    onError: onError
+                )
 
                 RoundedRectangle(cornerRadius: 18)
                     .stroke(
                         Color.mint,
                         style: StrokeStyle(lineWidth: 3, dash: [14, 8])
                     )
-                    .frame(maxWidth: 520, maxHeight: 118)
+                    .frame(width: scanFrame.width, height: scanFrame.height)
                     .overlay {
                         Image(systemName: "viewfinder")
                             .font(.system(size: 48, weight: .light))
                             .foregroundStyle(.mint.opacity(0.9))
                     }
                     .shadow(color: .black.opacity(0.55), radius: 10)
-                    .padding(.horizontal, 28)
+                    .position(x: scanFrame.midX, y: scanFrame.midY)
+                    .allowsHitTesting(false)
 
-                Spacer()
+                VStack {
+                    HStack(spacing: 12) {
+                        Button(action: onCancel) {
+                            Label("Zurück", systemImage: "chevron.left")
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 16)
+                                .frame(height: 46)
+                                .background(.ultraThinMaterial, in: .capsule)
+                        }
 
-                Label(
-                    "Eine erkannte Fahrgestellnummer antippen",
-                    systemImage: "hand.tap.fill"
-                )
-                .font(.subheadline.bold())
-                .foregroundStyle(.white)
-                .padding(.horizontal, 18)
-                .frame(height: 48)
-                .background(.ultraThinMaterial, in: .capsule)
-                .padding(.bottom, 28)
+                        Spacer()
+
+                        HStack(spacing: 9) {
+                            ShowroomFlowBrandMark(size: 34)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("VIN scannen")
+                                    .font(.subheadline.bold())
+                                Text("Nummer vollständig in den Rahmen halten")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.72))
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 13)
+                        .frame(height: 50)
+                        .background(.ultraThinMaterial, in: .capsule)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, proxy.safeAreaInsets.top + 8)
+
+                    Spacer()
+
+                    Label(
+                        "Erkennung nur innerhalb des Rahmens",
+                        systemImage: "viewfinder.circle"
+                    )
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+                    .frame(height: 48)
+                    .background(.ultraThinMaterial, in: .capsule)
+                    .padding(.bottom, proxy.safeAreaInsets.bottom + 20)
+                }
             }
         }
+        .ignoresSafeArea()
         .background(.black)
     }
 }
 
+private enum VINScanLayout {
+    static func scanFrame(in size: CGSize) -> CGRect {
+        let horizontalMargin: CGFloat = 28
+        let width = min(max(size.width - horizontalMargin * 2, 220), 520)
+        let height = min(max(width * 0.23, 92), 118)
+        return CGRect(
+            x: (size.width - width) / 2,
+            y: (size.height - height) / 2,
+            width: width,
+            height: height
+        )
+    }
+}
+
 private struct VINDataScanner: UIViewControllerRepresentable {
+    let scanRegion: CGRect
     let onRecognized: (String) -> Void
     let onError: (String) -> Void
 
@@ -360,6 +380,7 @@ private struct VINDataScanner: UIViewControllerRepresentable {
             isHighlightingEnabled: true
         )
         scanner.delegate = context.coordinator
+        context.coordinator.update(scanRegion: scanRegion, on: scanner)
         do {
             try scanner.startScanning()
         } catch {
@@ -373,7 +394,9 @@ private struct VINDataScanner: UIViewControllerRepresentable {
     func updateUIViewController(
         _ uiViewController: DataScannerViewController,
         context: Context
-    ) {}
+    ) {
+        context.coordinator.update(scanRegion: scanRegion, on: uiViewController)
+    }
 
     static func dismantleUIViewController(
         _ uiViewController: DataScannerViewController,
@@ -388,6 +411,11 @@ private struct VINDataScanner: UIViewControllerRepresentable {
 
         init(onRecognized: @escaping (String) -> Void) {
             self.onRecognized = onRecognized
+        }
+
+        func update(scanRegion: CGRect, on scanner: DataScannerViewController) {
+            guard scanRegion.width > 0, scanRegion.height > 0 else { return }
+            scanner.regionOfInterest = scanRegion
         }
 
         func dataScanner(
