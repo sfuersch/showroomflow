@@ -96,3 +96,28 @@ def test_multiple_supplemental_images_keep_their_selected_positions() -> None:
         (4, "Garantie"),
         (5, "Heck"),
     ]
+
+
+def test_photos_skip_fixed_supplemental_positions_five_and_ten() -> None:
+    arranged = arrange_export_items(
+        [ExportItem(index, f"Foto {index}", f"photo-{index}") for index in range(1, 11)],
+        [
+            ExportItem(5, "Zusatzbild 5", "supplemental-5"),
+            ExportItem(10, "Zusatzbild 10", "supplemental-10"),
+        ],
+    )
+
+    assert [(item.order, item.name) for item in arranged] == [
+        (1, "Foto 1"),
+        (2, "Foto 2"),
+        (3, "Foto 3"),
+        (4, "Foto 4"),
+        (5, "Zusatzbild 5"),
+        (6, "Foto 5"),
+        (7, "Foto 6"),
+        (8, "Foto 7"),
+        (9, "Foto 8"),
+        (10, "Zusatzbild 10"),
+        (11, "Foto 9"),
+        (12, "Foto 10"),
+    ]

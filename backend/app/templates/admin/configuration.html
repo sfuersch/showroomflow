@@ -116,7 +116,15 @@
         </section>
         <section class="sequence-panel">
             <div class="sequence-heading"><div><span class="eyebrow">ZIP-Export</span><h3>Foto-Reihenfolge</h3></div><span class="sequence-hint">Unabhängig von der App</span></div>
-            <ol class="sequence-list" data-sequence="export" aria-label="Reihenfolge der Fotos im Export"></ol>
+            <ol class="sequence-list" data-sequence="export" aria-label="Reihenfolge der Fotos im Export">
+                {% for item in supplemental_images if item.is_active %}
+                <li class="sequence-item sequence-item-fixed" data-fixed-export-position="{{ item.export_order }}">
+                    <strong class="sequence-position">{{ item.export_order }}</strong>
+                    <span class="sequence-label">{{ item.name }}</span>
+                    <span class="sequence-fixed-label" title="Die Position dieses Zusatzbildes wird im Bereich Zusatzbilder festgelegt.">🔒 Zusatzbild</span>
+                </li>
+                {% endfor %}
+            </ol>
             <p class="muted sequence-note">Aktive Zusatzbilder belegen ihren fest gewählten ZIP-Platz. Die Fotos überspringen diese Plätze automatisch.</p>
         </section>
     </div>
@@ -151,6 +159,7 @@
         capture: form.querySelector('[data-sequence="capture"]'),
         export: form.querySelector('[data-sequence="export"]')
     };
+    const fixedExportItems = [...lists.export.querySelectorAll("[data-fixed-export-position]")];
 
     const countFor = row => Math.max(1, Number(row.querySelector('[name="instance_counts"]').value) || 1);
     const isEligible = (row, type) => {
@@ -161,6 +170,10 @@
     const hiddenOrder = (row, type) => row.querySelector(type === "capture" ? "[data-capture-order]" : "[data-export-order]");
 
     function updatePositions(type) {
+        if (type === "export") {
+            updateExportPositions();
+            return;
+        }
         let position = 1;
         const listedIDs = new Set();
         [...lists[type].children].forEach((item, index, all) => {
@@ -179,6 +192,55 @@
         rows.filter(row => !listedIDs.has(row.dataset.orientationId)).forEach(row => {
             if (type === "export") hiddenOrder(row, type).value = "";
             row.querySelector(type === "capture" ? "[data-app-position]" : "[data-export-position]").textContent = `${type === "capture" ? "App" : "Export"} –`;
+        });
+    }
+
+    function updateExportPositions() {
+        const photoItems = [...lists.export.children].filter(item => item.dataset.orientationId);
+        const fixedByPosition = new Map(
+            fixedExportItems.map(item => [Number(item.dataset.fixedExportPosition), item])
+        );
+        const listedIDs = new Set();
+        let position = 1;
+
+        photoItems.forEach(item => {
+            const row = rows.find(candidate => candidate.dataset.orientationId === item.dataset.orientationId);
+            const count = countFor(row);
+            const occupiedPositions = [];
+            while (occupiedPositions.length < count) {
+                if (!fixedByPosition.has(position)) occupiedPositions.push(position);
+                position += 1;
+            }
+            const first = occupiedPositions[0];
+            const consecutive = occupiedPositions.every(
+                (value, index) => index === 0 || value === occupiedPositions[index - 1] + 1
+            );
+            const label = count === 1
+                ? `${first}`
+                : consecutive
+                    ? `${first}–${occupiedPositions[occupiedPositions.length - 1]}`
+                    : occupiedPositions.join(", ");
+            item.dataset.firstExportPosition = `${first}`;
+            item.querySelector("[data-position]").textContent = label;
+            hiddenOrder(row, "export").value = first;
+            row.querySelector("[data-export-position]").textContent = `Export ${label}`;
+            listedIDs.add(row.dataset.orientationId);
+        });
+
+        const arranged = [...photoItems, ...fixedExportItems].sort((left, right) => {
+            const leftPosition = Number(left.dataset.fixedExportPosition || left.dataset.firstExportPosition);
+            const rightPosition = Number(right.dataset.fixedExportPosition || right.dataset.firstExportPosition);
+            return leftPosition - rightPosition;
+        });
+        lists.export.replaceChildren(...arranged);
+        const movableItems = [...lists.export.children].filter(item => item.dataset.orientationId);
+        movableItems.forEach((item, index) => {
+            item.querySelector('[data-move="up"]').disabled = index === 0;
+            item.querySelector('[data-move="down"]').disabled = index === movableItems.length - 1;
+        });
+        rows.filter(row => !listedIDs.has(row.dataset.orientationId)).forEach(row => {
+            hiddenOrder(row, "export").value = "";
+            row.querySelector("[data-export-position]").textContent = "Export –";
         });
     }
 
@@ -202,10 +264,12 @@
             button.textContent = symbol;
             button.setAttribute("aria-label", `${row.dataset.orientationName}: ${aria}`);
             button.addEventListener("click", () => {
-                if (direction === "up" && item.previousElementSibling) {
-                    lists[type].insertBefore(item, item.previousElementSibling);
-                } else if (direction === "down" && item.nextElementSibling) {
-                    lists[type].insertBefore(item.nextElementSibling, item);
+                const movableItems = [...lists[type].children].filter(candidate => candidate.dataset.orientationId);
+                const index = movableItems.indexOf(item);
+                if (direction === "up" && index > 0) {
+                    movableItems[index - 1].before(item);
+                } else if (direction === "down" && index < movableItems.length - 1) {
+                    movableItems[index + 1].after(item);
                 }
                 updatePositions(type);
             });

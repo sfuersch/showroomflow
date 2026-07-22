@@ -174,6 +174,9 @@ input[type="checkbox"] { width: 18px; min-height: 18px; accent-color: var(--bran
 .sequence-position { min-width: 34px; height: 34px; display: grid; place-items: center; padding: 0 4px; border-radius: 9px; background: var(--brand-soft); color: var(--brand-dark); font-size: .78rem; }
 .sequence-label { overflow: hidden; font-size: .85rem; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
 .sequence-controls { display: flex; gap: 5px; }
+.sequence-item-fixed { border-style: dashed; border-color: #b7bdca; background: #f2f4f8; }
+.sequence-item-fixed .sequence-position { background: #e4e7ed; color: #4b5565; }
+.sequence-fixed-label { color: #667085; font-size: .72rem; font-weight: 700; white-space: nowrap; }
 .sequence-button { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #cfd4df; border-radius: 8px; background: white; color: var(--brand); cursor: pointer; font: 700 .72rem/1 inherit; }
 .sequence-button:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-soft); }
 .sequence-button:disabled { cursor: default; opacity: .28; }
