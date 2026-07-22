@@ -15,7 +15,8 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Die Vorschau reagiert sofort. Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der markierten Fläche.</small></label>
         <label class="checkbox-row"><input type="checkbox" name="refine_edges" value="true" checked><span><strong>Kanten automatisch verfeinern</strong><small>Richtet den gemalten Rand innerhalb eines schmalen Sicherheitsbereichs an sichtbaren Bildkanten aus. Geschützte Flächen außerhalb dieses Bereichs bleiben unverändert.</small></span></label>
-        <div class="form-actions"><a class="button button-secondary" href="/admin/quality-reviews">Abbrechen</a><button class="button button-primary" type="submit">Korrektur speichern und neu verarbeiten</button></div>
+        <p id="correction-submit-status" class="muted" role="status" aria-live="polite"></p>
+        <div class="form-actions"><a class="button button-secondary" href="/admin/quality-reviews">Abbrechen</a><button class="button button-primary" id="correction-submit" type="submit">Korrektur speichern und neu verarbeiten</button></div>
     </form>
 </section>
 <script>
@@ -209,11 +210,31 @@
     });
     document.getElementById('correction-form').addEventListener('submit', event => {
         event.preventDefault();
+        const submitButton = document.getElementById('correction-submit');
+        const submitStatus = document.getElementById('correction-submit-status');
+        submitButton.disabled = true;
+        submitStatus.textContent = 'Korrektur wird gespeichert …';
         maskCanvas.toBlob(blob => {
             const data = new FormData(event.target);
             data.append('mask', blob, 'hintergrundmaske.png');
-            fetch(event.target.action, {method: 'POST', body: data, redirect: 'follow'})
-                .then(response => { window.location.href = response.url; });
+            fetch(event.target.action, {
+                method: 'POST',
+                body: data,
+                headers: {'Accept': 'application/json'}
+            })
+                .then(async response => {
+                    if (!response.ok) {
+                        const message = await response.text();
+                        throw new Error(message || `HTTP ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(payload => { window.location.assign(payload.redirect); })
+                .catch(error => {
+                    console.error(error);
+                    submitButton.disabled = false;
+                    submitStatus.textContent = 'Die Korrektur konnte nicht gespeichert werden. Bitte erneut versuchen.';
+                });
         }, 'image/png');
     });
 })();

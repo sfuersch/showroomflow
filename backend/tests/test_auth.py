@@ -6,7 +6,7 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image
+from PIL import Image, ImageDraw
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -2105,6 +2105,120 @@ def test_dealership_admin_can_only_submit_processed_photo_for_improvement() -> N
         assert submitted_photo.quality_review_resolution == "requested_by_dealership"
         assert submitted_photo.quality_review_created_at is not None
         assert submitted_job.status == JobStatus.REVIEW_REQUIRED
+
+
+def test_manual_mask_refinement_is_queued_instead_of_running_in_http_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dealership, user = create_dealership_admin()
+    create_system_admin()
+    queued_photos: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        "app.admin.enqueue_photo_processing",
+        lambda photo_id: queued_photos.append(photo_id),
+    )
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        orientation = Orientation(
+            key="driver-entry",
+            name="Einstieg Fahrer",
+            instruction="Seitlichen Einblick aufnehmen",
+            category="interior",
+            default_capture_order=1,
+            default_export_order=1,
+            processing_mode="opening_background",
+            requires_processing=True,
+        )
+        db.add_all([location, orientation])
+        db.flush()
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            orientation_id=orientation.id,
+            name="Einstieg Fahrer",
+            instruction="Seitlichen Einblick aufnehmen",
+            category="interior",
+            capture_order=1,
+            export_order=1,
+            is_required=True,
+            requires_processing=True,
+        )
+        db.add(step)
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=user.id,
+            vin="ASYNC-MASK-VIN",
+            version=1,
+            brand="Ford",
+            status=JobStatus.REVIEW_REQUIRED,
+        )
+        db.add(job)
+        db.flush()
+        photo = PhotoAsset(
+            vehicle_job_id=job.id,
+            capture_step_id=step.id,
+            captured_by_id=user.id,
+            revision=1,
+            original_object_key="originals/async-mask.jpg",
+            original_content_type="image/jpeg",
+            expected_size_bytes=1234,
+            original_size_bytes=1234,
+            uploaded_at=datetime.now(timezone.utc),
+            is_selected=True,
+            window_mask_object_key="masks/automatic.png",
+            quality_review_required=True,
+            processing_status=ProcessingStatus.COMPLETED,
+        )
+        db.add(photo)
+        db.commit()
+        photo_id = photo.id
+
+    client.cookies.clear()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    correction_page = client.get(f"/admin/photos/{photo_id}/correction")
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    mask = Image.new("RGBA", (800, 600), (255, 255, 255, 0))
+    ImageDraw.Draw(mask).rectangle((200, 100, 600, 400), fill="white")
+    mask_output = io.BytesIO()
+    mask.save(mask_output, format="PNG")
+    try:
+        response = client.post(
+            f"/admin/photos/{photo_id}/correction",
+            data={
+                "csrf_token": csrf_from(correction_page.text),
+                "background_shift_percent": "18",
+                "refine_edges": "true",
+            },
+            files={"mask": ("mask.png", mask_output.getvalue(), "image/png")},
+            headers={"Accept": "application/json"},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "queued",
+        "redirect": "/admin/quality-reviews",
+    }
+    assert queued_photos == [photo_id]
+    with TestingSession() as db:
+        saved_photo = db.get(PhotoAsset, photo_id)
+        assert saved_photo is not None
+        assert saved_photo.window_mask_is_manual is True
+        assert saved_photo.window_mask_refine_edges is True
+        assert saved_photo.processing_status == ProcessingStatus.QUEUED
+        assert saved_photo.quality_review_resolution == "correction_processing"
 
 
 def test_auto_export_resumes_after_last_quality_review_is_approved(

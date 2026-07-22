@@ -561,6 +561,27 @@ def test_opening_mask_can_replace_ground_without_scaling_foreground() -> None:
     assert finished.getpixel((400, 500))[2] > 190
 
 
+def test_opening_background_reports_suspiciously_small_mask() -> None:
+    original = Image.new("RGB", (800, 600), "navy")
+    mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
+    ImageDraw.Draw(mask).rectangle((350, 250, 399, 299), fill="white")
+    background = Image.new("RGB", original.size, "white")
+    profile = masked_background_profile("driver-entry", "opening_background")
+
+    result = compose_background_through_mask(
+        image_bytes(original, "JPEG"),
+        image_bytes(mask, "PNG"),
+        image_bytes(background, "JPEG"),
+        Settings(output_width=800, output_height=600),
+        profile,
+        return_diagnostics=True,
+    )
+
+    assert isinstance(result, WindowCompositionResult)
+    assert result.quality_review_required is True
+    assert "Außenfläche ist ungewöhnlich klein" in result.quality_review_reason
+
+
 def test_open_trunk_uses_opening_profile_with_vehicle_protection_prompt() -> None:
     profile = masked_background_profile("trunk-open", "opening_background")
 

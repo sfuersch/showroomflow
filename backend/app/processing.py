@@ -1525,6 +1525,37 @@ def process_photo(photo_id: str) -> None:
                     window_mask = storage.get_object(
                         object_key=photo.window_mask_object_key
                     )
+                    if photo.window_mask_refine_edges:
+                        try:
+                            window_mask = refine_manual_background_mask(
+                                original,
+                                window_mask,
+                            )
+                        except ImageProcessingError:
+                            # Edge assistance must never discard a correction.
+                            # The operator mask remains the authoritative fallback.
+                            logger.exception(
+                                "Manual mask edge refinement failed for photo %s",
+                                photo.id,
+                            )
+                        else:
+                            refined_mask_key = (
+                                f"dealerships/{job.dealership_id}/jobs/{job.id}/"
+                                f"photos/{photo.id}/window-mask-manual-"
+                                f"a{photo.processing_attempts}.png"
+                            )
+                            storage.put_object(
+                                object_key=refined_mask_key,
+                                content=window_mask,
+                                content_type="image/png",
+                            )
+                            photo.window_mask_object_key = refined_mask_key
+                        finally:
+                            photo.window_mask_refine_edges = False
+                            # Persist the one-shot refinement before the remaining
+                            # composition work. A later failure must not repeat an
+                            # expensive full-resolution GrabCut pass.
+                            db.commit()
                 else:
                     window_mask = create_photoroom_cutout(
                         original,
@@ -1577,7 +1608,7 @@ def process_photo(photo_id: str) -> None:
                     )
                     photo.quality_score = 100
                     photo.quality_issues = []
-                    photo.quality_model_version = "window-rules-v1"
+                    photo.quality_model_version = "masked-background-rules-v2"
                     if photo.quality_review_created_at is None:
                         photo.quality_review_created_at = datetime.now(timezone.utc)
                     photo.quality_reviewed_by_id = None
@@ -1595,7 +1626,7 @@ def process_photo(photo_id: str) -> None:
                         if window_result.quality_review_reason
                         else []
                     )
-                    photo.quality_model_version = "window-rules-v1"
+                    photo.quality_model_version = "masked-background-rules-v2"
                     if window_result.quality_review_required:
                         if not was_waiting_for_review:
                             photo.quality_review_created_at = datetime.now(timezone.utc)
@@ -1748,7 +1779,7 @@ def process_photo(photo_id: str) -> None:
                     db.commit()
         return
     except ImageProcessingError as exc:
-        is_window_review = False
+        is_masked_background_review = False
         with SessionLocal() as db:
             photo = db.get(PhotoAsset, identifier)
             if photo is not None:
@@ -1758,22 +1789,22 @@ def process_photo(photo_id: str) -> None:
                     if step is not None and step.orientation_id is not None
                     else None
                 )
-                is_window_review = bool(
+                is_masked_background_review = bool(
                     orientation is not None
-                    and orientation.processing_mode == "window_background"
-                    and photo.window_mask_object_key
+                    and orientation.processing_mode in MASKED_BACKGROUND_MODES
                 )
                 photo.processing_status = ProcessingStatus.FAILED
                 photo.processing_error = str(exc)[:1000]
-                if is_window_review:
+                if is_masked_background_review:
                     photo.quality_review_required = True
                     photo.quality_review_reason = (
-                        "Die automatische Scheibenverarbeitung konnte kein sicheres Ergebnis "
+                        "Die automatische Scheiben- oder Öffnungserkennung konnte kein "
+                        "sicheres Ergebnis "
                         f"erzeugen: {exc}"
                     )[:1000]
                     photo.quality_score = 20
                     photo.quality_issues = [str(exc)[:500]]
-                    photo.quality_model_version = "window-rules-v1"
+                    photo.quality_model_version = "masked-background-rules-v2"
                     photo.quality_review_created_at = datetime.now(timezone.utc)
                     photo.quality_reviewed_by_id = None
                     photo.quality_reviewed_at = None
@@ -1782,7 +1813,7 @@ def process_photo(photo_id: str) -> None:
                 if job is not None:
                     job.status = JobStatus.REVIEW_REQUIRED
                 db.commit()
-        if is_window_review:
+        if is_masked_background_review:
             return
         raise
     except Exception as exc:
