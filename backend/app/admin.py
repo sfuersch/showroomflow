@@ -952,9 +952,11 @@ def image_service_page(request: Request, db: Session = Depends(get_db)):
             image_settings=image_settings,
             provider_available=provider_is_available(image_settings, runtime),
             remove_bg_key_configured=bool(runtime.remove_bg_api_key),
-            photoroom_key_configured=bool(runtime.photoroom_api_key),
-            photoroom_key_is_sandbox=bool(
-                runtime.photoroom_api_key and runtime.photoroom_api_key.startswith("sandbox_")
+            photoroom_live_key_configured=bool(
+                runtime.photoroom_key_for(sandbox=False)
+            ),
+            photoroom_sandbox_key_configured=bool(
+                runtime.photoroom_key_for(sandbox=True)
             ),
             dealerships=dealerships,
             credit_balances={

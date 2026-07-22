@@ -34,6 +34,24 @@ def test_photoroom_comparison_uses_sandbox_by_default() -> None:
     assert settings.photoroom_sandbox is True
 
 
+def test_photoroom_selects_separate_live_and_sandbox_keys() -> None:
+    settings = Settings(
+        photoroom_live_api_key="live-key",
+        photoroom_sandbox_api_key="sandbox-key",
+    )
+
+    assert settings.photoroom_enabled is True
+    assert settings.photoroom_key_for(sandbox=True) == "sandbox-key"
+    assert settings.photoroom_key_for(sandbox=False) == "live-key"
+
+
+def test_legacy_photoroom_key_remains_compatible() -> None:
+    settings = Settings(photoroom_api_key="legacy-key")
+
+    assert settings.photoroom_key_for(sandbox=True) == "sandbox_legacy-key"
+    assert settings.photoroom_key_for(sandbox=False) == "legacy-key"
+
+
 def test_production_rejects_placeholder_secrets() -> None:
     with pytest.raises(ValidationError):
         Settings(environment="production", secret_key="replace-with-an-insecure-placeholder-value")

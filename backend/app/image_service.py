@@ -77,7 +77,11 @@ def provider_is_available(image_settings: SystemImageSettings, runtime: Settings
     if image_settings.provider == "remove_bg":
         return bool(runtime.remove_bg_api_key)
     if image_settings.provider == "photoroom":
-        return bool(runtime.photoroom_api_key)
+        return bool(
+            runtime.photoroom_key_for(
+                sandbox=photoroom_sandbox_active(image_settings, runtime)
+            )
+        )
     return False
 
 
@@ -85,9 +89,9 @@ def photoroom_sandbox_active(
     image_settings: SystemImageSettings,
     runtime: Settings,
 ) -> bool:
-    return image_settings.photoroom_sandbox or bool(
-        runtime.photoroom_api_key and runtime.photoroom_api_key.startswith("sandbox_")
-    )
+    if runtime.photoroom_api_key and runtime.photoroom_api_key.startswith("sandbox_"):
+        return True
+    return image_settings.photoroom_sandbox
 
 
 def credit_balance(
