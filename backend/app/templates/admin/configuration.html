@@ -37,9 +37,10 @@
     <div class="background-grid">
         {% for background in backgrounds %}
         {% set background_overrides = composition_overrides_by_background.get(background.id, {}) %}
-        <form class="asset-card" method="post" action="/admin/backgrounds/{{ background.id }}">
+        <form class="asset-card" method="post" action="/admin/backgrounds/{{ background.id }}" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <img src="{{ background_previews[background.id] }}" alt="Vorschau {{ background.name }}">
+            <label>Hintergrundbild austauschen (optional)<input type="file" name="image" accept="image/png,image/jpeg"><small>PNG oder JPG, maximal 20 MB. Alle Zuordnungen und Kompositionseinstellungen bleiben erhalten.</small></label>
             <label>Name<input type="text" name="name" value="{{ background.name }}" maxlength="160" required></label>
             <label>Marke<select name="brand_id"><option value="">Alle Marken</option>{% for brand in brands %}<option value="{{ brand.id }}" {% if background.brand_id == brand.id %}selected{% endif %}>{{ brand.name }}</option>{% endfor %}</select></label>
             <fieldset class="choice-group"><legend>Standorte</legend>{% for location in locations %}<label class="toggle"><input type="checkbox" name="location_ids" value="{{ location.id }}" {% if location in background.locations %}checked{% endif %}><span>{{ location.name }}</span></label>{% endfor %}{% if not locations %}<span class="muted">Noch keine Standorte vorhanden.</span>{% endif %}</fieldset>

@@ -1311,6 +1311,81 @@ def test_system_admin_configures_background_defaults_and_orientation_override() 
         assert override.brightness_percent is None
 
 
+def test_system_admin_replaces_background_image_without_losing_configuration() -> None:
+    dealership, _ = create_dealership_admin()
+    create_system_admin()
+    with TestingSession() as db:
+        background = Background(
+            dealership_id=dealership.id,
+            name="Standard",
+            object_key="configuration/original-background.jpg",
+            content_type="image/jpeg",
+            contour_target_area_percent=38,
+            background_zoom_percent=112,
+        )
+        db.add(background)
+        db.commit()
+        background_id = background.id
+
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    try:
+        login_page = client.get("/admin/login")
+        client.post(
+            "/admin/login",
+            data={
+                "email": "system@example.com",
+                "password": "a-secure-system-password",
+                "csrf_token": csrf_from(login_page.text),
+            },
+        )
+        configuration_page = client.get(f"/admin/dealerships/{dealership.id}/configuration")
+        response = client.post(
+            f"/admin/backgrounds/{background_id}",
+            data={
+                "name": "Standard",
+                "contour_target_area_percent": "38",
+                "contour_max_width_percent": "78",
+                "contour_max_height_percent": "72",
+                "vehicle_bottom_percent": "90",
+                "shadow_opacity_percent": "32",
+                "reflection_opacity_percent": "10",
+                "brightness_percent": "100",
+                "background_zoom_percent": "112",
+                "background_offset_x_percent": "0",
+                "background_offset_y_percent": "0",
+                "window_background_shift_percent": "14",
+                "scene_horizon_percent": "43",
+                "scene_reference_vertical_degrees": "0",
+                "scene_perspective_strength_percent": "35",
+                "is_active": "on",
+                "csrf_token": csrf_from(configuration_page.text),
+            },
+            files={
+                "image": (
+                    "replacement.png",
+                    b"\x89PNG\r\n\x1a\nreplacement-content",
+                    "image/png",
+                )
+            },
+            follow_redirects=True,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert response.status_code == 200
+    assert "Hintergrundbild wurde ausgetauscht und gespeichert" in response.text
+    assert len(storage.uploads) == 1
+    assert storage.deleted_keys == ["configuration/original-background.jpg"]
+    with TestingSession() as db:
+        background = db.get(Background, background_id)
+        assert background is not None
+        assert background.object_key == storage.uploads[0]["object_key"]
+        assert background.content_type == "image/png"
+        assert background.contour_target_area_percent == 38
+        assert background.background_zoom_percent == 112
+
+
 def test_system_admin_manages_tenant_overlay_and_supplemental_image() -> None:
     dealership, _ = create_dealership_admin()
     create_system_admin()
