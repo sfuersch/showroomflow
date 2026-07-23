@@ -125,6 +125,37 @@ class VehicleContour:
 
 
 @dataclass(frozen=True)
+class VehicleFrame:
+    contour: VehicleContour
+    source_width: int
+    source_height: int
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    @property
+    def width_fraction(self) -> float:
+        return self.contour.width / self.source_width
+
+    @property
+    def height_fraction(self) -> float:
+        return self.contour.height / self.source_height
+
+    @property
+    def area_fraction(self) -> float:
+        return self.width_fraction * self.height_fraction
+
+    @property
+    def center_x_fraction(self) -> float:
+        return (self.left + self.right) / 2 / self.source_width
+
+    @property
+    def bottom_fraction(self) -> float:
+        return self.bottom / self.source_height
+
+
+@dataclass(frozen=True)
 class ContourFraming:
     width_fraction: float
     height_fraction: float
@@ -517,6 +548,18 @@ def resolve_background_composition(
 
 
 SCENE_TEST_ORIENTATIONS = frozenset({"front-left", "left", "rear-left", "rear"})
+EXTERIOR_ORIENTATIONS = frozenset(
+    {
+        "front",
+        "front-left",
+        "front-right",
+        "left",
+        "rear",
+        "rear-left",
+        "rear-right",
+        "right",
+    }
+)
 
 
 def calculate_scene_adjustment(options: CompositionOptions) -> SceneAdjustment:
@@ -714,6 +757,11 @@ def _photoroom_api_key(settings: Settings, sandbox: bool | None = None) -> str:
 
 def measure_vehicle_contour(cutout_png_bytes: bytes) -> VehicleContour:
     """Measure the visible subject while ignoring faint antialiasing and watermarks."""
+    return measure_vehicle_frame(cutout_png_bytes).contour
+
+
+def measure_vehicle_frame(cutout_png_bytes: bytes) -> VehicleFrame:
+    """Measure the subject and retain its position in the original image frame."""
     try:
         cutout = Image.open(io.BytesIO(cutout_png_bytes)).convert("RGBA")
     except (OSError, ValueError) as exc:
@@ -722,7 +770,15 @@ def measure_vehicle_contour(cutout_png_bytes: bytes) -> VehicleContour:
     box = solid_alpha.getbbox()
     if box is None:
         raise ImageProcessingError("Die Freistellung enthält keine messbare Fahrzeugkontur")
-    return VehicleContour(width=box[2] - box[0], height=box[3] - box[1])
+    return VehicleFrame(
+        contour=VehicleContour(width=box[2] - box[0], height=box[3] - box[1]),
+        source_width=cutout.width,
+        source_height=cutout.height,
+        left=box[0],
+        top=box[1],
+        right=box[2],
+        bottom=box[3],
+    )
 
 
 def calculate_contour_framing(
@@ -750,6 +806,41 @@ def calculate_contour_framing(
     return ContourFraming(
         width_fraction=width_fraction * limit,
         height_fraction=height_fraction * limit,
+    )
+
+
+def should_preserve_original_framing(
+    frame: VehicleFrame,
+    *,
+    options: CompositionOptions,
+    preferred_framing: ContourFraming,
+) -> bool:
+    """Keep a guided exterior photo unless its framing is clearly unsuitable."""
+    orientation_key = options.orientation_key.casefold().strip().replace("_", "-")
+    if orientation_key not in EXTERIOR_ORIENTATIONS:
+        return False
+
+    source_aspect = frame.source_width / max(1, frame.source_height)
+    output_aspect = options.width / max(1, options.height)
+    if abs(source_aspect / output_aspect - 1) > 0.05:
+        return False
+
+    preferred_area = preferred_framing.width_fraction * preferred_framing.height_fraction
+    area_ratio = frame.area_fraction / max(0.01, preferred_area)
+    max_width = max(0.40, min(0.95, options.contour_max_width_percent / 100))
+    max_height = max(0.40, min(0.90, options.contour_max_height_percent / 100))
+    target_bottom = max(0.55, min(0.98, options.vehicle_bottom_percent / 100))
+
+    return (
+        0.55 <= area_ratio <= 1.55
+        and frame.width_fraction <= max_width + 0.06
+        and frame.height_fraction <= max_height + 0.06
+        and abs(frame.center_x_fraction - 0.5) <= 0.12
+        and abs(frame.bottom_fraction - target_bottom) <= 0.12
+        and frame.left / frame.source_width >= 0.005
+        and frame.right / frame.source_width <= 0.995
+        and frame.top / frame.source_height >= 0.005
+        and frame.bottom_fraction <= 0.995
     )
 
 
@@ -917,7 +1008,8 @@ def create_photoroom_showroom(
         client=client,
         usage_context=usage_context,
     )
-    contour = measure_vehicle_contour(cutout)
+    frame = measure_vehicle_frame(cutout)
+    contour = frame.contour
     composition_options = CompositionOptions(
         width=settings.output_width,
         height=settings.output_height,
@@ -967,22 +1059,45 @@ def create_photoroom_showroom(
         max_width_percent=composition_options.contour_max_width_percent,
         max_height_percent=composition_options.contour_max_height_percent,
     )
-    horizontal_padding = max(0.02, (1 - framing.width_fraction) / 2)
-    bottom_padding = max(0.02, 1 - composition_options.vehicle_bottom_percent / 100)
-    top_padding = min(0.49, max(0.02, 1 - framing.height_fraction - bottom_padding))
+    preserve_original_framing = should_preserve_original_framing(
+        frame,
+        options=composition_options,
+        preferred_framing=framing,
+    )
     background_extension = "png" if background_content_type == "image/png" else "jpg"
     edit_options = {
         "removeBackground": "true",
         "background.color": "FFFFFF",
         "outputSize": f"{settings.output_width}x{settings.output_height}",
-        "paddingLeft": f"{horizontal_padding:.3f}",
-        "paddingRight": f"{horizontal_padding:.3f}",
-        "paddingTop": f"{top_padding:.3f}",
-        "paddingBottom": f"{bottom_padding:.3f}",
-        "horizontalAlignment": "center",
-        "verticalAlignment": "bottom",
         "export.format": "jpeg",
     }
+    if preserve_original_framing:
+        edit_options.update(
+            {
+                "referenceBox": "originalImage",
+                "padding": "0",
+            }
+        )
+    else:
+        horizontal_padding = max(0.02, (1 - framing.width_fraction) / 2)
+        bottom_padding = max(
+            0.02,
+            1 - composition_options.vehicle_bottom_percent / 100,
+        )
+        top_padding = min(
+            0.49,
+            max(0.02, 1 - framing.height_fraction - bottom_padding),
+        )
+        edit_options.update(
+            {
+                "paddingLeft": f"{horizontal_padding:.3f}",
+                "paddingRight": f"{horizontal_padding:.3f}",
+                "paddingTop": f"{top_padding:.3f}",
+                "paddingBottom": f"{bottom_padding:.3f}",
+                "horizontalAlignment": "center",
+                "verticalAlignment": "bottom",
+            }
+        )
     shadow_mode = photoroom_shadow_mode(shadow_opacity_percent)
     if shadow_mode is not None:
         # Photoroom derives tyre contact points and perspective. Its API exposes
@@ -1379,9 +1494,20 @@ def compose_showroom(
     ).getbbox()
     if alpha_box is None:
         raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
-    vehicle = vehicle.crop(alpha_box)
 
-    contour = VehicleContour(vehicle.width, vehicle.height)
+    frame = VehicleFrame(
+        contour=VehicleContour(
+            width=alpha_box[2] - alpha_box[0],
+            height=alpha_box[3] - alpha_box[1],
+        ),
+        source_width=vehicle.width,
+        source_height=vehicle.height,
+        left=alpha_box[0],
+        top=alpha_box[1],
+        right=alpha_box[2],
+        bottom=alpha_box[3],
+    )
+    contour = frame.contour
     perspective = infer_vehicle_perspective(
         options.capture_step_name,
         contour,
@@ -1389,18 +1515,6 @@ def compose_showroom(
     )
     options = perspective_composition_options(options, contour)
     scene_adjustment = calculate_scene_adjustment(options)
-    if abs(scene_adjustment.rotation_degrees) >= 0.05:
-        vehicle = vehicle.rotate(
-            scene_adjustment.rotation_degrees,
-            resample=Image.Resampling.BICUBIC,
-            expand=True,
-        )
-        rotated_box = vehicle.getchannel("A").point(
-            lambda value: 255 if value >= 128 else 0
-        ).getbbox()
-        if rotated_box is not None:
-            vehicle = vehicle.crop(rotated_box)
-            contour = VehicleContour(vehicle.width, vehicle.height)
     options = replace(
         options,
         contour_target_area_percent=round(
@@ -1418,23 +1532,66 @@ def compose_showroom(
         max_width_percent=options.contour_max_width_percent,
         max_height_percent=options.contour_max_height_percent,
     )
-    target_width = options.width * framing.width_fraction
-    target_height = options.height * framing.height_fraction
-    scale = min(target_width / vehicle.width, target_height / vehicle.height)
-    vehicle = vehicle.resize(
-        (max(1, int(vehicle.width * scale)), max(1, int(vehicle.height * scale))),
-        Image.Resampling.LANCZOS,
+    preserve_original_framing = should_preserve_original_framing(
+        frame,
+        options=options,
+        preferred_framing=framing,
     )
+    if preserve_original_framing:
+        vehicle = ImageOps.fit(
+            vehicle,
+            (options.width, options.height),
+            method=Image.Resampling.LANCZOS,
+        )
+        fitted_box = vehicle.getchannel("A").point(
+            lambda value: 255 if value >= 128 else 0
+        ).getbbox()
+        if fitted_box is None:
+            raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
+        x, y = fitted_box[0], fitted_box[1]
+        vehicle = vehicle.crop(fitted_box)
+        bottom = y + vehicle.height
+        scene_adjustment = SceneAdjustment()
+    else:
+        vehicle = vehicle.crop(alpha_box)
+        if abs(scene_adjustment.rotation_degrees) >= 0.05:
+            vehicle = vehicle.rotate(
+                scene_adjustment.rotation_degrees,
+                resample=Image.Resampling.BICUBIC,
+                expand=True,
+            )
+            rotated_box = vehicle.getchannel("A").point(
+                lambda value: 255 if value >= 128 else 0
+            ).getbbox()
+            if rotated_box is not None:
+                vehicle = vehicle.crop(rotated_box)
+        contour = VehicleContour(vehicle.width, vehicle.height)
+        framing = calculate_contour_framing(
+            contour,
+            output_width=options.width,
+            output_height=options.height,
+            target_area_percent=options.contour_target_area_percent,
+            max_width_percent=options.contour_max_width_percent,
+            max_height_percent=options.contour_max_height_percent,
+        )
+        target_width = options.width * framing.width_fraction
+        target_height = options.height * framing.height_fraction
+        scale = min(target_width / vehicle.width, target_height / vehicle.height)
+        vehicle = vehicle.resize(
+            (max(1, int(vehicle.width * scale)), max(1, int(vehicle.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+        x = (options.width - vehicle.width) // 2
+        bottom = int(
+            options.height * max(55, min(98, options.vehicle_bottom_percent)) / 100
+        )
+        y = bottom - vehicle.height
     if options.brightness_percent != 100:
         rgb = ImageEnhance.Brightness(vehicle.convert("RGB")).enhance(
             max(50, min(150, options.brightness_percent)) / 100
         )
         rgb.putalpha(vehicle.getchannel("A"))
         vehicle = rgb
-
-    x = (options.width - vehicle.width) // 2
-    bottom = int(options.height * max(55, min(98, options.vehicle_bottom_percent)) / 100)
-    y = bottom - vehicle.height
 
     reflection_opacity = max(0, min(60, options.reflection_opacity_percent))
     if reflection_opacity:
