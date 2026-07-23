@@ -68,6 +68,7 @@ from app.orientations import (
     instance_name,
     mask_prompt_defaults,
 )
+from app.processing import ImageProcessingError, measure_vehicle_frame
 from app.processing_queue import (
     ProcessingQueueUnavailable,
     enqueue_export_transfer,
@@ -86,7 +87,12 @@ from app.sftp_transfer import (
     test_sftp_connection,
     validate_settings as validate_sftp_settings,
 )
-from app.storage import ObjectStorage, StorageUnavailableError, get_object_storage
+from app.storage import (
+    ObjectStorage,
+    StorageObjectNotFoundError,
+    StorageUnavailableError,
+    get_object_storage,
+)
 from app.thumbnails import ThumbnailError, create_thumbnail, thumbnail_key
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
@@ -3096,6 +3102,104 @@ async def create_background(
     )
 
 
+@router.get(
+    "/backgrounds/{background_id}/orientation-previews/{orientation_id}",
+    response_class=JSONResponse,
+)
+def background_orientation_previews(
+    background_id: uuid.UUID,
+    orientation_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    background = db.get(Background, background_id)
+    orientation = db.get(Orientation, orientation_id)
+    if background is None or orientation is None:
+        raise HTTPException(status_code=404, detail="Vorschau wurde nicht gefunden")
+    _authorized_dealership(db, admin, background.dealership_id)
+
+    photos = list(
+        db.scalars(
+            select(PhotoAsset)
+            .join(CaptureStep, PhotoAsset.capture_step_id == CaptureStep.id)
+            .join(VehicleJob, PhotoAsset.vehicle_job_id == VehicleJob.id)
+            .where(
+                VehicleJob.dealership_id == background.dealership_id,
+                VehicleJob.background_id == background.id,
+                CaptureStep.orientation_id == orientation.id,
+                PhotoAsset.is_selected.is_(True),
+                PhotoAsset.preview_cutout_object_key.is_not(None),
+                PhotoAsset.processed_object_key.is_not(None),
+            )
+            .order_by(PhotoAsset.updated_at.desc())
+            .limit(6)
+        )
+    )
+    jobs = (
+        {
+            job.id: job
+            for job in db.scalars(
+                select(VehicleJob).where(
+                    VehicleJob.id.in_([photo.vehicle_job_id for photo in photos])
+                )
+            )
+        }
+        if photos
+        else {}
+    )
+    references = []
+    for photo in photos:
+        try:
+            frame = measure_vehicle_frame(
+                storage.get_object(object_key=photo.preview_cutout_object_key)
+            )
+        except (ImageProcessingError, StorageObjectNotFoundError):
+            continue
+        references.append(
+            {
+                "photo_id": str(photo.id),
+                "vin": jobs[photo.vehicle_job_id].vin,
+                "cutout_url": storage.create_download_url(
+                    object_key=photo.preview_cutout_object_key
+                ),
+                "current_url": storage.create_download_url(
+                    object_key=(
+                        photo.processed_thumbnail_object_key
+                        or photo.processed_object_key
+                    )
+                ),
+                "frame": {
+                    "source_width": frame.source_width,
+                    "source_height": frame.source_height,
+                    "left": frame.left,
+                    "top": frame.top,
+                    "right": frame.right,
+                    "bottom": frame.bottom,
+                },
+            }
+        )
+    return {
+        "orientation": {
+            "id": str(orientation.id),
+            "name": orientation.name,
+            "key": orientation.key,
+        },
+        "background_url": storage.create_download_url(object_key=background.object_key),
+        "references": references,
+        "message": (
+            ""
+            if references
+            else "Für diese Orientierung sind noch keine vorbereiteten Referenzfotos "
+            "vorhanden. Nach einer erneuten Verarbeitung stehen die Freisteller hier "
+            "zur Verfügung."
+        ),
+    }
+
+
 @router.post("/backgrounds/{background_id}")
 def update_background(
     background_id: uuid.UUID,
@@ -3110,6 +3214,9 @@ def update_background(
     shadow_opacity_percent: int = Form(default=32),
     reflection_opacity_percent: int = Form(default=10),
     brightness_percent: int = Form(default=100),
+    background_zoom_percent: int = Form(default=100),
+    background_offset_x_percent: int = Form(default=0),
+    background_offset_y_percent: int = Form(default=0),
     window_background_shift_percent: int = Form(default=14),
     scene_projection_enabled: str | None = Form(default=None),
     scene_horizon_percent: int = Form(default=43),
@@ -3124,6 +3231,9 @@ def update_background(
     orientation_shadow_percents: list[str] = Form(default=[]),
     orientation_reflection_percents: list[str] = Form(default=[]),
     orientation_brightness_percents: list[str] = Form(default=[]),
+    orientation_background_zoom_percents: list[str] = Form(default=[]),
+    orientation_background_offset_x_percents: list[str] = Form(default=[]),
+    orientation_background_offset_y_percents: list[str] = Form(default=[]),
     orientation_window_shift_percents: list[str] = Form(default=[]),
     is_active: str | None = Form(default=None),
     csrf_token: str = Form(),
@@ -3146,6 +3256,9 @@ def update_background(
         and 0 <= shadow_opacity_percent <= 80
         and 0 <= reflection_opacity_percent <= 60
         and 50 <= brightness_percent <= 150
+        and 100 <= background_zoom_percent <= 160
+        and -25 <= background_offset_x_percent <= 25
+        and -25 <= background_offset_y_percent <= 25
         and 0 <= window_background_shift_percent <= 35
         and 25 <= scene_horizon_percent <= 70
         and -30 <= scene_reference_vertical_degrees <= 30
@@ -3153,6 +3266,16 @@ def update_background(
     )
     if not orientation_window_shift_percents and composition_orientation_ids:
         orientation_window_shift_percents = [""] * len(composition_orientation_ids)
+    if not orientation_background_zoom_percents and composition_orientation_ids:
+        orientation_background_zoom_percents = [""] * len(composition_orientation_ids)
+    if not orientation_background_offset_x_percents and composition_orientation_ids:
+        orientation_background_offset_x_percents = [""] * len(
+            composition_orientation_ids
+        )
+    if not orientation_background_offset_y_percents and composition_orientation_ids:
+        orientation_background_offset_y_percents = [""] * len(
+            composition_orientation_ids
+        )
     override_value_lists = [
         orientation_target_area_percents,
         orientation_max_width_percents,
@@ -3161,6 +3284,9 @@ def update_background(
         orientation_shadow_percents,
         orientation_reflection_percents,
         orientation_brightness_percents,
+        orientation_background_zoom_percents,
+        orientation_background_offset_x_percents,
+        orientation_background_offset_y_percents,
         orientation_window_shift_percents,
     ]
     overrides_well_formed = all(
@@ -3187,6 +3313,15 @@ def update_background(
                     optional_number(orientation_shadow_percents[index], 0, 80),
                     optional_number(orientation_reflection_percents[index], 0, 60),
                     optional_number(orientation_brightness_percents[index], 50, 150),
+                    optional_number(
+                        orientation_background_zoom_percents[index], 100, 160
+                    ),
+                    optional_number(
+                        orientation_background_offset_x_percents[index], -25, 25
+                    ),
+                    optional_number(
+                        orientation_background_offset_y_percents[index], -25, 25
+                    ),
                     optional_number(orientation_window_shift_percents[index], 0, 35),
                 )
         except (TypeError, ValueError):
@@ -3206,6 +3341,9 @@ def update_background(
         background.shadow_opacity_percent = shadow_opacity_percent
         background.reflection_opacity_percent = reflection_opacity_percent
         background.brightness_percent = brightness_percent
+        background.background_zoom_percent = background_zoom_percent
+        background.background_offset_x_percent = background_offset_x_percent
+        background.background_offset_y_percent = background_offset_y_percent
         background.window_background_shift_percent = window_background_shift_percent
         background.scene_projection_enabled = scene_projection_enabled == "on"
         background.scene_horizon_percent = scene_horizon_percent
@@ -3250,6 +3388,9 @@ def update_background(
                 override.shadow_opacity_percent,
                 override.reflection_opacity_percent,
                 override.brightness_percent,
+                override.background_zoom_percent,
+                override.background_offset_x_percent,
+                override.background_offset_y_percent,
                 override.window_background_shift_percent,
             ) = values
             if existing is None:

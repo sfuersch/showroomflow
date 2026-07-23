@@ -1252,6 +1252,9 @@ def test_system_admin_configures_background_defaults_and_orientation_override() 
                 "shadow_opacity_percent": "36",
                 "reflection_opacity_percent": "8",
                 "brightness_percent": "102",
+                "background_zoom_percent": "112",
+                "background_offset_x_percent": "3",
+                "background_offset_y_percent": "-6",
                 "window_background_shift_percent": "18",
                 "scene_horizon_percent": "43",
                 "scene_reference_vertical_degrees": "0",
@@ -1265,6 +1268,9 @@ def test_system_admin_configures_background_defaults_and_orientation_override() 
                 "orientation_shadow_percents": "48",
                 "orientation_reflection_percents": "",
                 "orientation_brightness_percents": "",
+                "orientation_background_zoom_percents": "120",
+                "orientation_background_offset_x_percents": "",
+                "orientation_background_offset_y_percents": "-8",
                 "orientation_window_shift_percents": "22",
                 "is_active": "on",
                 "csrf_token": csrf_from(configuration_page.text),
@@ -1290,10 +1296,16 @@ def test_system_admin_configures_background_defaults_and_orientation_override() 
         assert background is not None
         assert background.contour_target_area_percent == 38
         assert background.shadow_opacity_percent == 36
+        assert background.background_zoom_percent == 112
+        assert background.background_offset_x_percent == 3
+        assert background.background_offset_y_percent == -6
         assert background.window_background_shift_percent == 18
         assert override is not None
         assert override.vehicle_bottom_percent == 94
         assert override.shadow_opacity_percent == 48
+        assert override.background_zoom_percent == 120
+        assert override.background_offset_x_percent is None
+        assert override.background_offset_y_percent == -8
         assert override.window_background_shift_percent == 22
         assert override.contour_target_area_percent is None
         assert override.brightness_percent is None

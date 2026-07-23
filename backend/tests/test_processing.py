@@ -39,6 +39,7 @@ from app.processing import (
     refine_manual_background_mask,
     resolve_background_composition,
     should_preserve_original_framing,
+    transform_background,
     WindowCompositionResult,
     masked_background_profile,
 )
@@ -48,6 +49,27 @@ def image_bytes(image: Image.Image, format_name: str) -> bytes:
     output = io.BytesIO()
     image.save(output, format=format_name)
     return output.getvalue()
+
+
+def test_background_transform_zoom_and_offset_keep_output_filled() -> None:
+    background = Image.new("RGB", (800, 600), "#164c9c")
+    ImageDraw.Draw(background).rectangle((0, 0, 399, 599), fill="#e64b3c")
+
+    transformed = Image.open(
+        io.BytesIO(
+            transform_background(
+                image_bytes(background, "PNG"),
+                width=400,
+                height=300,
+                zoom_percent=120,
+                offset_x_percent=10,
+                offset_y_percent=-10,
+            )
+        )
+    )
+
+    assert transformed.size == (400, 300)
+    assert transformed.mode == "RGB"
 
 
 def test_background_composition_uses_background_defaults() -> None:
@@ -63,6 +85,9 @@ def test_background_composition_uses_background_defaults() -> None:
         shadow_opacity_percent=38,
         reflection_opacity_percent=8,
         brightness_percent=102,
+        background_zoom_percent=115,
+        background_offset_x_percent=4,
+        background_offset_y_percent=-7,
         window_background_shift_percent=16,
     )
 
@@ -74,6 +99,9 @@ def test_background_composition_uses_background_defaults() -> None:
         shadow_opacity_percent=38,
         reflection_opacity_percent=8,
         brightness_percent=102,
+        background_zoom_percent=115,
+        background_offset_x_percent=4,
+        background_offset_y_percent=-7,
         window_background_shift_percent=16,
     )
 
@@ -91,6 +119,9 @@ def test_background_composition_only_overrides_selected_orientation_values() -> 
         shadow_opacity_percent=32,
         reflection_opacity_percent=10,
         brightness_percent=100,
+        background_zoom_percent=108,
+        background_offset_x_percent=0,
+        background_offset_y_percent=-3,
         window_background_shift_percent=14,
     )
     override = BackgroundOrientationComposition(
@@ -98,6 +129,8 @@ def test_background_composition_only_overrides_selected_orientation_values() -> 
         orientation_id="00000000-0000-0000-0000-000000000003",
         vehicle_bottom_percent=94,
         shadow_opacity_percent=45,
+        background_zoom_percent=125,
+        background_offset_y_percent=-9,
     )
 
     assert resolve_background_composition(background, override) == BackgroundComposition(
@@ -108,6 +141,9 @@ def test_background_composition_only_overrides_selected_orientation_values() -> 
         shadow_opacity_percent=45,
         reflection_opacity_percent=10,
         brightness_percent=100,
+        background_zoom_percent=125,
+        background_offset_x_percent=0,
+        background_offset_y_percent=-9,
         window_background_shift_percent=14,
     )
 

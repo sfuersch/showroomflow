@@ -52,6 +52,9 @@
                 <label><span class="field-label">Schattenintensität (%){{ field_info('0 deaktiviert den Schatten. Werte von 1 bis 29 erzeugen einen weichen Schatten, ab 30 wird ein kräftiger Kontaktschatten verwendet.') }}</span><input type="number" name="shadow_opacity_percent" min="0" max="80" value="{{ background.shadow_opacity_percent }}" required></label>
                 <label><span class="field-label">Reflexion (%){{ field_info('Steuert die sichtbare Spiegelung des Fahrzeugs unterhalb der Bodenlinie. 0 deaktiviert die Reflexion.') }}</span><input type="number" name="reflection_opacity_percent" min="0" max="60" value="{{ background.reflection_opacity_percent }}" required></label>
                 <label><span class="field-label">Fahrzeughelligkeit (%){{ field_info('Passt ausschließlich die Helligkeit des freigestellten Fahrzeugs an den Hintergrund an. 100 bedeutet unverändert.') }}</span><input type="number" name="brightness_percent" min="50" max="150" value="{{ background.brightness_percent }}" required></label>
+                <label><span class="field-label">Hintergrund-Zoom (%){{ field_info('Vergrößert den Hintergrund, damit er innerhalb des Bildformats verschoben werden kann. 100 bedeutet unverändert.') }}</span><input type="number" name="background_zoom_percent" min="100" max="160" value="{{ background.background_zoom_percent }}" required></label>
+                <label><span class="field-label">Hintergrund horizontal (%){{ field_info('Positive Werte verschieben den Hintergrund nach rechts, negative nach links. Die mögliche Bewegung hängt vom Zoom ab.') }}</span><input type="number" name="background_offset_x_percent" min="-25" max="25" value="{{ background.background_offset_x_percent }}" required></label>
+                <label><span class="field-label">Hintergrund vertikal (%){{ field_info('Positive Werte verschieben den Hintergrund nach unten, negative nach oben. Für mehr Asphalt wird das Gebäude meist nach oben verschoben.') }}</span><input type="number" name="background_offset_y_percent" min="-25" max="25" value="{{ background.background_offset_y_percent }}" required></label>
                 <label><span class="field-label">Maskierten Hintergrund hochziehen (%){{ field_info('Gilt für Fotos mit Scheiben-, Tür- oder Öffnungshintergrund. Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der ersetzten Fläche.') }}</span><input type="number" name="window_background_shift_percent" min="0" max="35" value="{{ background.window_background_shift_percent }}" required></label>
             </div>
             <details class="composition-overrides">
@@ -59,11 +62,11 @@
                 <p class="muted">Aktiviere ein Profil nur dort, wo diese Orientierung vom Hintergrundstandard abweichen soll. Leere Felder erben weiterhin den jeweiligen Standardwert.</p>
                 <div class="composition-table-wrap">
                     <table class="composition-table">
-                        <thead><tr><th>Orientierung</th><th>Eigenes Profil</th><th>Fläche {{ field_info('Ziel-Flächenanteil der Fahrzeugkontur.') }}</th><th>Breite {{ field_info('Maximale Fahrzeugbreite im Bild.') }}</th><th>Höhe {{ field_info('Maximale Fahrzeughöhe im Bild.') }}</th><th>Boden {{ field_info('Höherer Wert setzt das Fahrzeug tiefer.') }}</th><th>Schatten {{ field_info('0 = aus, 1–29 = weich, ab 30 = kräftig.') }}</th><th>Reflexion {{ field_info('Deckkraft der Spiegelung unter dem Fahrzeug.') }}</th><th>Helligkeit {{ field_info('100 = unveränderte Fahrzeughelligkeit.') }}</th><th>Scheibe ↑ {{ field_info('Verschiebt den Hintergrund bei Scheibenfotos nach oben. 0 = unverändert.') }}</th></tr></thead>
+                        <thead><tr><th>Orientierung</th><th>Eigenes Profil</th><th>Fläche {{ field_info('Ziel-Flächenanteil der Fahrzeugkontur.') }}</th><th>Breite {{ field_info('Maximale Fahrzeugbreite im Bild.') }}</th><th>Höhe {{ field_info('Maximale Fahrzeughöhe im Bild.') }}</th><th>Boden {{ field_info('Höherer Wert setzt das Fahrzeug tiefer.') }}</th><th>Schatten {{ field_info('0 = aus, 1–29 = weich, ab 30 = kräftig.') }}</th><th>Reflexion {{ field_info('Deckkraft der Spiegelung unter dem Fahrzeug.') }}</th><th>Helligkeit {{ field_info('100 = unveränderte Fahrzeughelligkeit.') }}</th><th>HG-Zoom {{ field_info('Zoom des Hintergrundbildes.') }}</th><th>HG-X {{ field_info('Horizontale Hintergrundverschiebung.') }}</th><th>HG-Y {{ field_info('Vertikale Hintergrundverschiebung; negative Werte ziehen die Fassade nach oben.') }}</th><th>Scheibe ↑ {{ field_info('Verschiebt den Hintergrund bei Scheibenfotos nach oben. 0 = unverändert.') }}</th></tr></thead>
                         <tbody>
                         {% for orientation in composition_orientations %}
                         {% set override = background_overrides.get(orientation.id) %}
-                        <tr>
+                        <tr data-composition-orientation="{{ orientation.id }}">
                             <td><input type="hidden" name="composition_orientation_ids" value="{{ orientation.id }}"><strong>{{ orientation.name }}</strong></td>
                             <td><label class="toggle compact-toggle"><input type="checkbox" name="custom_composition_orientation_ids" value="{{ orientation.id }}" {% if override %}checked{% endif %}><span>Aktiv</span></label></td>
                             <td><input aria-label="Fläche {{ orientation.name }}" type="number" name="orientation_target_area_percents" min="15" max="60" value="{{ override.contour_target_area_percent if override and override.contour_target_area_percent is not none else '' }}" placeholder="{{ background.contour_target_area_percent }}"></td>
@@ -73,11 +76,30 @@
                             <td><input aria-label="Schatten {{ orientation.name }}" type="number" name="orientation_shadow_percents" min="0" max="80" value="{{ override.shadow_opacity_percent if override and override.shadow_opacity_percent is not none else '' }}" placeholder="{{ background.shadow_opacity_percent }}"></td>
                             <td><input aria-label="Reflexion {{ orientation.name }}" type="number" name="orientation_reflection_percents" min="0" max="60" value="{{ override.reflection_opacity_percent if override and override.reflection_opacity_percent is not none else '' }}" placeholder="{{ background.reflection_opacity_percent }}"></td>
                             <td><input aria-label="Helligkeit {{ orientation.name }}" type="number" name="orientation_brightness_percents" min="50" max="150" value="{{ override.brightness_percent if override and override.brightness_percent is not none else '' }}" placeholder="{{ background.brightness_percent }}"></td>
+                            <td><input aria-label="Hintergrund-Zoom {{ orientation.name }}" type="number" name="orientation_background_zoom_percents" min="100" max="160" value="{{ override.background_zoom_percent if override and override.background_zoom_percent is not none else '' }}" placeholder="{{ background.background_zoom_percent }}"></td>
+                            <td><input aria-label="Hintergrund horizontal {{ orientation.name }}" type="number" name="orientation_background_offset_x_percents" min="-25" max="25" value="{{ override.background_offset_x_percent if override and override.background_offset_x_percent is not none else '' }}" placeholder="{{ background.background_offset_x_percent }}"></td>
+                            <td><input aria-label="Hintergrund vertikal {{ orientation.name }}" type="number" name="orientation_background_offset_y_percents" min="-25" max="25" value="{{ override.background_offset_y_percent if override and override.background_offset_y_percent is not none else '' }}" placeholder="{{ background.background_offset_y_percent }}"></td>
                             <td><input aria-label="Maskierter Hintergrund {{ orientation.name }}" type="number" name="orientation_window_shift_percents" min="0" max="35" value="{{ override.window_background_shift_percent if override and override.window_background_shift_percent is not none else '' }}" placeholder="{{ background.window_background_shift_percent }}"></td>
                         </tr>
                         {% endfor %}
                         </tbody>
                     </table>
+                </div>
+                <div class="composition-preview" data-background-id="{{ background.id }}" data-preview-base="/admin/backgrounds/{{ background.id }}/orientation-previews/">
+                    <div class="composition-preview-toolbar">
+                        <label>Vorschau-Orientierung
+                            <select data-preview-orientation>
+                                {% for orientation in composition_orientations %}
+                                <option value="{{ orientation.id }}">{{ orientation.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <button class="button button-secondary" type="button" data-load-preview>Referenzfotos laden</button>
+                        <label class="toggle"><input type="checkbox" data-show-guides checked><span>Hilfslinien</span></label>
+                        <label class="toggle"><input type="checkbox" data-show-before><span>Bisheriges Ergebnis</span></label>
+                    </div>
+                    <p class="muted" data-preview-status>Wähle eine Orientierung und lade passende Referenzfotos.</p>
+                    <div class="composition-preview-grid" data-preview-grid></div>
                 </div>
             </details>
             <fieldset class="choice-group">
@@ -335,4 +357,359 @@
     </form>
 </section>
 {% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+    const outputWidth = 640;
+    const outputHeight = 480;
+
+    function loadImage(url) {
+        return new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve(image);
+            image.onerror = () => reject(new Error("Bild konnte nicht geladen werden"));
+            image.src = url;
+        });
+    }
+
+    function numericValue(input, fallback) {
+        if (!input || input.value === "") return Number(fallback);
+        const parsed = Number(input.value);
+        return Number.isFinite(parsed) ? parsed : Number(fallback);
+    }
+
+    function setting(form, row, standardName, orientationName) {
+        const standard = form.querySelector(`[name="${standardName}"]`);
+        const override = row?.querySelector(`[name="${orientationName}"]`);
+        return numericValue(
+            override,
+            standard?.value || standard?.getAttribute("value") || 0,
+        );
+    }
+
+    function settingsFor(panel) {
+        const form = panel.closest("form");
+        const orientationId = panel.querySelector("[data-preview-orientation]").value;
+        const row = form.querySelector(
+            `[data-composition-orientation="${orientationId}"]`,
+        );
+        return {
+            brightness: setting(
+                form, row, "brightness_percent", "orientation_brightness_percents",
+            ),
+            bottom: setting(
+                form, row, "vehicle_bottom_percent", "orientation_bottom_percents",
+            ),
+            maxHeight: setting(
+                form, row, "contour_max_height_percent",
+                "orientation_max_height_percents",
+            ),
+            maxWidth: setting(
+                form, row, "contour_max_width_percent",
+                "orientation_max_width_percents",
+            ),
+            reflection: setting(
+                form, row, "reflection_opacity_percent",
+                "orientation_reflection_percents",
+            ),
+            shadow: setting(
+                form, row, "shadow_opacity_percent", "orientation_shadow_percents",
+            ),
+            targetArea: setting(
+                form, row, "contour_target_area_percent",
+                "orientation_target_area_percents",
+            ),
+            horizon: numericValue(
+                form.querySelector('[name="scene_horizon_percent"]'), 48,
+            ),
+            zoom: setting(
+                form, row, "background_zoom_percent",
+                "orientation_background_zoom_percents",
+            ),
+            offsetX: setting(
+                form, row, "background_offset_x_percent",
+                "orientation_background_offset_x_percents",
+            ),
+            offsetY: setting(
+                form, row, "background_offset_y_percent",
+                "orientation_background_offset_y_percents",
+            ),
+        };
+    }
+
+    function adaptedSettings(settings, orientationKey) {
+        const adapted = {...settings};
+        if (["left", "right"].includes(orientationKey)) {
+            adapted.targetArea = Math.min(60, Math.round(settings.targetArea * 1.05));
+            adapted.maxWidth = Math.min(90, settings.maxWidth + 6);
+            adapted.bottom = Math.max(55, settings.bottom - 8);
+        } else if (["front", "rear"].includes(orientationKey)) {
+            adapted.targetArea = Math.max(15, Math.round(settings.targetArea * .8));
+            adapted.maxWidth = Math.min(settings.maxWidth, 64);
+            adapted.maxHeight = Math.min(settings.maxHeight, 64);
+            adapted.bottom = Math.max(55, settings.bottom - 8);
+        } else {
+            adapted.targetArea = Math.min(60, Math.round(settings.targetArea * 1.1));
+            adapted.maxWidth = Math.min(90, settings.maxWidth + 2);
+        }
+        return adapted;
+    }
+
+    function drawBackground(context, image, settings) {
+        const coverScale = Math.max(
+            outputWidth / image.naturalWidth,
+            outputHeight / image.naturalHeight,
+        );
+        const scale = coverScale * Math.max(1, settings.zoom / 100);
+        const width = image.naturalWidth * scale;
+        const height = image.naturalHeight * scale;
+        const travelX = Math.max(0, width - outputWidth);
+        const travelY = Math.max(0, height - outputHeight);
+        const x = Math.min(
+            0,
+            Math.max(-travelX, -travelX / 2 + outputWidth * settings.offsetX / 100),
+        );
+        const y = Math.min(
+            0,
+            Math.max(-travelY, -travelY / 2 + outputHeight * settings.offsetY / 100),
+        );
+        context.drawImage(image, x, y, width, height);
+    }
+
+    function drawGuides(context, settings) {
+        context.save();
+        context.setLineDash([10, 8]);
+        context.lineWidth = 2;
+        context.strokeStyle = "rgba(42, 113, 255, .95)";
+        const bottomY = outputHeight * settings.bottom / 100;
+        context.beginPath();
+        context.moveTo(0, bottomY);
+        context.lineTo(outputWidth, bottomY);
+        context.stroke();
+        context.strokeStyle = "rgba(255, 190, 39, .95)";
+        const horizonY = outputHeight * settings.horizon / 100;
+        context.beginPath();
+        context.moveTo(0, horizonY);
+        context.lineTo(outputWidth, horizonY);
+        context.stroke();
+        context.setLineDash([5, 8]);
+        context.strokeStyle = "rgba(255,255,255,.8)";
+        context.beginPath();
+        context.moveTo(outputWidth / 2, 0);
+        context.lineTo(outputWidth / 2, outputHeight);
+        context.stroke();
+        context.restore();
+    }
+
+    function vehiclePlacement(card, settings) {
+        const frame = JSON.parse(card.dataset.frame);
+        const width = frame.right - frame.left;
+        const height = frame.bottom - frame.top;
+        const widthFraction = width / frame.source_width;
+        const heightFraction = height / frame.source_height;
+        const aspect = width / height;
+        const canvasAspect = outputWidth / outputHeight;
+        let preferredWidth = Math.sqrt(
+            settings.targetArea / 100 * aspect / canvasAspect,
+        );
+        let preferredHeight = preferredWidth * canvasAspect / aspect;
+        const limit = Math.min(
+            1,
+            settings.maxWidth / 100 / preferredWidth,
+            settings.maxHeight / 100 / preferredHeight,
+        );
+        preferredWidth *= limit;
+        preferredHeight *= limit;
+        const preferredArea = preferredWidth * preferredHeight;
+        const currentArea = widthFraction * heightFraction;
+        const areaRatio = currentArea / Math.max(.01, preferredArea);
+        const centerX = (frame.left + frame.right) / 2 / frame.source_width;
+        const bottom = frame.bottom / frame.source_height;
+        const preserve = (
+            areaRatio >= .55 && areaRatio <= 1.55
+            && widthFraction <= settings.maxWidth / 100 + .06
+            && heightFraction <= settings.maxHeight / 100 + .06
+            && Math.abs(centerX - .5) <= .12
+            && Math.abs(bottom - settings.bottom / 100) <= .12
+            && frame.left / frame.source_width >= .005
+            && frame.right / frame.source_width <= .995
+            && frame.top / frame.source_height >= .005
+            && bottom <= .995
+        );
+        if (preserve) {
+            return {
+                source: [0, 0, frame.source_width, frame.source_height],
+                destination: [0, 0, outputWidth, outputHeight],
+                subject: [
+                    frame.left / frame.source_width * outputWidth,
+                    frame.top / frame.source_height * outputHeight,
+                    widthFraction * outputWidth,
+                    heightFraction * outputHeight,
+                ],
+            };
+        }
+        const subjectWidth = preferredWidth * outputWidth;
+        const subjectHeight = preferredHeight * outputHeight;
+        const subjectX = (outputWidth - subjectWidth) / 2;
+        const subjectBottom = settings.bottom / 100 * outputHeight;
+        return {
+            source: [frame.left, frame.top, width, height],
+            destination: [
+                subjectX,
+                subjectBottom - subjectHeight,
+                subjectWidth,
+                subjectHeight,
+            ],
+            subject: [
+                subjectX,
+                subjectBottom - subjectHeight,
+                subjectWidth,
+                subjectHeight,
+            ],
+        };
+    }
+
+    async function drawCard(panel, card) {
+        const settings = adaptedSettings(
+            settingsFor(panel), card.dataset.orientationKey,
+        );
+        const canvas = card.querySelector("canvas");
+        const context = canvas.getContext("2d");
+        const [background, cutout] = await Promise.all([
+            loadImage(card.dataset.backgroundUrl),
+            loadImage(card.dataset.cutoutUrl),
+        ]);
+        context.clearRect(0, 0, outputWidth, outputHeight);
+        drawBackground(context, background, settings);
+        const placement = vehiclePlacement(card, settings);
+        const [subjectX, subjectY, subjectWidth, subjectHeight] = placement.subject;
+        if (settings.shadow > 0) {
+            context.save();
+            context.filter = `blur(${Math.max(3, subjectWidth * .012)}px)`;
+            context.fillStyle = `rgba(0,0,0,${Math.min(.48, settings.shadow / 130)})`;
+            context.beginPath();
+            context.ellipse(
+                subjectX + subjectWidth / 2,
+                subjectY + subjectHeight - subjectHeight * .015,
+                subjectWidth * .48,
+                Math.max(5, subjectHeight * .035),
+                0, 0, Math.PI * 2,
+            );
+            context.fill();
+            context.restore();
+        }
+        if (settings.reflection > 0) {
+            context.save();
+            context.globalAlpha = Math.min(.28, settings.reflection / 210);
+            context.filter = `blur(${Math.max(1, subjectWidth * .002)}px)`;
+            context.translate(0, 2 * (subjectY + subjectHeight));
+            context.scale(1, -1);
+            context.drawImage(cutout, ...placement.source, ...placement.destination);
+            context.restore();
+        }
+        context.save();
+        context.filter = `brightness(${Math.max(
+            50, Math.min(150, settings.brightness),
+        )}%)`;
+        context.drawImage(cutout, ...placement.source, ...placement.destination);
+        context.restore();
+        if (panel.querySelector("[data-show-guides]").checked) {
+            drawGuides(context, settings);
+        }
+    }
+
+    async function redraw(panel) {
+        const showBefore = panel.querySelector("[data-show-before]").checked;
+        for (const card of panel.querySelectorAll("[data-preview-card]")) {
+            const canvas = card.querySelector("canvas");
+            const before = card.querySelector("[data-preview-before]");
+            canvas.hidden = showBefore;
+            before.hidden = !showBefore;
+            if (!showBefore) {
+                try {
+                    await drawCard(panel, card);
+                } catch (error) {
+                    panel.querySelector("[data-preview-status]").textContent =
+                        error.message;
+                }
+            }
+        }
+    }
+
+    function renderCards(panel, payload) {
+        const grid = panel.querySelector("[data-preview-grid]");
+        grid.replaceChildren();
+        for (const reference of payload.references) {
+            const card = document.createElement("article");
+            card.className = "composition-preview-item";
+            card.dataset.previewCard = "";
+            card.dataset.backgroundUrl = payload.background_url;
+            card.dataset.cutoutUrl = reference.cutout_url;
+            card.dataset.frame = JSON.stringify(reference.frame);
+            card.dataset.orientationKey = payload.orientation.key;
+            card.innerHTML = `
+                <div class="composition-preview-stage">
+                    <canvas width="${outputWidth}" height="${outputHeight}"></canvas>
+                    <img data-preview-before hidden alt="Bisheriges Ergebnis">
+                </div>
+                <div class="composition-preview-caption">
+                    <strong>${reference.vin}</strong>
+                    <span>Referenzfoto</span>
+                </div>`;
+            card.querySelector("[data-preview-before]").src = reference.current_url;
+            grid.append(card);
+        }
+    }
+
+    for (const panel of document.querySelectorAll(".composition-preview")) {
+        const status = panel.querySelector("[data-preview-status]");
+        const form = panel.closest("form");
+        panel.querySelector("[data-load-preview]").addEventListener(
+            "click",
+            async () => {
+                const orientationId =
+                    panel.querySelector("[data-preview-orientation]").value;
+                status.textContent = "Referenzfotos werden geladen …";
+                try {
+                    const response = await fetch(
+                        `${panel.dataset.previewBase}${orientationId}`,
+                        {headers: {Accept: "application/json"}},
+                    );
+                    const payload = await response.json();
+                    if (!response.ok) {
+                        throw new Error(
+                            payload.detail || "Vorschau konnte nicht geladen werden",
+                        );
+                    }
+                    renderCards(panel, payload);
+                    status.textContent = payload.message
+                        || `${payload.references.length} Referenzfotos geladen. `
+                        + "Änderungen an den Feldern werden sofort angezeigt.";
+                    await redraw(panel);
+                } catch (error) {
+                    status.textContent = error.message;
+                }
+            },
+        );
+        panel.querySelector("[data-preview-orientation]").addEventListener(
+            "change",
+            () => {
+                panel.querySelector("[data-preview-grid]").replaceChildren();
+                status.textContent =
+                    "Lade für die neue Orientierung passende Referenzfotos.";
+            },
+        );
+        panel.querySelector("[data-show-guides]").addEventListener(
+            "change", () => redraw(panel),
+        );
+        panel.querySelector("[data-show-before]").addEventListener(
+            "change", () => redraw(panel),
+        );
+        form.addEventListener("input", event => {
+            if (event.target.matches('input[type="number"]')) redraw(panel);
+        });
+    }
+})();
+</script>
 {% endblock %}
