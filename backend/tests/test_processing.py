@@ -254,6 +254,33 @@ def test_hybrid_framing_corrects_vehicle_that_is_too_small() -> None:
     )
 
 
+def test_hybrid_framing_corrects_vehicle_above_configured_ground_line() -> None:
+    frame = VehicleFrame(
+        contour=VehicleContour(width=600, height=400),
+        source_width=800,
+        source_height=600,
+        left=100,
+        top=92,
+        right=700,
+        bottom=492,
+    )
+    options = CompositionOptions(
+        orientation_key="front-left",
+        vehicle_bottom_percent=90,
+    )
+    preferred = calculate_contour_framing(
+        frame.contour,
+        output_width=options.width,
+        output_height=options.height,
+    )
+
+    assert not should_preserve_original_framing(
+        frame,
+        options=options,
+        preferred_framing=preferred,
+    )
+
+
 @pytest.mark.parametrize(
     "frame",
     [
@@ -440,7 +467,7 @@ def test_vehicle_perspective_prefers_orientation_key(
     )
 
 
-def test_perspective_composition_raises_side_and_straight_views() -> None:
+def test_perspective_composition_preserves_configured_ground_line() -> None:
     base = CompositionOptions(vehicle_bottom_percent=90, capture_step_name="Seite links")
     side = perspective_composition_options(base, VehicleContour(1800, 700))
     straight = perspective_composition_options(
@@ -448,9 +475,9 @@ def test_perspective_composition_raises_side_and_straight_views() -> None:
         VehicleContour(900, 1000),
     )
 
-    assert side.vehicle_bottom_percent == 82
+    assert side.vehicle_bottom_percent == 90
     assert side.contour_max_width_percent == 84
-    assert straight.vehicle_bottom_percent == 82
+    assert straight.vehicle_bottom_percent == 90
     assert straight.contour_target_area_percent == 29
     assert straight.contour_max_width_percent == 64
 
@@ -1209,7 +1236,7 @@ def test_optimized_photoroom_request_uses_perspective_framing_and_ai_shadow() ->
         assert b'name="paddingLeft"' in body
         assert b"0.080" in body
         assert b'name="paddingBottom"' in body
-        assert b"0.180" in body
+        assert b"0.100" in body
         assert b'name="verticalAlignment"' in body
         assert b"bottom" in body
         return httpx.Response(
