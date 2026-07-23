@@ -19,7 +19,10 @@ def mask_prompt_defaults(orientation_key: str, processing_mode: str) -> tuple[st
     if orientation_key == "steering-wheel":
         return (
             WINDOW_MASK_PROMPT,
-            "steering wheel, dashboard, instrument cluster, A-pillar, door frame, mirror",
+            (
+                "steering wheel, dashboard, instrument cluster, A-pillar, door frame, "
+                "mirror housing, mirror frame, mirror mount"
+            ),
         )
     if processing_mode == "opening_background":
         prompts = {
@@ -51,7 +54,7 @@ def mask_prompt_defaults(orientation_key: str, processing_mode: str) -> tuple[st
             ),
             (
                 "vehicle body, open door, open tailgate, cargo area, seats, dashboard, "
-                "pillars, trim, mirrors"
+                "pillars, trim, mirror housings, mirror frames, mirror mounts"
             ),
         )
     prompts = {
@@ -64,7 +67,7 @@ def mask_prompt_defaults(orientation_key: str, processing_mode: str) -> tuple[st
         prompts.get(orientation_key, WINDOW_MASK_PROMPT),
         (
             "dashboard, seats, steering wheel, instrument cluster, pillars, door frame, "
-            "mirrors, interior trim"
+            "mirror housings, mirror frames, mirror mounts, interior trim"
         ),
     )
 

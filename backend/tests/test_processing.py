@@ -35,6 +35,7 @@ from app.processing import (
     create_photoroom_showroom,
     infer_vehicle_perspective,
     measure_vehicle_contour,
+    openai_semantic_mask_prompt,
     perspective_composition_options,
     refine_manual_background_mask,
     resolve_background_composition,
@@ -917,6 +918,18 @@ def test_orientation_mask_prompts_override_selection_and_extend_protection() -> 
     assert "steering wheel" in profile.negative_prompt
     assert "preserve the head-up display" in profile.negative_prompt
     assert profile.steering_wheel_protection is True
+
+
+def test_openai_semantic_mask_prompt_mattes_only_reflective_mirror_glass() -> None:
+    profile = masked_background_profile("steering-wheel", "window_background")
+
+    prompt = " ".join(openai_semantic_mask_prompt(profile).split())
+
+    assert "interior rear-view mirror" in prompt
+    assert "exterior side mirror" in prompt
+    assert "matte appearance" in prompt
+    assert "Never select the mirror housing, frame, mount or stalk" in prompt
+    assert "never its reflective glass surface" in prompt
 
 
 def test_text_guided_cutout_omits_incompatible_hd_header(monkeypatch) -> None:
