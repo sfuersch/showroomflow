@@ -1194,11 +1194,17 @@ def test_photoroom_sandbox_request_keeps_comparison_separate() -> None:
         assert b'name="outputSize"' in body
         assert b"1920x1440" in body
         assert b'name="paddingLeft"' in body
-        assert b"0.240" in body
+        assert b"461px" in body
         assert b'name="paddingTop"' in body
-        assert b"0.207" in body
+        assert b"298px" in body
+        assert b'name="paddingBottom"' in body
+        assert b"0px" in body
+        assert b'name="marginBottom"' in body
+        assert b"144px" in body
         assert b'name="verticalAlignment"' in body
         assert b"bottom" in body
+        assert b'name="ignorePaddingAndSnapOnCroppedSides"' in body
+        assert b"false" in body
         assert b"lighting.mode" not in body
         return httpx.Response(
             200,
@@ -1247,9 +1253,10 @@ def test_optimized_photoroom_request_uses_perspective_framing_and_ai_shadow() ->
         assert b'name="shadow.mode"' in body
         assert b"ai.hard" in body
         assert b'name="paddingLeft"' in body
-        assert b"0.080" in body
         assert b'name="paddingBottom"' in body
-        assert b"0.100" in body
+        assert b"0px" in body
+        assert b'name="marginBottom"' in body
+        assert b"144px" in body
         assert b'name="verticalAlignment"' in body
         assert b"bottom" in body
         return httpx.Response(
@@ -1266,7 +1273,16 @@ def test_optimized_photoroom_request_uses_perspective_framing_and_ai_shadow() ->
             "image/jpeg",
             settings,
             optimized=True,
-            capture_step_name="Seite links",
+            capture_step_name="Hinten links",
+            orientation_key="rear-left",
+            capture_metadata={
+                "horizon_angle_degrees": 4.0,
+                "vertical_angle_degrees": 10.0,
+                "yaw_angle_degrees": 0.0,
+                "field_of_view_degrees": 65.0,
+                "motion_available": True,
+            },
+            scene_projection_enabled=True,
             reflection_opacity_percent=0,
             client=client,
         )
