@@ -716,7 +716,6 @@ def perspective_composition_options(
                 60, round(options.contour_target_area_percent * 1.05)
             ),
             contour_max_width_percent=min(90, options.contour_max_width_percent + 6),
-            vehicle_bottom_percent=max(55, options.vehicle_bottom_percent - 8),
         )
     if perspective == "straight":
         return replace(
@@ -726,7 +725,6 @@ def perspective_composition_options(
             ),
             contour_max_width_percent=min(options.contour_max_width_percent, 64),
             contour_max_height_percent=min(options.contour_max_height_percent, 64),
-            vehicle_bottom_percent=max(55, options.vehicle_bottom_percent - 8),
         )
     return replace(
         options,
@@ -734,10 +732,6 @@ def perspective_composition_options(
             60, round(options.contour_target_area_percent * 1.10)
         ),
         contour_max_width_percent=min(90, options.contour_max_width_percent + 2),
-        # Three-quarter views need more visual contact with the foreground than
-        # the narrower front/rear and side profiles. Keep the configured ground
-        # line instead of raising them by three percentage points.
-        vehicle_bottom_percent=options.vehicle_bottom_percent,
     )
 
 
@@ -890,7 +884,10 @@ def should_preserve_original_framing(
         and frame.width_fraction <= max_width + 0.06
         and frame.height_fraction <= max_height + 0.06
         and abs(frame.center_x_fraction - 0.5) <= 0.12
-        and abs(frame.bottom_fraction - target_bottom) <= 0.12
+        # The hybrid workflow may retain a naturally composed photo, but the
+        # configured ground line remains authoritative. A broad tolerance here
+        # made visibly floating vehicles bypass the normal placement path.
+        and abs(frame.bottom_fraction - target_bottom) <= 0.04
         and frame.left / frame.source_width >= 0.005
         and frame.right / frame.source_width <= 0.995
         and frame.top / frame.source_height >= 0.005
