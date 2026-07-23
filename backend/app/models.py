@@ -146,6 +146,9 @@ class Background(Timestamped, Base):
     shadow_opacity_percent: Mapped[int] = mapped_column(Integer, default=32)
     reflection_opacity_percent: Mapped[int] = mapped_column(Integer, default=10)
     brightness_percent: Mapped[int] = mapped_column(Integer, default=100)
+    background_zoom_percent: Mapped[int] = mapped_column(Integer, default=100)
+    background_offset_x_percent: Mapped[int] = mapped_column(Integer, default=0)
+    background_offset_y_percent: Mapped[int] = mapped_column(Integer, default=0)
     scene_projection_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     scene_horizon_percent: Mapped[int] = mapped_column(Integer, default=43)
     scene_reference_vertical_degrees: Mapped[int] = mapped_column(Integer, default=0)
@@ -179,6 +182,9 @@ class BackgroundOrientationComposition(Timestamped, Base):
     shadow_opacity_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reflection_opacity_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
     brightness_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    background_zoom_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    background_offset_x_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    background_offset_y_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     orientation: Mapped["Orientation"] = relationship()
 
@@ -399,6 +405,9 @@ class PhotoAsset(Timestamped, Base):
     processed_content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     processed_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     processed_thumbnail_object_key: Mapped[str | None] = mapped_column(
+        String(500), nullable=True, unique=True
+    )
+    preview_cutout_object_key: Mapped[str | None] = mapped_column(
         String(500), nullable=True, unique=True
     )
     processed_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)

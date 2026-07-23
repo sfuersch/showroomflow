@@ -13,6 +13,7 @@ from app.processing import (
     OverlayLayer,
     SceneAdjustment,
     VehicleContour,
+    VehicleFrame,
     apply_cutout_mask_to_original,
     apply_image_overlays,
     calculate_contour_framing,
@@ -23,6 +24,8 @@ from app.processing import (
     measure_vehicle_contour,
     perspective_composition_options,
     resolve_background_composition,
+    should_preserve_original_framing,
+    transform_background,
 )
 
 
@@ -30,6 +33,27 @@ def image_bytes(image: Image.Image, format_name: str) -> bytes:
     output = io.BytesIO()
     image.save(output, format=format_name)
     return output.getvalue()
+
+
+def test_background_transform_zoom_and_offset_keep_output_filled() -> None:
+    background = Image.new("RGB", (800, 600), "#164c9c")
+    ImageDraw.Draw(background).rectangle((0, 0, 399, 599), fill="#e64b3c")
+
+    transformed = Image.open(
+        io.BytesIO(
+            transform_background(
+                image_bytes(background, "PNG"),
+                width=400,
+                height=300,
+                zoom_percent=120,
+                offset_x_percent=10,
+                offset_y_percent=-10,
+            )
+        )
+    )
+
+    assert transformed.size == (400, 300)
+    assert transformed.mode == "RGB"
 
 
 def test_background_composition_uses_background_defaults() -> None:
@@ -140,6 +164,112 @@ def test_vehicle_contour_ignores_faint_transparent_pixels() -> None:
     contour = measure_vehicle_contour(image_bytes(cutout, "PNG"))
 
     assert contour == VehicleContour(width=440, height=400)
+
+
+def test_hybrid_framing_preserves_well_composed_exterior_photo() -> None:
+    frame = VehicleFrame(
+        contour=VehicleContour(width=600, height=400),
+        source_width=800,
+        source_height=600,
+        left=100,
+        top=120,
+        right=700,
+        bottom=520,
+    )
+    options = CompositionOptions(
+        orientation_key="front-left",
+        vehicle_bottom_percent=90,
+    )
+    preferred = calculate_contour_framing(
+        frame.contour,
+        output_width=options.width,
+        output_height=options.height,
+    )
+
+    assert should_preserve_original_framing(
+        frame,
+        options=options,
+        preferred_framing=preferred,
+    )
+
+
+def test_hybrid_framing_corrects_vehicle_that_is_too_small() -> None:
+    frame = VehicleFrame(
+        contour=VehicleContour(width=240, height=160),
+        source_width=800,
+        source_height=600,
+        left=280,
+        top=300,
+        right=520,
+        bottom=460,
+    )
+    options = CompositionOptions(
+        orientation_key="front-left",
+        vehicle_bottom_percent=90,
+    )
+    preferred = calculate_contour_framing(
+        frame.contour,
+        output_width=options.width,
+        output_height=options.height,
+    )
+
+    assert not should_preserve_original_framing(
+        frame,
+        options=options,
+        preferred_framing=preferred,
+    )
+
+
+def test_hybrid_framing_only_applies_to_exterior_orientations() -> None:
+    frame = VehicleFrame(
+        contour=VehicleContour(width=600, height=400),
+        source_width=800,
+        source_height=600,
+        left=100,
+        top=120,
+        right=700,
+        bottom=520,
+    )
+    options = CompositionOptions(orientation_key="steering-wheel")
+    preferred = calculate_contour_framing(
+        frame.contour,
+        output_width=options.width,
+        output_height=options.height,
+    )
+
+    assert not should_preserve_original_framing(
+        frame,
+        options=options,
+        preferred_framing=preferred,
+    )
+
+
+def test_local_composition_preserves_acceptable_exterior_position() -> None:
+    background = image_bytes(Image.new("RGB", (800, 600), "black"), "JPEG")
+    cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(cutout).rectangle((100, 120, 699, 519), fill=(255, 0, 0, 255))
+
+    result = compose_showroom(
+        background,
+        image_bytes(cutout, "PNG"),
+        CompositionOptions(
+            width=800,
+            height=600,
+            orientation_key="front-left",
+            shadow_opacity_percent=0,
+            reflection_opacity_percent=0,
+        ),
+    )
+
+    rendered = Image.open(io.BytesIO(result)).convert("RGB")
+    red_mask = Image.new("L", rendered.size)
+    red_mask.putdata(
+        [
+            255 if red > 180 and green < 80 and blue < 80 else 0
+            for red, green, blue in rendered.getdata()
+        ]
+    )
+    assert red_mask.getbbox() == pytest.approx((100, 120, 700, 520), abs=2)
 
 
 @pytest.mark.parametrize(
@@ -472,6 +602,52 @@ def test_optimized_photoroom_request_uses_perspective_framing_and_ai_shadow() ->
 
     finished = Image.open(io.BytesIO(result)).convert("RGB")
     assert finished.size == (1920, 1440)
+    assert requests == 2
+
+
+def test_optimized_photoroom_preserves_acceptable_exterior_framing() -> None:
+    original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
+    background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+    api_result = image_bytes(Image.new("RGB", (1920, 1440), "gray"), "JPEG")
+    cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(cutout).rectangle((100, 120, 699, 519), fill=(20, 30, 40, 255))
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            return httpx.Response(
+                200,
+                content=image_bytes(cutout, "PNG"),
+                headers={"content-type": "image/png"},
+            )
+        body = request.content
+        assert b'name="background.imageFile"' in body
+        assert b'name="referenceBox"' in body
+        assert b"originalImage" in body
+        assert b'name="padding"' in body
+        assert b'name="paddingLeft"' not in body
+        assert b'name="verticalAlignment"' not in body
+        return httpx.Response(
+            200,
+            content=api_result,
+            headers={"content-type": "image/jpeg"},
+        )
+
+    settings = Settings(photoroom_api_key="test-key", photoroom_sandbox=True)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = create_photoroom_showroom(
+            original,
+            background,
+            "image/jpeg",
+            settings,
+            optimized=True,
+            orientation_key="front-left",
+            client=client,
+        )
+
+    assert Image.open(io.BytesIO(result)).size == (1920, 1440)
     assert requests == 2
 
 

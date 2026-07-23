@@ -53,6 +53,9 @@ class CompositionOptions:
     shadow_opacity_percent: int = 32
     reflection_opacity_percent: int = 10
     brightness_percent: int = 100
+    background_zoom_percent: int = 100
+    background_offset_x_percent: int = 0
+    background_offset_y_percent: int = 0
     capture_step_name: str = ""
     orientation_key: str = ""
     capture_metadata: dict | None = None
@@ -74,6 +77,37 @@ class OverlayLayer:
 class VehicleContour:
     width: int
     height: int
+
+
+@dataclass(frozen=True)
+class VehicleFrame:
+    contour: VehicleContour
+    source_width: int
+    source_height: int
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    @property
+    def width_fraction(self) -> float:
+        return self.contour.width / self.source_width
+
+    @property
+    def height_fraction(self) -> float:
+        return self.contour.height / self.source_height
+
+    @property
+    def area_fraction(self) -> float:
+        return self.width_fraction * self.height_fraction
+
+    @property
+    def center_x_fraction(self) -> float:
+        return (self.left + self.right) / 2 / self.source_width
+
+    @property
+    def bottom_fraction(self) -> float:
+        return self.bottom / self.source_height
 
 
 @dataclass(frozen=True)
@@ -99,6 +133,9 @@ class BackgroundComposition:
     shadow_opacity_percent: int
     reflection_opacity_percent: int
     brightness_percent: int
+    background_zoom_percent: int = 100
+    background_offset_x_percent: int = 0
+    background_offset_y_percent: int = 0
 
 
 def resolve_background_composition(
@@ -109,7 +146,13 @@ def resolve_background_composition(
 
     def value(name: str) -> int:
         overridden = getattr(override, name, None) if override is not None else None
-        return int(overridden if overridden is not None else getattr(background, name))
+        base = getattr(background, name, None)
+        fallback = {
+            "background_zoom_percent": 100,
+            "background_offset_x_percent": 0,
+            "background_offset_y_percent": 0,
+        }.get(name)
+        return int(overridden if overridden is not None else base if base is not None else fallback)
 
     return BackgroundComposition(
         contour_target_area_percent=value("contour_target_area_percent"),
@@ -119,10 +162,58 @@ def resolve_background_composition(
         shadow_opacity_percent=value("shadow_opacity_percent"),
         reflection_opacity_percent=value("reflection_opacity_percent"),
         brightness_percent=value("brightness_percent"),
+        background_zoom_percent=value("background_zoom_percent"),
+        background_offset_x_percent=value("background_offset_x_percent"),
+        background_offset_y_percent=value("background_offset_y_percent"),
     )
 
 
+def transform_background(
+    background_bytes: bytes,
+    *,
+    width: int,
+    height: int,
+    zoom_percent: int = 100,
+    offset_x_percent: int = 0,
+    offset_y_percent: int = 0,
+) -> bytes:
+    """Crop and position a background without exposing empty canvas edges."""
+    try:
+        source = Image.open(io.BytesIO(background_bytes)).convert("RGB")
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Das Hintergrundbild ist ungültig") from exc
+
+    base = ImageOps.fit(source, (width, height), method=Image.Resampling.LANCZOS)
+    zoom = max(100, min(160, zoom_percent)) / 100
+    scaled = base.resize(
+        (max(width, round(width * zoom)), max(height, round(height * zoom))),
+        Image.Resampling.LANCZOS,
+    )
+    overflow_x = scaled.width - width
+    overflow_y = scaled.height - height
+    requested_x = round(width * max(-25, min(25, offset_x_percent)) / 100)
+    requested_y = round(height * max(-25, min(25, offset_y_percent)) / 100)
+    left = max(0, min(overflow_x, overflow_x // 2 - requested_x))
+    top = max(0, min(overflow_y, overflow_y // 2 - requested_y))
+    transformed = scaled.crop((left, top, left + width, top + height))
+    output = io.BytesIO()
+    transformed.save(output, format="JPEG", quality=94, optimize=True)
+    return output.getvalue()
+
+
 SCENE_TEST_ORIENTATIONS = frozenset({"front-left", "left", "rear-left", "rear"})
+EXTERIOR_ORIENTATIONS = frozenset(
+    {
+        "front",
+        "front-left",
+        "front-right",
+        "left",
+        "rear",
+        "rear-left",
+        "rear-right",
+        "right",
+    }
+)
 
 
 def calculate_scene_adjustment(options: CompositionOptions) -> SceneAdjustment:
@@ -293,6 +384,11 @@ def _photoroom_api_key(settings: Settings, sandbox: bool | None = None) -> str:
 
 def measure_vehicle_contour(cutout_png_bytes: bytes) -> VehicleContour:
     """Measure the visible subject while ignoring faint antialiasing and watermarks."""
+    return measure_vehicle_frame(cutout_png_bytes).contour
+
+
+def measure_vehicle_frame(cutout_png_bytes: bytes) -> VehicleFrame:
+    """Measure the subject and retain its position in the original image frame."""
     try:
         cutout = Image.open(io.BytesIO(cutout_png_bytes)).convert("RGBA")
     except (OSError, ValueError) as exc:
@@ -301,7 +397,15 @@ def measure_vehicle_contour(cutout_png_bytes: bytes) -> VehicleContour:
     box = solid_alpha.getbbox()
     if box is None:
         raise ImageProcessingError("Die Freistellung enthält keine messbare Fahrzeugkontur")
-    return VehicleContour(width=box[2] - box[0], height=box[3] - box[1])
+    return VehicleFrame(
+        contour=VehicleContour(width=box[2] - box[0], height=box[3] - box[1]),
+        source_width=cutout.width,
+        source_height=cutout.height,
+        left=box[0],
+        top=box[1],
+        right=box[2],
+        bottom=box[3],
+    )
 
 
 def calculate_contour_framing(
@@ -329,6 +433,41 @@ def calculate_contour_framing(
     return ContourFraming(
         width_fraction=width_fraction * limit,
         height_fraction=height_fraction * limit,
+    )
+
+
+def should_preserve_original_framing(
+    frame: VehicleFrame,
+    *,
+    options: CompositionOptions,
+    preferred_framing: ContourFraming,
+) -> bool:
+    """Keep a guided exterior photo unless its framing is clearly unsuitable."""
+    orientation_key = options.orientation_key.casefold().strip().replace("_", "-")
+    if orientation_key not in EXTERIOR_ORIENTATIONS:
+        return False
+
+    source_aspect = frame.source_width / max(1, frame.source_height)
+    output_aspect = options.width / max(1, options.height)
+    if abs(source_aspect / output_aspect - 1) > 0.05:
+        return False
+
+    preferred_area = preferred_framing.width_fraction * preferred_framing.height_fraction
+    area_ratio = frame.area_fraction / max(0.01, preferred_area)
+    max_width = max(0.40, min(0.95, options.contour_max_width_percent / 100))
+    max_height = max(0.40, min(0.90, options.contour_max_height_percent / 100))
+    target_bottom = max(0.55, min(0.98, options.vehicle_bottom_percent / 100))
+
+    return (
+        0.55 <= area_ratio <= 1.55
+        and frame.width_fraction <= max_width + 0.06
+        and frame.height_fraction <= max_height + 0.06
+        and abs(frame.center_x_fraction - 0.5) <= 0.12
+        and abs(frame.bottom_fraction - target_bottom) <= 0.12
+        and frame.left / frame.source_width >= 0.005
+        and frame.right / frame.source_width <= 0.995
+        and frame.top / frame.source_height >= 0.005
+        and frame.bottom_fraction <= 0.995
     )
 
 
@@ -403,18 +542,17 @@ def create_photoroom_showroom(
     scene_perspective_strength_percent: int = 35,
     photoroom_sandbox: bool | None = None,
     optimized: bool = False,
+    cutout_bytes: bytes | None = None,
     *,
     client: httpx.Client | None = None,
 ) -> bytes:
     """Measure the contour, then let Photoroom render the final showroom result."""
     request = client.post if client is not None else httpx.post
-    cutout = create_photoroom_cutout(
-        original_bytes,
-        settings,
-        photoroom_sandbox,
-        client=client,
+    cutout = cutout_bytes or create_photoroom_cutout(
+        original_bytes, settings, photoroom_sandbox, client=client
     )
-    contour = measure_vehicle_contour(cutout)
+    frame = measure_vehicle_frame(cutout)
+    contour = frame.contour
     composition_options = CompositionOptions(
         width=settings.output_width,
         height=settings.output_height,
@@ -464,22 +602,45 @@ def create_photoroom_showroom(
         max_width_percent=composition_options.contour_max_width_percent,
         max_height_percent=composition_options.contour_max_height_percent,
     )
-    horizontal_padding = max(0.02, (1 - framing.width_fraction) / 2)
-    bottom_padding = max(0.02, 1 - composition_options.vehicle_bottom_percent / 100)
-    top_padding = min(0.49, max(0.02, 1 - framing.height_fraction - bottom_padding))
+    preserve_original_framing = should_preserve_original_framing(
+        frame,
+        options=composition_options,
+        preferred_framing=framing,
+    )
     background_extension = "png" if background_content_type == "image/png" else "jpg"
     edit_options = {
         "removeBackground": "true",
         "background.color": "FFFFFF",
         "outputSize": f"{settings.output_width}x{settings.output_height}",
-        "paddingLeft": f"{horizontal_padding:.3f}",
-        "paddingRight": f"{horizontal_padding:.3f}",
-        "paddingTop": f"{top_padding:.3f}",
-        "paddingBottom": f"{bottom_padding:.3f}",
-        "horizontalAlignment": "center",
-        "verticalAlignment": "bottom",
         "export.format": "jpeg",
     }
+    if preserve_original_framing:
+        edit_options.update(
+            {
+                "referenceBox": "originalImage",
+                "padding": "0",
+            }
+        )
+    else:
+        horizontal_padding = max(0.02, (1 - framing.width_fraction) / 2)
+        bottom_padding = max(
+            0.02,
+            1 - composition_options.vehicle_bottom_percent / 100,
+        )
+        top_padding = min(
+            0.49,
+            max(0.02, 1 - framing.height_fraction - bottom_padding),
+        )
+        edit_options.update(
+            {
+                "paddingLeft": f"{horizontal_padding:.3f}",
+                "paddingRight": f"{horizontal_padding:.3f}",
+                "paddingTop": f"{top_padding:.3f}",
+                "paddingBottom": f"{bottom_padding:.3f}",
+                "horizontalAlignment": "center",
+                "verticalAlignment": "bottom",
+            }
+        )
     shadow_mode = photoroom_shadow_mode(shadow_opacity_percent)
     if shadow_mode is not None:
         # Photoroom derives tyre contact points and perspective. Its API exposes
@@ -569,9 +730,20 @@ def compose_showroom(
     ).getbbox()
     if alpha_box is None:
         raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
-    vehicle = vehicle.crop(alpha_box)
 
-    contour = VehicleContour(vehicle.width, vehicle.height)
+    frame = VehicleFrame(
+        contour=VehicleContour(
+            width=alpha_box[2] - alpha_box[0],
+            height=alpha_box[3] - alpha_box[1],
+        ),
+        source_width=vehicle.width,
+        source_height=vehicle.height,
+        left=alpha_box[0],
+        top=alpha_box[1],
+        right=alpha_box[2],
+        bottom=alpha_box[3],
+    )
+    contour = frame.contour
     perspective = infer_vehicle_perspective(
         options.capture_step_name,
         contour,
@@ -579,18 +751,6 @@ def compose_showroom(
     )
     options = perspective_composition_options(options, contour)
     scene_adjustment = calculate_scene_adjustment(options)
-    if abs(scene_adjustment.rotation_degrees) >= 0.05:
-        vehicle = vehicle.rotate(
-            scene_adjustment.rotation_degrees,
-            resample=Image.Resampling.BICUBIC,
-            expand=True,
-        )
-        rotated_box = vehicle.getchannel("A").point(
-            lambda value: 255 if value >= 128 else 0
-        ).getbbox()
-        if rotated_box is not None:
-            vehicle = vehicle.crop(rotated_box)
-            contour = VehicleContour(vehicle.width, vehicle.height)
     options = replace(
         options,
         contour_target_area_percent=round(
@@ -608,23 +768,67 @@ def compose_showroom(
         max_width_percent=options.contour_max_width_percent,
         max_height_percent=options.contour_max_height_percent,
     )
-    target_width = options.width * framing.width_fraction
-    target_height = options.height * framing.height_fraction
-    scale = min(target_width / vehicle.width, target_height / vehicle.height)
-    vehicle = vehicle.resize(
-        (max(1, int(vehicle.width * scale)), max(1, int(vehicle.height * scale))),
-        Image.Resampling.LANCZOS,
+    preserve_original_framing = should_preserve_original_framing(
+        frame,
+        options=options,
+        preferred_framing=framing,
     )
+    if preserve_original_framing:
+        vehicle = ImageOps.fit(
+            vehicle,
+            (options.width, options.height),
+            method=Image.Resampling.LANCZOS,
+        )
+        fitted_box = vehicle.getchannel("A").point(
+            lambda value: 255 if value >= 128 else 0
+        ).getbbox()
+        if fitted_box is None:
+            raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
+        x, y = fitted_box[0], fitted_box[1]
+        vehicle = vehicle.crop(fitted_box)
+        bottom = y + vehicle.height
+        scene_adjustment = SceneAdjustment()
+    else:
+        vehicle = vehicle.crop(alpha_box)
+        if abs(scene_adjustment.rotation_degrees) >= 0.05:
+            vehicle = vehicle.rotate(
+                scene_adjustment.rotation_degrees,
+                resample=Image.Resampling.BICUBIC,
+                expand=True,
+            )
+            rotated_box = vehicle.getchannel("A").point(
+                lambda value: 255 if value >= 128 else 0
+            ).getbbox()
+            if rotated_box is not None:
+                vehicle = vehicle.crop(rotated_box)
+        contour = VehicleContour(vehicle.width, vehicle.height)
+        framing = calculate_contour_framing(
+            contour,
+            output_width=options.width,
+            output_height=options.height,
+            target_area_percent=options.contour_target_area_percent,
+            max_width_percent=options.contour_max_width_percent,
+            max_height_percent=options.contour_max_height_percent,
+        )
+        target_width = options.width * framing.width_fraction
+        target_height = options.height * framing.height_fraction
+        scale = min(target_width / vehicle.width, target_height / vehicle.height)
+        vehicle = vehicle.resize(
+            (max(1, int(vehicle.width * scale)), max(1, int(vehicle.height * scale))),
+            Image.Resampling.LANCZOS,
+        )
+        x = (options.width - vehicle.width) // 2
+        bottom = int(
+            options.height * max(55, min(98, options.vehicle_bottom_percent)) / 100
+        )
+        y = bottom - vehicle.height
+
     if options.brightness_percent != 100:
         rgb = ImageEnhance.Brightness(vehicle.convert("RGB")).enhance(
             max(50, min(150, options.brightness_percent)) / 100
         )
         rgb.putalpha(vehicle.getchannel("A"))
         vehicle = rgb
-
-    x = (options.width - vehicle.width) // 2
-    bottom = int(options.height * max(55, min(98, options.vehicle_bottom_percent)) / 100)
-    y = bottom - vehicle.height
 
     reflection_opacity = max(0, min(60, options.reflection_opacity_percent))
     if reflection_opacity:
@@ -921,11 +1125,25 @@ def process_photo(photo_id: str) -> None:
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
+            background_image = transform_background(
+                background_image,
+                width=settings.output_width,
+                height=settings.output_height,
+                zoom_percent=composition.background_zoom_percent,
+                offset_x_percent=composition.background_offset_x_percent,
+                offset_y_percent=composition.background_offset_y_percent,
+            )
+            cutout: bytes
             if image_settings.provider == "photoroom":
+                cutout = create_photoroom_cutout(
+                    original,
+                    settings,
+                    photoroom_sandbox_active(image_settings, settings),
+                )
                 finished = create_photoroom_showroom(
                     original,
                     background_image,
-                    background.content_type,
+                    "image/jpeg",
                     settings,
                     contour_target_area_percent=composition.contour_target_area_percent,
                     contour_max_width_percent=composition.contour_max_width_percent,
@@ -945,6 +1163,7 @@ def process_photo(photo_id: str) -> None:
                     ),
                     photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                     optimized=True,
+                    cutout_bytes=cutout,
                 )
             elif image_settings.provider == "remove_bg":
                 ai_cutout = remove_vehicle_background(original, settings)
@@ -1005,10 +1224,20 @@ def process_photo(photo_id: str) -> None:
                 content=create_thumbnail(finished),
                 content_type="image/jpeg",
             )
+            preview_cutout_key = (
+                f"dealerships/{job.dealership_id}/jobs/{job.id}/preview-cutouts/"
+                f"{step.id}/{photo.id}.png"
+            )
+            storage.put_object(
+                object_key=preview_cutout_key,
+                content=cutout,
+                content_type="image/png",
+            )
             photo.processed_object_key = processed_key
             photo.processed_content_type = "image/jpeg"
             photo.processed_size_bytes = len(finished)
             photo.processed_thumbnail_object_key = processed_thumbnail_key
+            photo.preview_cutout_object_key = preview_cutout_key
             photo.processed_provider = image_settings.provider
             photo.processing_status = ProcessingStatus.COMPLETED
             photo.processing_completed_at = datetime.now(timezone.utc)
@@ -1087,10 +1316,18 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
+            background_image = transform_background(
+                background_image,
+                width=settings.output_width,
+                height=settings.output_height,
+                zoom_percent=composition.background_zoom_percent,
+                offset_x_percent=composition.background_offset_x_percent,
+                offset_y_percent=composition.background_offset_y_percent,
+            )
             finished = create_photoroom_showroom(
                 original,
                 background_image,
-                background.content_type,
+                "image/jpeg",
                 settings,
                 contour_target_area_percent=composition.contour_target_area_percent,
                 contour_max_width_percent=composition.contour_max_width_percent,
