@@ -3201,12 +3201,13 @@ def background_orientation_previews(
 
 
 @router.post("/backgrounds/{background_id}")
-def update_background(
+async def update_background(
     background_id: uuid.UUID,
     request: Request,
     name: str = Form(),
     brand_id: str = Form(default=""),
     location_ids: list[uuid.UUID] = Form(default=[]),
+    image: UploadFile | None = File(default=None),
     contour_target_area_percent: int = Form(default=36),
     contour_max_width_percent: int = Form(default=78),
     contour_max_height_percent: int = Form(default=72),
@@ -3238,6 +3239,7 @@ def update_background(
     is_active: str | None = Form(default=None),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
 ):
     admin = _require_system_admin(request, db)
     if isinstance(admin, RedirectResponse):
@@ -3330,6 +3332,19 @@ def update_background(
     if not cleaned_name or not values_valid or not overrides_well_formed:
         _flash(request, "Bitte prüfen Sie Name und Showroom-Einstellungen.", "error")
     else:
+        replacement_object_key: str | None = None
+        replacement_content_type: str | None = None
+        if image is not None and image.filename:
+            replacement_object_key, replacement_content_type = (
+                await _store_configuration_image(
+                    storage,
+                    image,
+                    object_key_prefix=(
+                        f"dealerships/{dealership.id}/configuration/backgrounds"
+                    ),
+                )
+            )
+        previous_object_key = background.object_key
         selected_brand = _tenant_brand(db, dealership.id, _optional_uuid(brand_id))
         background.name = cleaned_name
         background.brand_id = selected_brand.id if selected_brand else None
@@ -3350,6 +3365,9 @@ def update_background(
         background.scene_reference_vertical_degrees = scene_reference_vertical_degrees
         background.scene_perspective_strength_percent = scene_perspective_strength_percent
         background.is_active = is_active == "on"
+        if replacement_object_key is not None and replacement_content_type is not None:
+            background.object_key = replacement_object_key
+            background.content_type = replacement_content_type
 
         valid_orientations = {
             orientation.id
@@ -3396,7 +3414,20 @@ def update_background(
             if existing is None:
                 db.add(override)
         db.commit()
-        _flash(request, "Hintergrund wurde gespeichert.")
+        if replacement_object_key is not None:
+            try:
+                storage.delete_object(object_key=previous_object_key)
+            except StorageUnavailableError:
+                _flash(
+                    request,
+                    "Das neue Hintergrundbild wurde gespeichert. Die alte Datei konnte "
+                    "nicht aus dem Bildspeicher entfernt werden.",
+                    "warning",
+                )
+            else:
+                _flash(request, "Hintergrundbild wurde ausgetauscht und gespeichert.")
+        else:
+            _flash(request, "Hintergrund wurde gespeichert.")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}/configuration#backgrounds",
         status_code=status.HTTP_303_SEE_OTHER,
