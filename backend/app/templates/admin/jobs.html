@@ -21,11 +21,19 @@
     <div class="section-heading"><div><h2>Aufträge</h2><p>{{ jobs|length }} {{ 'Auftrag' if jobs|length == 1 else 'Aufträge' }} vorhanden</p></div><span class="count">{{ jobs|length }}</span></div>
     <div class="job-list">
         {% for job in jobs %}
-        <a class="job-row" href="/admin/jobs/{{ job.id }}">
-            <div><strong>{{ job.vin }}</strong><span>Version {{ job.version }} · {{ job.brand }}</span></div>
-            <div><strong>{{ locations[job.location_id].name if job.location_id in locations else "Unbekannter Standort" }}</strong><span>{{ job.created_at.strftime('%d.%m.%Y %H:%M') }}</span></div>
-            <span class="status status-{{ 'active' if job.status.value in ['completed', 'review_required'] else 'inactive' }}">{{ job.status.value|replace('_', ' ') }}</span>
-        </a>
+        <div class="job-entry">
+            <a class="job-row" href="/admin/jobs/{{ job.id }}">
+                <div><strong>{{ job.vin }}</strong><span>Version {{ job.version }} · {{ job.brand }}</span></div>
+                <div><strong>{{ locations[job.location_id].name if job.location_id in locations else "Unbekannter Standort" }}</strong><span>{{ job.created_at.strftime('%d.%m.%Y %H:%M') }}</span></div>
+                <span class="status status-{{ 'active' if job.status.value in ['completed', 'review_required'] else 'inactive' }}">{{ job.status.value|replace('_', ' ') }}</span>
+            </a>
+            {% if current_user.role.value == 'system_admin' %}
+            <form method="post" action="/admin/jobs/{{ job.id }}/delete" class="job-delete-form" onsubmit="return confirm('Diesen Auftrag dauerhaft löschen? Alle zugehörigen Bilder und Exporte werden auch aus dem Bildspeicher gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.')">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="button button-danger" type="submit" aria-label="Auftrag {{ job.vin }} löschen">Löschen</button>
+            </form>
+            {% endif %}
+        </div>
         {% else %}<p class="empty">Noch keine Fahrzeugaufträge vorhanden.</p>{% endfor %}
     </div>
 </section>

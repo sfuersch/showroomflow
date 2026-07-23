@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image
 from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, Field
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -54,6 +54,7 @@ from app.models import (
     User,
     UserRole,
     VehicleCreditGrant,
+    VehicleCreditUsage,
     VehicleJob,
     WebPushSubscription,
 )
@@ -1857,6 +1858,102 @@ def jobs_page(
             credit_balance=balance,
             jobs_live_version=jobs_live_version,
         ),
+    )
+
+
+@router.post("/jobs/{job_id}/delete")
+def delete_job(
+    job_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_system_admin(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    job = db.get(VehicleJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Fahrzeugauftrag wurde nicht gefunden")
+    dealership = _authorized_dealership(db, admin, job.dealership_id)
+
+    photos = list(db.scalars(select(PhotoAsset).where(PhotoAsset.vehicle_job_id == job.id)))
+    photo_ids = [photo.id for photo in photos]
+    variants = (
+        list(
+            db.scalars(
+                select(PhotoProcessingVariant).where(
+                    PhotoProcessingVariant.photo_asset_id.in_(photo_ids)
+                )
+            )
+        )
+        if photo_ids
+        else []
+    )
+    exports = list(db.scalars(select(ExportRun).where(ExportRun.vehicle_job_id == job.id)))
+    object_keys = list(
+        dict.fromkeys(
+            key
+            for key in [
+                *(
+                    key
+                    for photo in photos
+                    for key in (
+                        photo.original_object_key,
+                        photo.original_thumbnail_object_key,
+                        photo.benchmark_object_key,
+                        photo.benchmark_thumbnail_object_key,
+                        photo.processed_object_key,
+                        photo.processed_thumbnail_object_key,
+                        photo.window_mask_object_key,
+                    )
+                ),
+                *(
+                    key
+                    for variant in variants
+                    for key in (variant.object_key, variant.thumbnail_object_key)
+                ),
+                *(export.object_key for export in exports),
+            ]
+            if key
+        )
+    )
+
+    if photo_ids:
+        db.execute(
+            delete(PhotoProcessingVariant).where(
+                PhotoProcessingVariant.photo_asset_id.in_(photo_ids)
+            )
+        )
+    db.execute(delete(ExternalApiUsage).where(ExternalApiUsage.vehicle_job_id == job.id))
+    db.execute(delete(ExportRun).where(ExportRun.vehicle_job_id == job.id))
+    db.execute(delete(VehicleCreditUsage).where(VehicleCreditUsage.vehicle_job_id == job.id))
+    db.execute(delete(PhotoAsset).where(PhotoAsset.vehicle_job_id == job.id))
+    db.delete(job)
+    try:
+        db.flush()
+        for object_key in object_keys:
+            storage.delete_object(object_key=object_key)
+        db.commit()
+    except StorageUnavailableError:
+        db.rollback()
+        _flash(
+            request,
+            "Der Bildspeicher ist nicht erreichbar. Der Auftrag wurde nicht gelöscht.",
+            "error",
+        )
+    except IntegrityError:
+        db.rollback()
+        _flash(request, "Der Fahrzeugauftrag konnte nicht gelöscht werden.", "error")
+    else:
+        _flash(
+            request,
+            f"Auftrag {job.vin} · Version {job.version} wurde dauerhaft gelöscht.",
+        )
+    return RedirectResponse(
+        f"/admin/dealerships/{dealership.id}/jobs",
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
