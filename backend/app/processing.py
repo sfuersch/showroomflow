@@ -1105,10 +1105,6 @@ def create_photoroom_showroom(
             composition_options.contour_target_area_percent
             * scene_adjustment.scale_multiplier**2
         ),
-        vehicle_bottom_percent=round(
-            composition_options.vehicle_bottom_percent
-            + scene_adjustment.bottom_shift_fraction * 100
-        ),
     )
 
     framing = calculate_contour_framing(
@@ -1148,14 +1144,24 @@ def create_photoroom_showroom(
             0.49,
             max(0.02, 1 - framing.height_fraction - bottom_padding),
         )
+        horizontal_padding_pixels = round(settings.output_width * horizontal_padding)
+        top_padding_pixels = round(settings.output_height * top_padding)
+        bottom_margin_pixels = round(settings.output_height * bottom_padding)
         edit_options.update(
             {
-                "paddingLeft": f"{horizontal_padding:.3f}",
-                "paddingRight": f"{horizontal_padding:.3f}",
-                "paddingTop": f"{top_padding:.3f}",
-                "paddingBottom": f"{bottom_padding:.3f}",
+                "paddingLeft": f"{horizontal_padding_pixels}px",
+                "paddingRight": f"{horizontal_padding_pixels}px",
+                "paddingTop": f"{top_padding_pixels}px",
+                "paddingBottom": "0px",
+                # Photoroom may ignore padding when its segmentation considers
+                # an edge of a large subject cropped. A margin is always
+                # respected, so it makes the configured tyre contact line
+                # authoritative even for high vans and transporters.
+                "marginBottom": f"{bottom_margin_pixels}px",
                 "horizontalAlignment": "center",
                 "verticalAlignment": "bottom",
+                "scaling": "fit",
+                "ignorePaddingAndSnapOnCroppedSides": "false",
             }
         )
     shadow_mode = photoroom_shadow_mode(shadow_opacity_percent)
@@ -1579,9 +1585,6 @@ def compose_showroom(
         options,
         contour_target_area_percent=round(
             options.contour_target_area_percent * scene_adjustment.scale_multiplier**2
-        ),
-        vehicle_bottom_percent=round(
-            options.vehicle_bottom_percent + scene_adjustment.bottom_shift_fraction * 100
         ),
     )
     framing = calculate_contour_framing(
