@@ -101,6 +101,9 @@ class CompositionOptions:
     shadow_opacity_percent: int = 32
     reflection_opacity_percent: int = 10
     brightness_percent: int = 100
+    background_zoom_percent: int = 100
+    background_offset_x_percent: int = 0
+    background_offset_y_percent: int = 0
     capture_step_name: str = ""
     orientation_key: str = ""
     capture_metadata: dict | None = None
@@ -178,6 +181,9 @@ class BackgroundComposition:
     shadow_opacity_percent: int
     reflection_opacity_percent: int
     brightness_percent: int
+    background_zoom_percent: int
+    background_offset_x_percent: int
+    background_offset_y_percent: int
     window_background_shift_percent: int
 
 
@@ -533,7 +539,19 @@ def resolve_background_composition(
 
     def value(name: str) -> int:
         overridden = getattr(override, name, None) if override is not None else None
-        return int(overridden if overridden is not None else getattr(background, name))
+        base = getattr(background, name, None)
+        fallback = {
+            "background_zoom_percent": 100,
+            "background_offset_x_percent": 0,
+            "background_offset_y_percent": 0,
+        }.get(name)
+        return int(
+            overridden
+            if overridden is not None
+            else base
+            if base is not None
+            else fallback
+        )
 
     return BackgroundComposition(
         contour_target_area_percent=value("contour_target_area_percent"),
@@ -543,8 +561,44 @@ def resolve_background_composition(
         shadow_opacity_percent=value("shadow_opacity_percent"),
         reflection_opacity_percent=value("reflection_opacity_percent"),
         brightness_percent=value("brightness_percent"),
+        background_zoom_percent=value("background_zoom_percent"),
+        background_offset_x_percent=value("background_offset_x_percent"),
+        background_offset_y_percent=value("background_offset_y_percent"),
         window_background_shift_percent=value("window_background_shift_percent"),
     )
+
+
+def transform_background(
+    background_bytes: bytes,
+    *,
+    width: int,
+    height: int,
+    zoom_percent: int = 100,
+    offset_x_percent: int = 0,
+    offset_y_percent: int = 0,
+) -> bytes:
+    """Crop and position a background without exposing empty canvas edges."""
+    try:
+        source = Image.open(io.BytesIO(background_bytes)).convert("RGB")
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Das Hintergrundbild ist ungültig") from exc
+
+    base = ImageOps.fit(source, (width, height), method=Image.Resampling.LANCZOS)
+    zoom = max(100, min(160, zoom_percent)) / 100
+    scaled = base.resize(
+        (max(width, round(width * zoom)), max(height, round(height * zoom))),
+        Image.Resampling.LANCZOS,
+    )
+    overflow_x = scaled.width - width
+    overflow_y = scaled.height - height
+    requested_x = round(width * max(-25, min(25, offset_x_percent)) / 100)
+    requested_y = round(height * max(-25, min(25, offset_y_percent)) / 100)
+    left = max(0, min(overflow_x, overflow_x // 2 - requested_x))
+    top = max(0, min(overflow_y, overflow_y // 2 - requested_y))
+    transformed = scaled.crop((left, top, left + width, top + height))
+    output = io.BytesIO()
+    transformed.save(output, format="JPEG", quality=94, optimize=True)
+    return output.getvalue()
 
 
 SCENE_TEST_ORIENTATIONS = frozenset({"front-left", "left", "rear-left", "rear"})
@@ -995,13 +1049,14 @@ def create_photoroom_showroom(
     scene_perspective_strength_percent: int = 35,
     photoroom_sandbox: bool | None = None,
     optimized: bool = False,
+    cutout_bytes: bytes | None = None,
     *,
     client: httpx.Client | None = None,
     usage_context: ExternalApiUsageContext | None = None,
 ) -> bytes:
     """Measure the contour, then let Photoroom render the final showroom result."""
     request = client.post if client is not None else httpx.post
-    cutout = create_photoroom_cutout(
+    cutout = cutout_bytes or create_photoroom_cutout(
         original_bytes,
         settings,
         photoroom_sandbox,
@@ -1917,6 +1972,19 @@ def process_photo(photo_id: str) -> None:
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
             processing_mode = orientation.processing_mode if orientation else "optimized"
+            preview_cutout: bytes | None = None
+            composed_background = background_image
+            composed_background_content_type = background.content_type
+            if processing_mode not in MASKED_BACKGROUND_MODES:
+                composed_background = transform_background(
+                    background_image,
+                    width=settings.output_width,
+                    height=settings.output_height,
+                    zoom_percent=composition.background_zoom_percent,
+                    offset_x_percent=composition.background_offset_x_percent,
+                    offset_y_percent=composition.background_offset_y_percent,
+                )
+                composed_background_content_type = "image/jpeg"
             if processing_mode in MASKED_BACKGROUND_MODES:
                 if image_settings.provider != "photoroom":
                     raise ImageProcessingError(
@@ -2060,10 +2128,16 @@ def process_photo(photo_id: str) -> None:
                     else:
                         photo.quality_review_resolution = "automatic_pass"
             elif image_settings.provider == "photoroom":
+                preview_cutout = create_photoroom_cutout(
+                    original,
+                    settings,
+                    photoroom_sandbox_active(image_settings, settings),
+                    usage_context=usage_context,
+                )
                 finished = create_photoroom_showroom(
                     original,
-                    background_image,
-                    background.content_type,
+                    composed_background,
+                    composed_background_content_type,
                     settings,
                     contour_target_area_percent=composition.contour_target_area_percent,
                     contour_max_width_percent=composition.contour_max_width_percent,
@@ -2083,6 +2157,7 @@ def process_photo(photo_id: str) -> None:
                     ),
                     photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
                     optimized=True,
+                    cutout_bytes=preview_cutout,
                     usage_context=usage_context,
                 )
             elif image_settings.provider == "remove_bg":
@@ -2090,8 +2165,9 @@ def process_photo(photo_id: str) -> None:
                     original, settings, usage_context=usage_context
                 )
                 cutout = apply_cutout_mask_to_original(original, ai_cutout)
+                preview_cutout = cutout
                 finished = compose_showroom(
-                    background_image,
+                    composed_background,
                     cutout,
                     CompositionOptions(
                         width=settings.output_width,
@@ -2118,6 +2194,17 @@ def process_photo(photo_id: str) -> None:
                 )
             else:
                 raise ImageProcessingError("Die Bildverarbeitung ist deaktiviert")
+            if preview_cutout is not None:
+                preview_cutout_key = (
+                    f"dealerships/{job.dealership_id}/jobs/{job.id}/preview-cutouts/"
+                    f"{step.id}/{photo.id}.png"
+                )
+                storage.put_object(
+                    object_key=preview_cutout_key,
+                    content=preview_cutout,
+                    content_type="image/png",
+                )
+                photo.preview_cutout_object_key = preview_cutout_key
             matching_overlays = _matching_overlays(db, job, step)
             if matching_overlays:
                 finished = apply_image_overlays(
@@ -2331,6 +2418,21 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
 
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
+            composed_background = background_image
+            composed_background_content_type = background.content_type
+            if (
+                orientation is None
+                or orientation.processing_mode not in MASKED_BACKGROUND_MODES
+            ):
+                composed_background = transform_background(
+                    background_image,
+                    width=settings.output_width,
+                    height=settings.output_height,
+                    zoom_percent=composition.background_zoom_percent,
+                    offset_x_percent=composition.background_offset_x_percent,
+                    offset_y_percent=composition.background_offset_y_percent,
+                )
+                composed_background_content_type = "image/jpeg"
             if (
                 orientation is not None
                 and orientation.processing_mode in MASKED_BACKGROUND_MODES
@@ -2379,8 +2481,8 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
             else:
                 finished = create_photoroom_showroom(
                     original,
-                    background_image,
-                    background.content_type,
+                    composed_background,
+                    composed_background_content_type,
                     settings,
                     contour_target_area_percent=composition.contour_target_area_percent,
                     contour_max_width_percent=composition.contour_max_width_percent,
