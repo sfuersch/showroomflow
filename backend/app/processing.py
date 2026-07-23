@@ -218,11 +218,19 @@ SELECT: {profile.prompt}. Select only the exterior environment visible through g
 or through a physical vehicle opening. Include every disconnected matching region,
 including small side-window and door-opening regions at an image edge.
 
+ALSO SELECT the reflective glass surfaces of every visible interior rear-view mirror
+and exterior side mirror. Cover these reflective surfaces completely with the same
+pure magenta so they will be neutralized with a matte appearance. Never select the
+mirror housing, frame, mount or stalk. If the protection text below mentions a mirror,
+that protection applies only to its housing, frame, mount and stalk, never its
+reflective glass surface.
+
 NEVER SELECT: {profile.negative_prompt}. Also preserve all vehicle structure and
 interior components, including A/B/C pillars, roof liner, dashboard, instrument
-cluster, steering wheel, seats, door panels, mirrors, window seals, frames, screens,
-controls and trim. Preserve reflections and glass edges; mark the view through the
-glass, not the surrounding vehicle parts.
+cluster, steering wheel, seats, door panels, mirror housings, mirror frames, mirror
+mounts, mirror stalks, window seals, frames, screens, controls and trim. Preserve
+reflections and glass edges outside the selected mirror glass; mark the view through
+the glass, not the surrounding vehicle parts.
 
 Return the annotated photograph only. Do not add text, legends, outlines or new
 objects.
