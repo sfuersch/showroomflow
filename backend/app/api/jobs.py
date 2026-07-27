@@ -74,12 +74,17 @@ def list_jobs(
         thumbnail_url = None
         if thumbnail is not None:
             photo = thumbnail[1]
-            object_key = (
-                photo.processed_thumbnail_object_key
-                or photo.processed_object_key
-                or photo.original_thumbnail_object_key
-                or photo.original_object_key
-            )
+            if photo.uses_original_result:
+                object_key = (
+                    photo.original_thumbnail_object_key or photo.original_object_key
+                )
+            else:
+                object_key = (
+                    photo.processed_thumbnail_object_key
+                    or photo.processed_object_key
+                    or photo.original_thumbnail_object_key
+                    or photo.original_object_key
+                )
             thumbnail_url = storage.create_download_url(object_key=object_key)
         responses.append(
             VehicleJobResponse.model_validate(job).model_copy(

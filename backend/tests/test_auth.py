@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.exporting import try_enqueue_auto_export
+from app.exporting import resolve_export_items, try_enqueue_auto_export
 from app.models import (
     Background,
     BackgroundOrientationComposition,
@@ -2651,6 +2651,98 @@ def test_auto_export_resumes_after_last_quality_review_is_approved(
         assert approved_photo.quality_review_resolution == "approved"
         assert export_run is not None
         assert queued_exports == [export_run.id]
+
+
+def test_quality_review_can_use_original_as_final_result() -> None:
+    dealership, user = create_dealership_admin()
+    create_system_admin()
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            name="Lenkrad",
+            instruction="Lenkrad aufnehmen",
+            category="interior",
+            capture_order=1,
+            export_order=1,
+            is_required=True,
+            requires_processing=True,
+        )
+        db.add_all([location, step])
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=user.id,
+            vin="QUALITY-ORIGINAL-VIN",
+            version=1,
+            brand="Ford",
+            auto_export=False,
+            capture_completed_at=datetime.now(timezone.utc),
+        )
+        db.add(job)
+        db.flush()
+        photo = PhotoAsset(
+            vehicle_job_id=job.id,
+            capture_step_id=step.id,
+            captured_by_id=user.id,
+            revision=1,
+            original_object_key="originals/quality-original.jpg",
+            original_thumbnail_object_key="originals/quality-original.thumbnail.jpg",
+            original_content_type="image/jpeg",
+            expected_size_bytes=1234,
+            original_size_bytes=1234,
+            uploaded_at=datetime.now(timezone.utc),
+            is_selected=True,
+            processed_object_key="processed/quality-original.jpg",
+            processed_content_type="image/jpeg",
+            processed_size_bytes=1234,
+            processing_status=ProcessingStatus.FAILED,
+            processing_error="Maskenprüfung fehlgeschlagen",
+            quality_review_required=True,
+            quality_review_reason="Automatische Prüfung auffällig",
+            quality_review_created_at=datetime.now(timezone.utc),
+        )
+        db.add(photo)
+        db.commit()
+        photo_id = photo.id
+        job_id = job.id
+
+    client.cookies.clear()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    review_page = client.get("/admin/quality-reviews")
+    assert "Originalbild übernehmen" in review_page.text
+    response = client.post(
+        f"/admin/quality-reviews/{photo_id}/use-original",
+        data={"csrf_token": csrf_from(review_page.text)},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/quality-reviews"
+    with TestingSession() as db:
+        saved_photo = db.get(PhotoAsset, photo_id)
+        saved_job = db.get(VehicleJob, job_id)
+        assert saved_photo is not None
+        assert saved_job is not None
+        assert saved_photo.quality_review_required is False
+        assert saved_photo.quality_review_resolution == "original_approved"
+        assert saved_photo.uses_original_result is True
+        assert saved_photo.processing_status == ProcessingStatus.COMPLETED
+        assert saved_photo.processing_error is None
+        assert saved_photo.processed_object_key == "processed/quality-original.jpg"
+        export_items = resolve_export_items(db, saved_job)
+        assert [item.object_key for item in export_items] == [
+            "originals/quality-original.jpg"
+        ]
 
 
 def test_guided_capture_is_tenant_scoped() -> None:

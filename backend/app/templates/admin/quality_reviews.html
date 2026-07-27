@@ -41,6 +41,7 @@
     <div class="quality-actions">
         {% if item.photo.window_mask_object_key %}<a class="button button-primary" href="/admin/photos/{{ item.photo.id }}/correction">Maske korrigieren</a>{% endif %}
         <form method="post" action="/admin/quality-reviews/{{ item.photo.id }}/reprocess"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary" type="submit" {% if item.photo.processing_status.value in ['queued', 'processing'] %}disabled{% endif %}>Automatisch neu verarbeiten</button></form>
+        <form method="post" action="/admin/quality-reviews/{{ item.photo.id }}/use-original" onsubmit="return confirm('Soll das unveränderte Originalbild wirklich als Endergebnis übernommen und freigegeben werden?')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary" type="submit">Originalbild übernehmen</button></form>
         {% if item.photo.processing_status.value == 'completed' and item.photo.processed_object_key %}<form method="post" action="/admin/quality-reviews/{{ item.photo.id }}/approve"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-secondary" type="submit">Ergebnis freigeben</button></form>{% endif %}
     </div>
 </article>

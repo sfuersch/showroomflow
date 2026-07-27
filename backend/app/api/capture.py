@@ -60,6 +60,16 @@ def _authorized_job(db: DatabaseSession, user: CurrentUser, job_id: uuid.UUID) -
 def _photo_response(storage: ObjectStorage, photo: PhotoAsset) -> PhotoAssetResponse:
     if photo.uploaded_at is None:
         raise ValueError("Only uploaded photos can be returned")
+    processed_object_key = (
+        photo.original_object_key
+        if photo.uses_original_result
+        else photo.processed_object_key
+    )
+    processed_thumbnail_object_key = (
+        photo.original_thumbnail_object_key
+        if photo.uses_original_result
+        else photo.processed_thumbnail_object_key
+    )
     return PhotoAssetResponse(
         id=photo.id,
         capture_step_id=photo.capture_step_id,
@@ -71,13 +81,13 @@ def _photo_response(storage: ObjectStorage, photo: PhotoAsset) -> PhotoAssetResp
             else None
         ),
         processed_image_url=(
-            storage.create_download_url(object_key=photo.processed_object_key)
-            if photo.processed_object_key
+            storage.create_download_url(object_key=processed_object_key)
+            if processed_object_key
             else None
         ),
         processed_thumbnail_url=(
-            storage.create_download_url(object_key=photo.processed_thumbnail_object_key)
-            if photo.processed_thumbnail_object_key
+            storage.create_download_url(object_key=processed_thumbnail_object_key)
+            if processed_thumbnail_object_key
             else None
         ),
         processing_status=photo.processing_status,

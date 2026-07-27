@@ -957,6 +957,48 @@ def approve_quality_review(
     return RedirectResponse("/admin/quality-reviews", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.post("/quality-reviews/{photo_id}/use-original")
+def use_original_for_quality_review(
+    photo_id: uuid.UUID,
+    request: Request,
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+):
+    admin = _require_quality_operator(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    photo = db.get(PhotoAsset, photo_id)
+    if photo is None or not photo.quality_review_required:
+        raise HTTPException(status_code=404, detail="Prüffall wurde nicht gefunden")
+
+    photo.quality_review_required = False
+    photo.quality_reviewed_by_id = admin.id
+    photo.quality_reviewed_at = datetime.now(timezone.utc)
+    photo.quality_review_resolution = "original_approved"
+    photo.processing_status = ProcessingStatus.COMPLETED
+    photo.processing_error = None
+    job = db.get(VehicleJob, photo.vehicle_job_id)
+    db.commit()
+
+    remaining_reviews = db.scalar(
+        select(func.count(PhotoAsset.id)).where(
+            PhotoAsset.vehicle_job_id == photo.vehicle_job_id,
+            PhotoAsset.is_selected.is_(True),
+            PhotoAsset.quality_review_required.is_(True),
+        )
+    )
+    if job is not None and not remaining_reviews:
+        try_enqueue_auto_export(job.id, db)
+    _flash(
+        request,
+        "Das Originalbild wurde als Endergebnis übernommen und freigegeben.",
+    )
+    return RedirectResponse(
+        "/admin/quality-reviews", status_code=status.HTTP_303_SEE_OTHER
+    )
+
+
 @router.post("/quality-reviews/{photo_id}/reprocess")
 def reprocess_quality_review(
     photo_id: uuid.UUID,

@@ -474,6 +474,10 @@ class PhotoAsset(Timestamped, Base):
         String(32), nullable=True
     )
 
+    @property
+    def uses_original_result(self) -> bool:
+        return self.quality_review_resolution == "original_approved"
+
 
 class PhotoProcessingVariant(Timestamped, Base):
     __tablename__ = "photo_processing_variants"

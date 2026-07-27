@@ -128,7 +128,9 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
             raise ExportValidationError(
                 f'Fotoposition "{step.name}" wartet auf die interne Qualitätsfreigabe.'
             )
-        if step.requires_processing:
+        if photo.uses_original_result:
+            object_key = photo.original_object_key
+        elif step.requires_processing:
             if (
                 photo.processing_status != ProcessingStatus.COMPLETED
                 or not photo.processed_object_key
