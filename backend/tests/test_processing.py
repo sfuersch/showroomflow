@@ -3,7 +3,9 @@ import io
 import uuid
 from dataclasses import replace
 
+import cv2
 import httpx
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
@@ -470,7 +472,7 @@ def test_vehicle_ground_anchors_follow_each_wheel_independently() -> None:
     assert right_anchor[1] - left_anchor[1] >= 20
 
 
-def test_vehicle_shadow_follows_perspective_line_to_both_bumpers() -> None:
+def test_vehicle_shadow_is_connected_and_follows_diagonal_ground_plane() -> None:
     alpha = Image.new("L", (400, 240), 0)
     draw = ImageDraw.Draw(alpha)
     draw.rectangle((25, 25, 374, 155), fill=255)
@@ -500,12 +502,22 @@ def test_vehicle_shadow_follows_perspective_line_to_both_bumpers() -> None:
         ]
         return 150 + rows.index(max(rows))
 
-    # The distant and near halves use different ground heights.
-    assert strongest_row(90, 145) + 15 < strongest_row(355, 410)
-    # Beyond each wheel the shadow stays at that wheel's ground height. It
-    # must not extrapolate the diagonal upwards/downwards behind the vehicle.
-    assert strongest_row(65, 90) == pytest.approx(strongest_row(90, 145), abs=4)
-    assert strongest_row(410, 445) == pytest.approx(strongest_row(355, 410), abs=4)
+    # The projected silhouette follows the receding ground plane gradually.
+    sampled_rows = [
+        strongest_row(70, 100),
+        strongest_row(140, 180),
+        strongest_row(230, 270),
+        strongest_row(320, 360),
+        strongest_row(400, 430),
+    ]
+    assert sampled_rows == sorted(sampled_rows)
+    assert sampled_rows[-1] - sampled_rows[0] >= 25
+
+    # Even with two wheels at different heights the result is one connected
+    # cast shadow, not two detached bars or ellipses.
+    shadow_pixels = (np.asarray(shadow) >= 10).astype(np.uint8)
+    component_count, _ = cv2.connectedComponents(shadow_pixels)
+    assert component_count == 2  # transparent background + one shadow
 
 
 def test_manual_editor_shadow_uses_preview_vehicle_position(
