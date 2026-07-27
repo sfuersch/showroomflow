@@ -214,18 +214,21 @@
             const vehicleRight = x + bounds.right * scaleX;
             const vehicleTop = y + bounds.top * scaleY;
             const vehicleBottom = y + bounds.bottom * scaleY;
-            const vehicleWidth = Math.max(1, vehicleRight - vehicleLeft);
-            const vehicleHeight = Math.max(1, vehicleBottom - vehicleTop);
             const leftContactX = x + bounds.groundLeftX * scaleX;
             const leftContactY = y + bounds.groundLeftY * scaleY;
             const rightContactX = x + bounds.groundRightX * scaleX;
             const rightContactY = y + bounds.groundRightY * scaleY;
             drawVehicleShadow(
                 context,
+                subject,
+                x,
+                y,
+                width,
+                height,
                 vehicleLeft,
+                vehicleTop,
                 vehicleRight,
-                vehicleWidth,
-                vehicleHeight,
+                vehicleBottom,
                 leftContactX,
                 leftContactY,
                 rightContactX,
@@ -309,10 +312,15 @@
 
     function drawVehicleShadow(
         context,
+        subject,
+        subjectX,
+        subjectY,
+        subjectWidth,
+        subjectHeight,
         left,
+        top,
         right,
-        width,
-        height,
+        bottom,
         leftContactX,
         leftContactY,
         rightContactX,
@@ -324,9 +332,11 @@
         blurPercent,
         contactPercent
     ) {
+        const width = Math.max(1, right - left);
+        const height = Math.max(1, bottom - top);
         const spread = Math.max(50, Math.min(180, spreadPercent)) / 100;
         const blur = Math.max(20, Math.min(200, blurPercent)) / 100;
-        const broadHeight = Math.max(12, height * .075 * (.68 + spread * .32));
+        const broadHeight = Math.max(12, height * .09 * (.72 + spread * .28));
         const opacity = Math.max(0, Math.min(80, opacityPercent)) / 100;
         const distance = height * Math.max(0, Math.min(20, distancePercent)) / 100;
         const angle = (angleDegrees % 360) * Math.PI / 180;
@@ -335,7 +345,7 @@
         const anchorDistance = Math.max(1, rightContactX - leftContactX);
         let leftGroundY = leftContactY;
         let rightGroundY = rightContactY;
-        const maximumGroundDelta = height * .32;
+        const maximumGroundDelta = height * .22;
         const groundDelta = rightGroundY - leftGroundY;
         if (Math.abs(groundDelta) > maximumGroundDelta) {
             const groundCenter = (leftGroundY + rightGroundY) / 2;
@@ -349,50 +359,72 @@
         const broadLeft = center - halfWidth;
         const broadRight = center + halfWidth;
         const groundYAt = x => {
-            if (x <= leftContactX) return leftGroundY;
-            if (x >= rightContactX) return rightGroundY;
             return leftGroundY + slope * (x - leftContactX);
         };
-        const lineInset = broadHeight * .42;
-        const pathXPositions = [broadLeft];
-        [leftContactX, rightContactX].forEach(contactX => {
-            if (broadLeft < contactX && contactX < broadRight) pathXPositions.push(contactX);
-        });
-        pathXPositions.push(broadRight);
+
+        const placedSilhouette = document.createElement('canvas');
+        placedSilhouette.width = view.width;
+        placedSilhouette.height = view.height;
+        const silhouetteContext = placedSilhouette.getContext('2d');
+        silhouetteContext.drawImage(
+            subject,
+            subjectX,
+            subjectY,
+            subjectWidth,
+            subjectHeight
+        );
+        silhouetteContext.globalCompositeOperation = 'source-in';
+        silhouetteContext.fillStyle = '#000';
+        silhouetteContext.fillRect(0, 0, view.width, view.height);
+
+        const targetTopLeftY = groundYAt(broadLeft) - broadHeight + offsetY;
+        const targetTopRightY = groundYAt(broadRight) - broadHeight + offsetY;
+        const horizontalScale = (broadRight - broadLeft) / width;
+        const horizontalSlope = (targetTopRightY - targetTopLeftY) / width;
+        const verticalScale = broadHeight * 1.08 / height;
+        const translateX = broadLeft + offsetX - horizontalScale * left;
+        const translateY = (
+            targetTopLeftY
+            - horizontalSlope * left
+            - verticalScale * top
+        );
         context.save();
         context.filter = `blur(${Math.max(2, broadHeight * .55 * blur)}px)`;
-        context.fillStyle = `rgba(0, 0, 0, ${opacity})`;
-        context.strokeStyle = `rgba(0, 0, 0, ${opacity})`;
-        context.lineWidth = broadHeight;
-        context.lineCap = 'round';
-        context.lineJoin = 'round';
-        context.beginPath();
-        pathXPositions.forEach((pathX, index) => {
-            const pathY = groundYAt(pathX) - lineInset + offsetY;
-            if (index === 0) context.moveTo(pathX + offsetX, pathY);
-            else context.lineTo(pathX + offsetX, pathY);
-        });
-        context.stroke();
+        context.globalAlpha = opacity;
+        context.setTransform(
+            horizontalScale,
+            horizontalSlope,
+            0,
+            verticalScale,
+            translateX,
+            translateY
+        );
+        context.drawImage(placedSilhouette, 0, 0);
         context.restore();
 
-        const contactHeight = Math.max(6, height * .025);
         const contactStrength = Math.max(0, Math.min(150, contactPercent)) / 100;
+        if (contactStrength <= 0) return;
+        const contactHeight = Math.max(6, height * .025);
+        const contactSource = document.createElement('canvas');
+        contactSource.width = view.width;
+        contactSource.height = view.height;
+        const contactContext = contactSource.getContext('2d');
+        contactContext.drawImage(placedSilhouette, 0, 0);
+        contactContext.globalCompositeOperation = 'destination-in';
+        const contactGradient = contactContext.createLinearGradient(
+            0,
+            top + height * .52,
+            0,
+            bottom
+        );
+        contactGradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        contactGradient.addColorStop(1, 'rgba(0, 0, 0, 1)');
+        contactContext.fillStyle = contactGradient;
+        contactContext.fillRect(0, top, view.width, height);
         context.save();
         context.filter = `blur(${Math.max(3, contactHeight * .45)}px)`;
-        context.fillStyle = `rgba(0, 0, 0, ${Math.min(.9, opacity * 1.75 * contactStrength)})`;
-        [[leftContactX, leftContactY], [rightContactX, rightContactY]].forEach(contact => {
-            context.beginPath();
-            context.ellipse(
-                contact[0],
-                contact[1],
-                Math.max(8, width * .035),
-                contactHeight / 2,
-                0,
-                0,
-                Math.PI * 2
-            );
-            context.fill();
-        });
+        context.globalAlpha = Math.min(.9, opacity * 1.75 * contactStrength);
+        context.drawImage(contactSource, 0, Math.max(1, height * .006));
         context.restore();
     }
 

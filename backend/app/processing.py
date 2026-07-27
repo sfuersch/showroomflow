@@ -1837,7 +1837,14 @@ def _create_vehicle_shadow(
     blur_percent: int = 100,
     contact_percent: int = 100,
 ) -> Image.Image:
-    """Build a perspective-aware underbody shadow and tyre contact shadows."""
+    """Build a connected cast shadow and a contour-following contact shadow.
+
+    The broad shadow is a vertically compressed projection of the complete
+    vehicle alpha mask.  Unlike the previous line between two estimated tyre
+    points, this keeps bumpers, sills and diagonal views connected.  A second,
+    very short shadow made from the lower part of the original silhouette
+    supplies the dark contact directly beneath tyres and bodywork.
+    """
     vehicle_width, vehicle_height = alpha.size
     distance = vehicle_height * max(0, min(20, distance_percent)) / 100
     angle = math.radians(angle_degrees % 360)
@@ -1846,94 +1853,149 @@ def _create_vehicle_shadow(
     spread = max(50, min(180, spread_percent)) / 100
     blur = max(20, min(200, blur_percent)) / 100
 
-    broad_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-    broad_draw = ImageDraw.Draw(broad_shadow)
+    alpha_array = np.asarray(alpha, dtype=np.uint8)
+    active_rows, active_columns = np.nonzero(alpha_array >= 16)
+    if not len(active_columns):
+        return Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+
+    active_left = int(active_columns.min())
+    active_top = int(active_rows.min())
+    active_right = int(active_columns.max())
+    active_bottom = int(active_rows.max())
+    active_width = max(1, active_right - active_left + 1)
+    active_height = max(1, active_bottom - active_top + 1)
+
     broad_height = max(
         18,
-        round(vehicle_height * 0.075 * depth_multiplier * (0.68 + spread * 0.32)),
+        round(active_height * 0.09 * depth_multiplier * (0.72 + spread * 0.28)),
     )
-    alpha_box = alpha.getbbox() or (0, 0, vehicle_width, vehicle_height)
-    active_left, _, active_right, _ = alpha_box
     left_anchor, right_anchor = _vehicle_ground_anchors(alpha)
-    anchor_distance = max(1, right_anchor[0] - left_anchor[0])
     left_ground_y = float(left_anchor[1])
     right_ground_y = float(right_anchor[1])
-    maximum_ground_delta = vehicle_height * 0.32
+    maximum_ground_delta = active_height * 0.22
     ground_delta = right_ground_y - left_ground_y
     if abs(ground_delta) > maximum_ground_delta:
         ground_center = (left_ground_y + right_ground_y) / 2
         limited_half_delta = math.copysign(maximum_ground_delta / 2, ground_delta)
         left_ground_y = ground_center - limited_half_delta
         right_ground_y = ground_center + limited_half_delta
+
+    anchor_distance = max(1, right_anchor[0] - left_anchor[0])
     ground_slope = (right_ground_y - left_ground_y) / anchor_distance
+
+    def ground_y_at(x_position: float) -> float:
+        return left_ground_y + ground_slope * (x_position - left_anchor[0])
+
     active_center = (active_left + active_right) / 2
-    base_half_width = max(1, (active_right - active_left) / 2)
+    base_half_width = max(1, active_width / 2)
     shadow_half_width = base_half_width * spread
     shadow_left = active_center - shadow_half_width
     shadow_right = active_center + shadow_half_width
 
-    def ground_y_at(x_position: float) -> float:
-        if x_position <= left_anchor[0]:
-            return left_ground_y
-        if x_position >= right_anchor[0]:
-            return right_ground_y
-        return left_ground_y + ground_slope * (x_position - left_anchor[0])
-
-    line_y_inset = broad_height * 0.42
-    path_x_positions = [shadow_left]
-    path_x_positions.extend(
-        anchor_x
-        for anchor_x in (left_anchor[0], right_anchor[0])
-        if shadow_left < anchor_x < shadow_right
+    source = np.float32(
+        [
+            [active_left, active_top],
+            [active_right, active_top],
+            [active_left, active_bottom],
+        ]
     )
-    path_x_positions.append(shadow_right)
-    broad_points = tuple(
-        (
-            round(x + point_x + shadow_offset_x),
-            round(y + ground_y_at(point_x) - line_y_inset + shadow_offset_y),
-        )
-        for point_x in path_x_positions
+    target = np.float32(
+        [
+            [
+                x + shadow_left + shadow_offset_x,
+                y + ground_y_at(shadow_left) - broad_height + shadow_offset_y,
+            ],
+            [
+                x + shadow_right + shadow_offset_x,
+                y + ground_y_at(shadow_right) - broad_height + shadow_offset_y,
+            ],
+            [
+                x + shadow_left + shadow_offset_x,
+                y + ground_y_at(shadow_left) + broad_height * 0.08 + shadow_offset_y,
+            ],
+        ]
     )
-    broad_draw.line(
-        broad_points,
-        fill=(0, 0, 0, round(255 * opacity_percent / 100)),
-        width=broad_height,
-        joint="curve",
+    transform = cv2.getAffineTransform(source, target)
+    projected_alpha = cv2.warpAffine(
+        alpha_array,
+        transform,
+        canvas_size,
+        flags=cv2.INTER_AREA,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
     )
-    radius = broad_height // 2
-    for point_x, point_y in broad_points:
-        broad_draw.ellipse(
-            (point_x - radius, point_y - radius, point_x + radius, point_y + radius),
-            fill=(0, 0, 0, round(255 * opacity_percent / 100)),
-        )
-    broad_shadow = broad_shadow.filter(
+    close_width = max(3, round(broad_height * 0.7))
+    if close_width % 2 == 0:
+        close_width += 1
+    projected_alpha = cv2.morphologyEx(
+        projected_alpha,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_width, 3)),
+    )
+    projected_alpha = Image.fromarray(projected_alpha, mode="L").filter(
         ImageFilter.GaussianBlur(max(2, round(broad_height * 0.55 * blur)))
     )
+    broad_opacity = round(255 * opacity_percent / 100)
+    projected_alpha = projected_alpha.point(
+        lambda value: min(255, value * broad_opacity // 255)
+    )
+    broad_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    broad_shadow.putalpha(projected_alpha)
 
-    contact_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-    contact_draw = ImageDraw.Draw(contact_shadow)
-    contact_height = max(8, round(vehicle_height * 0.025))
+    # The contact layer is the lower portion of the real silhouette shifted by
+    # only a few pixels. Since it is rendered behind the vehicle, only the
+    # physically plausible edge directly beneath tyres, sills and bumpers
+    # remains visible.
+    contact_height = max(8, round(active_height * 0.025))
     contact_strength = max(0, min(150, contact_percent)) / 100
     contact_alpha = min(
         230,
         round(255 * opacity_percent / 100 * 1.75 * contact_strength),
     )
-    contact_width = max(10, round(vehicle_width * 0.07))
-    for contact_x, contact_y in (left_anchor, right_anchor):
-        center_x = x + contact_x
-        center_y = y + contact_y
-        contact_draw.ellipse(
-            (
-                center_x - contact_width // 2,
-                center_y - contact_height // 2,
-                center_x + contact_width // 2,
-                center_y + contact_height // 2,
-            ),
-            fill=(0, 0, 0, contact_alpha),
+    lower_start = active_top + round(active_height * 0.52)
+    vertical_weight = np.zeros(vehicle_height, dtype=np.float32)
+    if lower_start < active_bottom:
+        vertical_weight[lower_start : active_bottom + 1] = np.linspace(
+            0.0,
+            1.0,
+            active_bottom - lower_start + 1,
+            dtype=np.float32,
         )
-    contact_shadow = contact_shadow.filter(
+    contact_source = (
+        alpha_array.astype(np.float32) * vertical_weight[:, np.newaxis]
+    ).astype(np.uint8)
+    contact_canvas = np.zeros((canvas_size[1], canvas_size[0]), dtype=np.uint8)
+    contact_shift = max(1, round(active_height * 0.006))
+    paste_left = x
+    paste_top = y + contact_shift
+    source_left = max(0, -paste_left)
+    source_top = max(0, -paste_top)
+    destination_left = max(0, paste_left)
+    destination_top = max(0, paste_top)
+    copy_width = min(
+        vehicle_width - source_left,
+        canvas_size[0] - destination_left,
+    )
+    copy_height = min(
+        vehicle_height - source_top,
+        canvas_size[1] - destination_top,
+    )
+    if copy_width > 0 and copy_height > 0:
+        contact_canvas[
+            destination_top : destination_top + copy_height,
+            destination_left : destination_left + copy_width,
+        ] = contact_source[
+            source_top : source_top + copy_height,
+            source_left : source_left + copy_width,
+        ]
+    contact_mask = Image.fromarray(contact_canvas, mode="L").filter(
         ImageFilter.GaussianBlur(max(3, round(contact_height * 0.45)))
     )
+    contact_mask = contact_mask.point(
+        lambda value: min(255, value * contact_alpha // 255)
+    )
+    contact_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    contact_shadow.putalpha(contact_mask)
     return Image.alpha_composite(broad_shadow, contact_shadow)
 
 
@@ -2343,31 +2405,43 @@ def process_photo(photo_id: str) -> None:
                     photoroom_sandbox_active(image_settings, settings),
                     usage_context=usage_context,
                 )
-                finished = create_photoroom_showroom(
-                    original,
+                # Photoroom supplies the high-quality vehicle mask. ShowroomFlow
+                # owns the deterministic composition so that the configured
+                # ground line and the contour-based shadow are identical in
+                # automatic processing and in the quality editor.
+                finished = compose_showroom(
                     composed_background,
-                    composed_background_content_type,
-                    settings,
-                    contour_target_area_percent=composition.contour_target_area_percent,
-                    contour_max_width_percent=composition.contour_max_width_percent,
-                    contour_max_height_percent=composition.contour_max_height_percent,
-                    vehicle_bottom_percent=composition.vehicle_bottom_percent,
-                    shadow_opacity_percent=composition.shadow_opacity_percent,
-                    reflection_opacity_percent=composition.reflection_opacity_percent,
-                    brightness_percent=composition.brightness_percent,
-                    capture_step_name=step.name,
-                    orientation_key=orientation.key if orientation else "",
-                    capture_metadata=photo.capture_metadata,
-                    scene_projection_enabled=background.scene_projection_enabled,
-                    scene_horizon_percent=background.scene_horizon_percent,
-                    scene_reference_vertical_degrees=background.scene_reference_vertical_degrees,
-                    scene_perspective_strength_percent=(
-                        background.scene_perspective_strength_percent
+                    preview_cutout,
+                    CompositionOptions(
+                        width=settings.output_width,
+                        height=settings.output_height,
+                        contour_target_area_percent=(
+                            composition.contour_target_area_percent
+                        ),
+                        contour_max_width_percent=(
+                            composition.contour_max_width_percent
+                        ),
+                        contour_max_height_percent=(
+                            composition.contour_max_height_percent
+                        ),
+                        vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                        shadow_opacity_percent=composition.shadow_opacity_percent,
+                        reflection_opacity_percent=(
+                            composition.reflection_opacity_percent
+                        ),
+                        brightness_percent=composition.brightness_percent,
+                        capture_step_name=step.name,
+                        orientation_key=orientation.key if orientation else "",
+                        capture_metadata=photo.capture_metadata,
+                        scene_projection_enabled=background.scene_projection_enabled,
+                        scene_horizon_percent=background.scene_horizon_percent,
+                        scene_reference_vertical_degrees=(
+                            background.scene_reference_vertical_degrees
+                        ),
+                        scene_perspective_strength_percent=(
+                            background.scene_perspective_strength_percent
+                        ),
                     ),
-                    photoroom_sandbox=photoroom_sandbox_active(image_settings, settings),
-                    optimized=True,
-                    cutout_bytes=preview_cutout,
-                    usage_context=usage_context,
                 )
             elif image_settings.provider == "remove_bg":
                 ai_cutout = remove_vehicle_background(
