@@ -216,12 +216,20 @@
             const vehicleBottom = y + bounds.bottom * scaleY;
             const vehicleWidth = Math.max(1, vehicleRight - vehicleLeft);
             const vehicleHeight = Math.max(1, vehicleBottom - vehicleTop);
+            const leftContactX = x + bounds.groundLeftX * scaleX;
+            const leftContactY = y + bounds.groundLeftY * scaleY;
+            const rightContactX = x + bounds.groundRightX * scaleX;
+            const rightContactY = y + bounds.groundRightY * scaleY;
             drawVehicleShadow(
                 context,
                 vehicleLeft,
-                vehicleBottom,
+                vehicleRight,
                 vehicleWidth,
                 vehicleHeight,
+                leftContactX,
+                leftContactY,
+                rightContactX,
+                rightContactY,
                 shadowOpacity,
                 Number(vehicleShadowDistance.value),
                 Number(vehicleShadowAngle.value),
@@ -247,6 +255,7 @@
         let top = sample.height;
         let right = -1;
         let bottom = -1;
+        const columnBottoms = new Array(sample.width).fill(-1);
         for (let y = 0; y < sample.height; y += 1) {
             for (let x = 0; x < sample.width; x += 1) {
                 if (pixels[(y * sample.width + x) * 4 + 3] < 128) continue;
@@ -254,14 +263,46 @@
                 top = Math.min(top, y);
                 right = Math.max(right, x);
                 bottom = Math.max(bottom, y);
+                columnBottoms[x] = Math.max(columnBottoms[x], y);
             }
         }
         if (right < left || bottom < top) return null;
+        const activeWidth = Math.max(1, right - left + 1);
+        const groundAnchor = (startRatio, endRatio) => {
+            const bandLeft = Math.max(left, Math.round(left + activeWidth * startRatio));
+            const bandRight = Math.min(right, Math.round(left + activeWidth * endRatio));
+            const valid = [];
+            for (let x = bandLeft; x <= bandRight; x += 1) {
+                if (columnBottoms[x] >= 0) valid.push({x, y: columnBottoms[x]});
+            }
+            if (!valid.length) return {x: (bandLeft + bandRight) / 2, y: bottom};
+            const sortedBottoms = valid.map(point => point.y).sort((a, b) => a - b);
+            const percentileIndex = Math.min(
+                sortedBottoms.length - 1,
+                Math.floor((sortedBottoms.length - 1) * .94)
+            );
+            const lowerEdge = sortedBottoms[percentileIndex];
+            const tolerance = Math.max(2, Math.round(sample.height * .012));
+            const contacts = valid.filter(point => point.y >= lowerEdge - tolerance);
+            contacts.sort((a, b) => a.x - b.x);
+            const middle = contacts[Math.floor((contacts.length - 1) / 2)];
+            const contactBottoms = contacts.map(point => point.y).sort((a, b) => a - b);
+            return {
+                x: middle.x,
+                y: contactBottoms[Math.floor((contactBottoms.length - 1) / 2)]
+            };
+        };
+        const leftGround = groundAnchor(.08, .45);
+        const rightGround = groundAnchor(.55, .92);
         maskBoundsCache = {
             left: left / ratio,
             top: top / ratio,
             right: (right + 1) / ratio,
-            bottom: (bottom + 1) / ratio
+            bottom: (bottom + 1) / ratio,
+            groundLeftX: leftGround.x / ratio,
+            groundLeftY: leftGround.y / ratio,
+            groundRightX: rightGround.x / ratio,
+            groundRightY: rightGround.y / ratio
         };
         return maskBoundsCache;
     }
@@ -269,9 +310,13 @@
     function drawVehicleShadow(
         context,
         left,
-        bottom,
+        right,
         width,
         height,
+        leftContactX,
+        leftContactY,
+        rightContactX,
+        rightContactY,
         opacityPercent,
         distancePercent,
         angleDegrees,
@@ -281,27 +326,36 @@
     ) {
         const spread = Math.max(50, Math.min(180, spreadPercent)) / 100;
         const blur = Math.max(20, Math.min(200, blurPercent)) / 100;
-        const broadWidth = width * .84 * spread;
-        const broadHeight = Math.max(12, height * .085 * (.65 + spread * .35));
+        const broadHeight = Math.max(12, height * .075 * (.68 + spread * .32));
         const opacity = Math.max(0, Math.min(80, opacityPercent)) / 100;
         const distance = height * Math.max(0, Math.min(20, distancePercent)) / 100;
         const angle = (angleDegrees % 360) * Math.PI / 180;
         const offsetX = Math.cos(angle) * distance;
         const offsetY = Math.sin(angle) * distance;
+        const anchorDistance = Math.max(1, rightContactX - leftContactX);
+        const slope = (rightContactY - leftContactY) / anchorDistance;
+        const center = (left + right) / 2;
+        const halfWidth = Math.max(1, (right - left) / 2) * spread;
+        const broadLeft = center - halfWidth;
+        const broadRight = center + halfWidth;
+        const groundYAt = x => leftContactY + slope * (x - leftContactX);
+        const lineInset = broadHeight * .42;
         context.save();
         context.filter = `blur(${Math.max(2, broadHeight * .55 * blur)}px)`;
         context.fillStyle = `rgba(0, 0, 0, ${opacity})`;
+        context.strokeStyle = `rgba(0, 0, 0, ${opacity})`;
+        context.lineWidth = broadHeight;
+        context.lineCap = 'round';
         context.beginPath();
-        context.ellipse(
-            left + width / 2 + offsetX,
-            bottom - broadHeight * .22 + offsetY,
-            broadWidth / 2,
-            broadHeight / 2,
-            0,
-            0,
-            Math.PI * 2
+        context.moveTo(
+            broadLeft + offsetX,
+            groundYAt(broadLeft) - lineInset + offsetY
         );
-        context.fill();
+        context.lineTo(
+            broadRight + offsetX,
+            groundYAt(broadRight) - lineInset + offsetY
+        );
+        context.stroke();
         context.restore();
 
         const contactHeight = Math.max(6, height * .025);
@@ -309,11 +363,11 @@
         context.save();
         context.filter = `blur(${Math.max(3, contactHeight * .45)}px)`;
         context.fillStyle = `rgba(0, 0, 0, ${Math.min(.9, opacity * 1.75 * contactStrength)})`;
-        [0.24, 0.76].forEach(position => {
+        [[leftContactX, leftContactY], [rightContactX, rightContactY]].forEach(contact => {
             context.beginPath();
             context.ellipse(
-                left + width * position,
-                bottom,
+                contact[0],
+                contact[1],
                 Math.max(8, width * .035),
                 contactHeight / 2,
                 0,

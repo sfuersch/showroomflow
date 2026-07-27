@@ -454,6 +454,56 @@ def test_local_hybrid_shadow_uses_preserved_vehicle_position(
     assert shadow_position == {"x": 100, "y": 120}
 
 
+def test_vehicle_ground_anchors_follow_each_wheel_independently() -> None:
+    alpha = Image.new("L", (400, 240), 0)
+    draw = ImageDraw.Draw(alpha)
+    draw.rectangle((25, 25, 374, 155), fill=255)
+    draw.ellipse((55, 125, 145, 195), fill=255)
+    draw.ellipse((255, 135, 355, 225), fill=255)
+
+    left_anchor, right_anchor = processing_module._vehicle_ground_anchors(alpha)
+
+    assert 85 <= left_anchor[0] <= 125
+    assert 180 <= left_anchor[1] <= 195
+    assert 290 <= right_anchor[0] <= 330
+    assert 210 <= right_anchor[1] <= 225
+    assert right_anchor[1] - left_anchor[1] >= 20
+
+
+def test_vehicle_shadow_follows_perspective_line_to_both_bumpers() -> None:
+    alpha = Image.new("L", (400, 240), 0)
+    draw = ImageDraw.Draw(alpha)
+    draw.rectangle((25, 25, 374, 155), fill=255)
+    draw.ellipse((55, 125, 145, 195), fill=255)
+    draw.ellipse((255, 135, 355, 225), fill=255)
+
+    shadow = processing_module._create_vehicle_shadow(
+        alpha,
+        (500, 350),
+        x=50,
+        y=40,
+        opacity_percent=70,
+        perspective="diagonal",
+        blur_percent=20,
+        contact_percent=0,
+    ).getchannel("A")
+
+    # The broad shadow reaches beneath both bumper ends instead of only
+    # forming an ellipse between the wheels.
+    assert shadow.crop((65, 180, 105, 310)).getbbox() is not None
+    assert shadow.crop((420, 180, 465, 340)).getbbox() is not None
+
+    def strongest_row(left: int, right: int) -> int:
+        rows = [
+            sum(shadow.crop((left, row, right, row + 1)).get_flattened_data())
+            for row in range(150, 330)
+        ]
+        return 150 + rows.index(max(rows))
+
+    # The distant and near halves use different ground heights.
+    assert strongest_row(90, 145) + 15 < strongest_row(355, 410)
+
+
 def test_manual_editor_shadow_uses_preview_vehicle_position(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
