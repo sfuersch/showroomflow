@@ -103,6 +103,10 @@ h2 { font-size: 1.12rem; letter-spacing: -.015em; margin-bottom: 6px; }
 #correction-canvas.is-pan { cursor: grab; }
 #correction-canvas.is-panning { cursor: grabbing; }
 #correction-canvas.is-magic { cursor: crosshair; }
+.correction-vehicle-settings { display: grid; gap: 16px; padding-top: 8px; }
+.correction-vehicle-settings h2 { margin: 0; }
+.correction-result-preview { max-height: none; background: #111; }
+.correction-result-preview canvas { display: block; width: 100%; height: auto; }
 #correction-form { display: grid; gap: 16px; }
 #correction-form > label { display: grid; gap: 7px; }
 @media (max-width: 760px) {

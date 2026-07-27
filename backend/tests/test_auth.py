@@ -2563,6 +2563,136 @@ def test_manual_mask_refinement_is_queued_instead_of_running_in_http_request(
         assert saved_photo.quality_review_resolution == "correction_processing"
 
 
+def test_optimized_photo_can_be_masked_scaled_and_moved_in_quality_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dealership, user = create_dealership_admin()
+    create_system_admin()
+    queued_photos: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        "app.admin.enqueue_photo_processing",
+        lambda photo_id: queued_photos.append(photo_id),
+    )
+    with TestingSession() as db:
+        location = Location(dealership_id=dealership.id, name="Bad Neustadt")
+        orientation = Orientation(
+            key="front-left",
+            name="Vorne links",
+            instruction="Fahrzeug diagonal aufnehmen",
+            category="exterior",
+            default_capture_order=1,
+            default_export_order=1,
+            processing_mode="optimized",
+            requires_processing=True,
+        )
+        db.add_all([location, orientation])
+        db.flush()
+        step = CaptureStep(
+            dealership_id=dealership.id,
+            orientation_id=orientation.id,
+            name="Vorne links",
+            instruction="Fahrzeug diagonal aufnehmen",
+            category="exterior",
+            capture_order=1,
+            export_order=1,
+            is_required=True,
+            requires_processing=True,
+        )
+        db.add(step)
+        db.flush()
+        job = VehicleJob(
+            dealership_id=dealership.id,
+            location_id=location.id,
+            created_by_id=user.id,
+            vin="OPTIMIZED-CORRECTION",
+            version=1,
+            brand="Ford",
+            status=JobStatus.REVIEW_REQUIRED,
+        )
+        db.add(job)
+        db.flush()
+        photo = PhotoAsset(
+            vehicle_job_id=job.id,
+            capture_step_id=step.id,
+            captured_by_id=user.id,
+            revision=1,
+            original_object_key="originals/optimized.jpg",
+            original_content_type="image/jpeg",
+            expected_size_bytes=1234,
+            original_size_bytes=1234,
+            uploaded_at=datetime.now(timezone.utc),
+            is_selected=True,
+            preview_cutout_object_key="cutouts/automatic.png",
+            quality_review_required=True,
+            quality_review_created_at=datetime(2026, 7, 1, tzinfo=timezone.utc),
+            processed_object_key="processed/previous-result.jpg",
+            processing_status=ProcessingStatus.COMPLETED,
+        )
+        db.add(photo)
+        db.commit()
+        photo_id = photo.id
+
+    client.cookies.clear()
+    login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(login_page.text),
+        },
+    )
+    review_page = client.get("/admin/quality-reviews")
+    assert review_page.status_code == 200
+    assert f'/admin/photos/{photo_id}/vehicle-correction' in review_page.text
+    correction_page = client.get(f"/admin/photos/{photo_id}/vehicle-correction")
+    assert correction_page.status_code == 200
+    assert "Fahrzeugoptimierung nachbearbeiten" in correction_page.text
+    assert 'id="vehicle-scale"' in correction_page.text
+    assert 'id="vehicle-offset-x"' in correction_page.text
+    assert 'id="vehicle-offset-y"' in correction_page.text
+    assert 'id="vehicle-preview"' in correction_page.text
+
+    storage = ConfigurationStorage()
+    app.dependency_overrides[get_object_storage] = lambda: storage
+    mask = Image.new("RGBA", (800, 600), (255, 255, 255, 0))
+    ImageDraw.Draw(mask).rectangle((100, 120, 700, 540), fill="white")
+    mask_output = io.BytesIO()
+    mask.save(mask_output, format="PNG")
+    try:
+        response = client.post(
+            f"/admin/photos/{photo_id}/vehicle-correction",
+            data={
+                "csrf_token": csrf_from(correction_page.text),
+                "vehicle_scale_percent": "112",
+                "vehicle_offset_x_percent": "-4",
+                "vehicle_offset_y_percent": "6",
+            },
+            files={"mask": ("mask.png", mask_output.getvalue(), "image/png")},
+            headers={"Accept": "application/json"},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "queued",
+        "redirect": "/admin/quality-reviews",
+    }
+    assert queued_photos == [photo_id]
+    with TestingSession() as db:
+        saved_photo = db.get(PhotoAsset, photo_id)
+        assert saved_photo is not None
+        assert saved_photo.vehicle_mask_is_manual is True
+        assert saved_photo.vehicle_scale_percent == 112
+        assert saved_photo.vehicle_offset_x_percent == -4
+        assert saved_photo.vehicle_offset_y_percent == 6
+        assert "vehicle-mask-manual-" in saved_photo.preview_cutout_object_key
+        assert saved_photo.processing_status == ProcessingStatus.QUEUED
+        assert saved_photo.quality_review_resolution == "correction_processing"
+
+
 def test_auto_export_resumes_after_last_quality_review_is_approved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

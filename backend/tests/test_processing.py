@@ -386,6 +386,37 @@ def test_local_composition_preserves_acceptable_exterior_position() -> None:
     assert red_mask.getbbox() == pytest.approx((100, 120, 700, 520), abs=2)
 
 
+def test_local_composition_applies_manual_vehicle_scale_and_offsets() -> None:
+    background = image_bytes(Image.new("RGB", (800, 600), "black"), "JPEG")
+    cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(cutout).rectangle((100, 120, 699, 519), fill=(255, 0, 0, 255))
+
+    result = compose_showroom(
+        background,
+        image_bytes(cutout, "PNG"),
+        CompositionOptions(
+            width=800,
+            height=600,
+            orientation_key="front-left",
+            shadow_opacity_percent=0,
+            reflection_opacity_percent=0,
+            vehicle_scale_percent=50,
+            vehicle_offset_x_percent=10,
+            vehicle_offset_y_percent=-5,
+        ),
+    )
+
+    rendered = Image.open(io.BytesIO(result)).convert("RGB")
+    red_mask = Image.new("L", rendered.size)
+    red_mask.putdata(
+        [
+            255 if red > 180 and green < 80 and blue < 80 else 0
+            for red, green, blue in rendered.get_flattened_data()
+        ]
+    )
+    assert red_mask.getbbox() == pytest.approx((330, 290, 630, 490), abs=2)
+
+
 def test_local_hybrid_shadow_uses_preserved_vehicle_position(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -438,6 +438,10 @@ class PhotoAsset(Timestamped, Base):
     preview_cutout_object_key: Mapped[str | None] = mapped_column(
         String(500), nullable=True, unique=True
     )
+    vehicle_mask_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    vehicle_scale_percent: Mapped[int] = mapped_column(Integer, default=100)
+    vehicle_offset_x_percent: Mapped[int] = mapped_column(Integer, default=0)
+    vehicle_offset_y_percent: Mapped[int] = mapped_column(Integer, default=0)
     processed_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     processing_attempts: Mapped[int] = mapped_column(Integer, default=0)
     processing_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)

@@ -842,6 +842,7 @@ def quality_reviews_page(
     rows = list(
         db.execute(
             select(PhotoAsset, VehicleJob, CaptureStep, Dealership)
+            .options(selectinload(CaptureStep.orientation))
             .join(VehicleJob, VehicleJob.id == PhotoAsset.vehicle_job_id)
             .join(CaptureStep, CaptureStep.id == PhotoAsset.capture_step_id)
             .join(Dealership, Dealership.id == VehicleJob.dealership_id)
@@ -882,6 +883,11 @@ def quality_reviews_page(
                 if photo.processed_object_key
                 and photo.processing_status == ProcessingStatus.COMPLETED
                 else None
+            ),
+            "can_correct_optimized": bool(
+                photo.preview_cutout_object_key
+                and step.orientation
+                and step.orientation.processing_mode == "optimized"
             ),
         }
         for photo, job, step, dealership in rows
@@ -2685,6 +2691,7 @@ def window_correction(
             job=job,
             step=step,
             background_shift_percent=shift,
+            editor_kind="background",
         ),
     )
 
@@ -2793,6 +2800,172 @@ def save_window_correction(
         _flash(request, "Die Korrektur konnte nicht verarbeitet werden.", "error")
     else:
         _flash(request, "Die Korrektur wird jetzt neu verarbeitet.")
+    redirect_url = "/admin/quality-reviews"
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"status": "queued", "redirect": redirect_url})
+    return RedirectResponse(redirect_url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _vehicle_correction_photo(
+    db: Session, admin: User, photo_id: uuid.UUID
+) -> tuple[PhotoAsset, VehicleJob, CaptureStep, Orientation]:
+    photo = db.get(PhotoAsset, photo_id)
+    if photo is None:
+        raise HTTPException(status_code=404, detail="Foto wurde nicht gefunden")
+    job = db.get(VehicleJob, photo.vehicle_job_id)
+    step = db.get(CaptureStep, photo.capture_step_id)
+    orientation = db.get(Orientation, step.orientation_id) if step else None
+    if job is None or step is None or orientation is None:
+        raise HTTPException(status_code=404, detail="Fotoposition wurde nicht gefunden")
+    if admin.role not in {UserRole.SYSTEM_ADMIN, UserRole.OPERATOR}:
+        raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    if orientation.processing_mode != "optimized":
+        raise HTTPException(
+            status_code=400,
+            detail="Diese Fotoposition verwendet keine Optimierung",
+        )
+    return photo, job, step, orientation
+
+
+@router.get("/photos/{photo_id}/vehicle-correction", response_class=HTMLResponse)
+def vehicle_correction(
+    photo_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin = _require_quality_operator(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    photo, job, step, _ = _vehicle_correction_photo(db, admin, photo_id)
+    if not photo.preview_cutout_object_key:
+        _flash(
+            request,
+            "Bitte starten Sie zuerst die Verarbeitung, damit eine Fahrzeugmaske erzeugt wird.",
+            "error",
+        )
+        return RedirectResponse(
+            f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER
+        )
+    return templates.TemplateResponse(
+        request,
+        "admin/window_correction.html",
+        _context(
+            request,
+            admin,
+            photo=photo,
+            job=job,
+            step=step,
+            editor_kind="vehicle",
+            background_shift_percent=0,
+        ),
+    )
+
+
+@router.get("/photos/{photo_id}/vehicle-correction/{asset_kind}")
+def vehicle_correction_asset(
+    photo_id: uuid.UUID,
+    asset_kind: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_quality_operator(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    photo, job, _, _ = _vehicle_correction_photo(db, admin, photo_id)
+    if asset_kind == "original":
+        object_key = photo.original_object_key
+        content_type = photo.original_content_type
+    elif asset_kind == "mask" and photo.preview_cutout_object_key:
+        object_key = photo.preview_cutout_object_key
+        content_type = "image/png"
+    elif asset_kind == "background" and job.background_id:
+        background = db.get(Background, job.background_id)
+        if background is None:
+            raise HTTPException(status_code=404, detail="Hintergrund wurde nicht gefunden")
+        object_key = background.object_key
+        content_type = background.content_type
+    else:
+        raise HTTPException(status_code=404, detail="Korrekturdatei wurde nicht gefunden")
+    return Response(
+        content=storage.get_object(object_key=object_key),
+        media_type=content_type,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/photos/{photo_id}/vehicle-correction")
+def save_vehicle_correction(
+    photo_id: uuid.UUID,
+    request: Request,
+    mask: UploadFile = File(),
+    vehicle_scale_percent: int = Form(default=100),
+    vehicle_offset_x_percent: int = Form(default=0),
+    vehicle_offset_y_percent: int = Form(default=0),
+    csrf_token: str = Form(),
+    db: Session = Depends(get_db),
+    storage: ObjectStorage = Depends(get_object_storage),
+):
+    admin = _require_quality_operator(request, db)
+    if isinstance(admin, RedirectResponse):
+        return admin
+    _validate_csrf(request, csrf_token)
+    photo, job, _, _ = _vehicle_correction_photo(db, admin, photo_id)
+    if not 50 <= vehicle_scale_percent <= 160:
+        raise HTTPException(status_code=400, detail="Ungültige Fahrzeuggröße")
+    if not -35 <= vehicle_offset_x_percent <= 35:
+        raise HTTPException(status_code=400, detail="Ungültige horizontale Position")
+    if not -35 <= vehicle_offset_y_percent <= 35:
+        raise HTTPException(status_code=400, detail="Ungültige vertikale Position")
+    content = mask.file.read(MAX_CONFIGURATION_IMAGE_BYTES + 1)
+    if len(content) > MAX_CONFIGURATION_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Die Fahrzeugmaske ist zu groß")
+    try:
+        image = Image.open(io.BytesIO(content)).convert("RGBA")
+        image.load()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Die Fahrzeugmaske ist ungültig") from exc
+    if image.getchannel("A").getbbox() is None:
+        raise HTTPException(status_code=400, detail="Die Fahrzeugmaske ist leer")
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    mask_key = (
+        f"dealerships/{job.dealership_id}/jobs/{job.id}/"
+        f"photos/{photo.id}/vehicle-mask-manual-{uuid.uuid4()}.png"
+    )
+    storage.put_object(
+        object_key=mask_key,
+        content=output.getvalue(),
+        content_type="image/png",
+    )
+    photo.preview_cutout_object_key = mask_key
+    photo.vehicle_mask_is_manual = True
+    photo.vehicle_scale_percent = vehicle_scale_percent
+    photo.vehicle_offset_x_percent = vehicle_offset_x_percent
+    photo.vehicle_offset_y_percent = vehicle_offset_y_percent
+    photo.quality_review_required = True
+    photo.quality_review_reason = (
+        "Das manuell korrigierte Optimierungsergebnis wird erstellt."
+    )
+    if photo.quality_review_created_at is None:
+        photo.quality_review_created_at = datetime.now(timezone.utc)
+    photo.quality_reviewed_by_id = None
+    photo.quality_reviewed_at = None
+    photo.quality_review_resolution = "correction_processing"
+    photo.processing_status = ProcessingStatus.QUEUED
+    photo.processing_error = None
+    job.status = JobStatus.PROCESSING
+    db.commit()
+    try:
+        enqueue_photo_processing(photo.id)
+    except ProcessingQueueUnavailable:
+        photo.processing_status = ProcessingStatus.FAILED
+        photo.processing_error = "Verarbeitungswarteschlange ist nicht erreichbar"
+        job.status = JobStatus.REVIEW_REQUIRED
+        db.commit()
+        _flash(request, "Die Korrektur konnte nicht verarbeitet werden.", "error")
+    else:
+        _flash(request, "Die Fahrzeugkorrektur wird jetzt neu verarbeitet.")
     redirect_url = "/admin/quality-reviews"
     if "application/json" in request.headers.get("accept", ""):
         return JSONResponse({"status": "queued", "redirect": redirect_url})

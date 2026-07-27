@@ -1,12 +1,12 @@
 {% extends "admin/base.html" %}
-{% block title %}Hintergrundmaske nachbearbeiten{% endblock %}
+{% block title %}{{ 'Fahrzeugoptimierung nachbearbeiten' if editor_kind == 'vehicle' else 'Hintergrundmaske nachbearbeiten' }}{% endblock %}
 {% block content %}
 <nav class="breadcrumb"><a href="/admin/quality-reviews">Qualitätsprüfung</a><span>›</span><span>{{ job.vin }} · {{ step.name }}</span></nav>
-<div class="page-heading"><div><span class="eyebrow">{{ step.name }}</span><h1>Hintergrundmaske nachbearbeiten</h1><p class="muted">Türkis markierte Flächen werden durch den Showroom-Hintergrund ersetzt. Markiere nur sichtbare Scheiben, Türöffnungen oder Außenflächen.</p></div></div>
+<div class="page-heading"><div><span class="eyebrow">{{ step.name }}</span><h1>{{ 'Fahrzeugoptimierung nachbearbeiten' if editor_kind == 'vehicle' else 'Hintergrundmaske nachbearbeiten' }}</h1><p class="muted">{% if editor_kind == 'vehicle' %}Türkis markierte Flächen bleiben als Fahrzeug erhalten. Korrigiere die Kontur und passe anschließend Größe und Position in der Live-Vorschau an.{% else %}Türkis markierte Flächen werden durch den Showroom-Hintergrund ersetzt. Markiere nur sichtbare Scheiben, Türöffnungen oder Außenflächen.{% endif %}</p></div></div>
 <section class="card section-card correction-workspace">
-    <div class="correction-toolbar" role="toolbar" aria-label="Werkzeuge für die Hintergrundmaske">
-        <button type="button" class="button button-primary correction-mode active" data-mode="add">Hintergrund einsetzen</button>
-        <button type="button" class="button button-secondary correction-mode" data-mode="remove">Original schützen</button>
+    <div class="correction-toolbar" role="toolbar" aria-label="Werkzeuge für die Bildmaske">
+        <button type="button" class="button button-primary correction-mode active" data-mode="add">{{ 'Fahrzeug behalten' if editor_kind == 'vehicle' else 'Hintergrund einsetzen' }}</button>
+        <button type="button" class="button button-secondary correction-mode" data-mode="remove">{{ 'Hintergrund entfernen' if editor_kind == 'vehicle' else 'Original schützen' }}</button>
         <button type="button" class="button button-secondary correction-mode" data-mode="magic">Magischer Pinsel</button>
         <button type="button" class="button button-secondary correction-mode" data-mode="pan">Verschieben</button>
         <label>Pinselgröße <input id="brush-size" type="range" min="8" max="140" value="45"><output id="brush-output">45</output></label>
@@ -26,16 +26,35 @@
             <canvas id="correction-canvas" aria-label="Scheibenmaske bearbeiten"></canvas>
         </div>
     </div>
-    <form id="correction-form" method="post" action="/admin/photos/{{ photo.id }}/correction" enctype="multipart/form-data">
+    {% if editor_kind == 'vehicle' %}
+    <div class="correction-vehicle-settings">
+        <h2>Platzierung im Showroom</h2>
+        <div class="form-grid">
+            <label><span class="field-label">Fahrzeuggröße</span><input id="vehicle-scale" type="range" min="50" max="160" value="{{ photo.vehicle_scale_percent }}"><output id="vehicle-scale-output">{{ photo.vehicle_scale_percent }} %</output></label>
+            <label><span class="field-label">Horizontal verschieben</span><input id="vehicle-offset-x" type="range" min="-35" max="35" value="{{ photo.vehicle_offset_x_percent }}"><output id="vehicle-offset-x-output">{{ photo.vehicle_offset_x_percent }} %</output></label>
+            <label><span class="field-label">Vertikal verschieben</span><input id="vehicle-offset-y" type="range" min="-35" max="35" value="{{ photo.vehicle_offset_y_percent }}"><output id="vehicle-offset-y-output">{{ photo.vehicle_offset_y_percent }} %</output></label>
+        </div>
+        <div class="correction-canvas-wrap correction-result-preview"><canvas id="vehicle-preview" aria-label="Live-Vorschau der Fahrzeugplatzierung"></canvas></div>
+    </div>
+    {% endif %}
+    <form id="correction-form" method="post" action="/admin/photos/{{ photo.id }}/{{ 'vehicle-correction' if editor_kind == 'vehicle' else 'correction' }}" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if editor_kind == 'vehicle' %}
+        <input id="vehicle-scale-field" type="hidden" name="vehicle_scale_percent" value="{{ photo.vehicle_scale_percent }}">
+        <input id="vehicle-offset-x-field" type="hidden" name="vehicle_offset_x_percent" value="{{ photo.vehicle_offset_x_percent }}">
+        <input id="vehicle-offset-y-field" type="hidden" name="vehicle_offset_y_percent" value="{{ photo.vehicle_offset_y_percent }}">
+        {% else %}
         <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Die Vorschau reagiert sofort. Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der markierten Fläche.</small></label>
         <label class="checkbox-row"><input type="checkbox" name="refine_edges" value="true" checked><span><strong>Kanten automatisch verfeinern</strong><small>Richtet den gemalten Rand innerhalb eines schmalen Sicherheitsbereichs an sichtbaren Bildkanten aus. Geschützte Flächen außerhalb dieses Bereichs bleiben unverändert.</small></span></label>
+        {% endif %}
         <p id="correction-submit-status" class="muted" role="status" aria-live="polite"></p>
-        <div class="form-actions"><a class="button button-secondary" href="/admin/quality-reviews">Abbrechen</a><button class="button button-primary" id="correction-submit" type="submit">Korrektur speichern und neu verarbeiten</button></div>
+        <div class="form-actions"><a class="button button-secondary" href="/admin/quality-reviews">Abbrechen</a><button class="button button-primary" id="correction-submit" type="submit">{{ 'Fahrzeugkorrektur speichern und neu verarbeiten' if editor_kind == 'vehicle' else 'Korrektur speichern und neu verarbeiten' }}</button></div>
     </form>
 </section>
 <script>
 (() => {
+    const vehicleEditor = {{ 'true' if editor_kind == 'vehicle' else 'false' }};
+    const assetBase = `/admin/photos/{{ photo.id }}/${vehicleEditor ? 'vehicle-correction' : 'correction'}`;
     const view = document.getElementById('correction-canvas');
     const viewContext = view.getContext('2d');
     const viewport = document.getElementById('correction-viewport');
@@ -49,6 +68,10 @@
     const editorStatus = document.getElementById('correction-editor-status');
     const shift = document.getElementById('background-shift');
     const shiftOutput = document.getElementById('shift-output');
+    const vehiclePreview = document.getElementById('vehicle-preview');
+    const vehicleScale = document.getElementById('vehicle-scale');
+    const vehicleOffsetX = document.getElementById('vehicle-offset-x');
+    const vehicleOffsetY = document.getElementById('vehicle-offset-y');
     const maskCanvas = document.createElement('canvas');
     const maskContext = maskCanvas.getContext('2d', {willReadFrequently: true});
     const initialMaskCanvas = document.createElement('canvas');
@@ -117,7 +140,7 @@
         const context = backgroundCanvas.getContext('2d');
         context.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
         if (!background.complete || !background.naturalWidth) return;
-        const shiftAmount = Number(shift.value) / 100;
+        const shiftAmount = shift ? Number(shift.value) / 100 : 0;
         const coverScale = Math.max(
             view.width / background.naturalWidth,
             view.height / background.naturalHeight
@@ -145,10 +168,32 @@
         );
     }
 
+    function renderVehiclePlacement() {
+        if (!vehicleEditor || !vehiclePreview || !initialized) return;
+        const context = vehiclePreview.getContext('2d');
+        context.clearRect(0, 0, vehiclePreview.width, vehiclePreview.height);
+        context.drawImage(backgroundCanvas, 0, 0);
+        const subject = document.createElement('canvas');
+        subject.width = view.width;
+        subject.height = view.height;
+        const subjectContext = subject.getContext('2d');
+        subjectContext.drawImage(original, 0, 0, view.width, view.height);
+        subjectContext.globalCompositeOperation = 'destination-in';
+        subjectContext.drawImage(maskCanvas, 0, 0);
+        const scale = Number(vehicleScale.value) / 100;
+        const width = view.width * scale;
+        const height = view.height * scale;
+        const x = (view.width - width) / 2 + view.width * Number(vehicleOffsetX.value) / 100;
+        const y = (view.height - height) / 2 + view.height * Number(vehicleOffsetY.value) / 100;
+        context.drawImage(subject, x, y, width, height);
+    }
+
     function render() {
         if (!initialized) return;
         viewContext.clearRect(0, 0, view.width, view.height);
-        if (background.complete && background.naturalWidth) {
+        if (vehicleEditor) {
+            viewContext.drawImage(original, 0, 0, view.width, view.height);
+        } else if (background.complete && background.naturalWidth) {
             viewContext.drawImage(backgroundCanvas, 0, 0);
             const foregroundContext = foregroundCanvas.getContext('2d');
             foregroundContext.clearRect(0, 0, view.width, view.height);
@@ -173,6 +218,7 @@
         viewContext.drawImage(tintCanvas, 0, 0);
         viewContext.globalAlpha = 1;
         drawBrushCursor();
+        renderVehiclePlacement();
     }
 
     function calculateFitScale() {
@@ -210,6 +256,12 @@
             canvas.width = view.width;
             canvas.height = view.height;
         });
+        if (vehiclePreview) {
+            vehiclePreview.width = view.width;
+            vehiclePreview.height = view.height;
+            vehiclePreview.style.width = '100%';
+            vehiclePreview.style.height = 'auto';
+        }
         maskContext.drawImage(maskImage, 0, 0, view.width, view.height);
         initialMaskCanvas.getContext('2d').drawImage(maskCanvas, 0, 0);
         initialized = true;
@@ -219,12 +271,12 @@
         render();
     }
     Promise.all([
-        new Promise(resolve => { original.onload = resolve; original.src = '/admin/photos/{{ photo.id }}/correction/original'; }),
-        new Promise(resolve => { maskImage.onload = resolve; maskImage.src = '/admin/photos/{{ photo.id }}/correction/mask'; }),
+        new Promise(resolve => { original.onload = resolve; original.src = `${assetBase}/original`; }),
+        new Promise(resolve => { maskImage.onload = resolve; maskImage.src = `${assetBase}/mask`; }),
         new Promise(resolve => {
             background.onload = resolve;
             background.onerror = resolve;
-            background.src = '/admin/photos/{{ photo.id }}/correction/background';
+            background.src = `${assetBase}/background`;
         })
     ]).then(initialize);
 
@@ -238,7 +290,9 @@
         view.classList.toggle('is-pan', mode === 'pan');
         view.classList.toggle('is-magic', mode === 'magic');
         editorStatus.textContent = mode === 'magic'
-            ? 'Klicke auf eine zusammenhängende Scheiben- oder Außenfläche. Ähnliche Nachbarpixel werden automatisch markiert.'
+            ? (vehicleEditor
+                ? 'Klicke auf eine zusammenhängende Fahrzeugfläche. Ähnliche Nachbarpixel werden automatisch zur Fahrzeugmaske ergänzt.'
+                : 'Klicke auf eine zusammenhängende Scheiben- oder Außenfläche. Ähnliche Nachbarpixel werden automatisch markiert.')
             : '';
         scheduleRender();
     }));
@@ -254,10 +308,22 @@
     magicTolerance.addEventListener('input', () => {
         magicOutput.value = magicTolerance.value;
     });
-    shift.addEventListener('input', () => {
+    if (shift) shift.addEventListener('input', () => {
         shiftOutput.value = `${shift.value} %`;
         renderBackground();
         scheduleRender();
+    });
+    [
+        [vehicleScale, 'vehicle-scale-output', 'vehicle-scale-field'],
+        [vehicleOffsetX, 'vehicle-offset-x-output', 'vehicle-offset-x-field'],
+        [vehicleOffsetY, 'vehicle-offset-y-output', 'vehicle-offset-y-field']
+    ].forEach(([control, outputId, fieldId]) => {
+        if (!control) return;
+        control.addEventListener('input', () => {
+            document.getElementById(outputId).value = `${control.value} %`;
+            document.getElementById(fieldId).value = control.value;
+            scheduleRender();
+        });
     });
 
     function stamp(point) {
@@ -380,7 +446,7 @@
         maskContext.drawImage(selectionCanvas, 0, 0, view.width, view.height);
         maskContext.restore();
         const percentage = Math.round(selected / (width * height) * 1000) / 10;
-        editorStatus.textContent = `Zusammenhängender Bereich markiert (${percentage} % des Bildes). Prüfe die türkise Vorschau und schütze bei Bedarf Originalbereiche.`;
+        editorStatus.textContent = `Zusammenhängender Bereich markiert (${percentage} % des Bildes). Prüfe die türkise Vorschau und korrigiere bei Bedarf mit dem Pinsel.`;
         scheduleRender();
     }
 
@@ -476,7 +542,7 @@
         submitStatus.textContent = 'Korrektur wird gespeichert …';
         maskCanvas.toBlob(blob => {
             const data = new FormData(event.target);
-            data.append('mask', blob, 'hintergrundmaske.png');
+            data.append('mask', blob, vehicleEditor ? 'fahrzeugmaske.png' : 'hintergrundmaske.png');
             fetch(event.target.action, {
                 method: 'POST',
                 body: data,

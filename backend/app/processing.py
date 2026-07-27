@@ -111,6 +111,9 @@ class CompositionOptions:
     scene_horizon_percent: int = 43
     scene_reference_vertical_degrees: int = 0
     scene_perspective_strength_percent: int = 35
+    vehicle_scale_percent: int = 100
+    vehicle_offset_x_percent: int = 0
+    vehicle_offset_y_percent: int = 0
 
 
 @dataclass(frozen=True)
@@ -1649,6 +1652,28 @@ def compose_showroom(
             options.height * max(55, min(98, options.vehicle_bottom_percent)) / 100
         )
         y = bottom - vehicle.height
+    manual_scale = max(50, min(160, options.vehicle_scale_percent)) / 100
+    if abs(manual_scale - 1) >= 0.001:
+        center_x = x + vehicle.width / 2
+        vehicle = vehicle.resize(
+            (
+                max(1, round(vehicle.width * manual_scale)),
+                max(1, round(vehicle.height * manual_scale)),
+            ),
+            Image.Resampling.LANCZOS,
+        )
+        x = round(center_x - vehicle.width / 2)
+        y = round(bottom - vehicle.height)
+    x += round(
+        options.width * max(-35, min(35, options.vehicle_offset_x_percent)) / 100
+    )
+    y += round(
+        options.height * max(-35, min(35, options.vehicle_offset_y_percent)) / 100
+    )
+    x = max(-vehicle.width + 40, min(options.width - 40, x))
+    y = max(-vehicle.height + 40, min(options.height - 40, y))
+    bottom = y + vehicle.height
+
     if options.brightness_percent != 100:
         rgb = ImageEnhance.Brightness(vehicle.convert("RGB")).enhance(
             max(50, min(150, options.brightness_percent)) / 100
@@ -2135,6 +2160,53 @@ def process_photo(photo_id: str) -> None:
                         photo.quality_review_resolution = None
                     else:
                         photo.quality_review_resolution = "automatic_pass"
+            elif photo.vehicle_mask_is_manual and photo.preview_cutout_object_key:
+                manual_mask = storage.get_object(
+                    object_key=photo.preview_cutout_object_key
+                )
+                preview_cutout = apply_cutout_mask_to_original(original, manual_mask)
+                finished = compose_showroom(
+                    composed_background,
+                    preview_cutout,
+                    CompositionOptions(
+                        width=settings.output_width,
+                        height=settings.output_height,
+                        contour_target_area_percent=composition.contour_target_area_percent,
+                        contour_max_width_percent=composition.contour_max_width_percent,
+                        contour_max_height_percent=composition.contour_max_height_percent,
+                        vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                        shadow_opacity_percent=composition.shadow_opacity_percent,
+                        reflection_opacity_percent=composition.reflection_opacity_percent,
+                        brightness_percent=composition.brightness_percent,
+                        capture_step_name=step.name,
+                        orientation_key=orientation.key if orientation else "",
+                        capture_metadata=photo.capture_metadata,
+                        scene_projection_enabled=background.scene_projection_enabled,
+                        scene_horizon_percent=background.scene_horizon_percent,
+                        scene_reference_vertical_degrees=(
+                            background.scene_reference_vertical_degrees
+                        ),
+                        scene_perspective_strength_percent=(
+                            background.scene_perspective_strength_percent
+                        ),
+                        vehicle_scale_percent=photo.vehicle_scale_percent,
+                        vehicle_offset_x_percent=photo.vehicle_offset_x_percent,
+                        vehicle_offset_y_percent=photo.vehicle_offset_y_percent,
+                    ),
+                )
+                photo.quality_review_required = True
+                photo.quality_review_reason = (
+                    "Das manuell korrigierte Optimierungsergebnis wartet auf die "
+                    "Operator-Freigabe."
+                )
+                photo.quality_score = 100
+                photo.quality_issues = []
+                photo.quality_model_version = "optimized-manual-correction-v1"
+                if photo.quality_review_created_at is None:
+                    photo.quality_review_created_at = datetime.now(timezone.utc)
+                photo.quality_reviewed_by_id = None
+                photo.quality_reviewed_at = None
+                photo.quality_review_resolution = "awaiting_operator_approval"
             elif image_settings.provider == "photoroom":
                 preview_cutout = create_photoroom_cutout(
                     original,
