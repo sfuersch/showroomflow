@@ -445,6 +445,21 @@ class PhotoAsset(Timestamped, Base):
     vehicle_shadow_opacity_percent: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    vehicle_shadow_distance_percent: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    vehicle_shadow_angle_degrees: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    vehicle_shadow_spread_percent: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    vehicle_shadow_blur_percent: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    vehicle_shadow_contact_percent: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     processed_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     processing_attempts: Mapped[int] = mapped_column(Integer, default=0)
     processing_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)

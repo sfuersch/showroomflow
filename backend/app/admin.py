@@ -2883,6 +2883,31 @@ def vehicle_correction(
             editor_kind="vehicle",
             background_shift_percent=0,
             vehicle_shadow_opacity_percent=shadow_opacity,
+            vehicle_shadow_distance_percent=(
+                photo.vehicle_shadow_distance_percent
+                if photo.vehicle_shadow_distance_percent is not None
+                else 0
+            ),
+            vehicle_shadow_angle_degrees=(
+                photo.vehicle_shadow_angle_degrees
+                if photo.vehicle_shadow_angle_degrees is not None
+                else 90
+            ),
+            vehicle_shadow_spread_percent=(
+                photo.vehicle_shadow_spread_percent
+                if photo.vehicle_shadow_spread_percent is not None
+                else 100
+            ),
+            vehicle_shadow_blur_percent=(
+                photo.vehicle_shadow_blur_percent
+                if photo.vehicle_shadow_blur_percent is not None
+                else 100
+            ),
+            vehicle_shadow_contact_percent=(
+                photo.vehicle_shadow_contact_percent
+                if photo.vehicle_shadow_contact_percent is not None
+                else 100
+            ),
         ),
     )
 
@@ -2929,6 +2954,11 @@ def save_vehicle_correction(
     vehicle_offset_x_percent: int = Form(default=0),
     vehicle_offset_y_percent: int = Form(default=0),
     vehicle_shadow_opacity_percent: int = Form(default=32),
+    vehicle_shadow_distance_percent: int = Form(default=0),
+    vehicle_shadow_angle_degrees: int = Form(default=90),
+    vehicle_shadow_spread_percent: int = Form(default=100),
+    vehicle_shadow_blur_percent: int = Form(default=100),
+    vehicle_shadow_contact_percent: int = Form(default=100),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
@@ -2946,6 +2976,16 @@ def save_vehicle_correction(
         raise HTTPException(status_code=400, detail="Ungültige vertikale Position")
     if not 0 <= vehicle_shadow_opacity_percent <= 80:
         raise HTTPException(status_code=400, detail="Ungültige Schattenintensität")
+    if not 0 <= vehicle_shadow_distance_percent <= 20:
+        raise HTTPException(status_code=400, detail="Ungültiger Schattenabstand")
+    if not 0 <= vehicle_shadow_angle_degrees <= 359:
+        raise HTTPException(status_code=400, detail="Ungültige Schattenrichtung")
+    if not 50 <= vehicle_shadow_spread_percent <= 180:
+        raise HTTPException(status_code=400, detail="Ungültige Schattengröße")
+    if not 20 <= vehicle_shadow_blur_percent <= 200:
+        raise HTTPException(status_code=400, detail="Ungültige Schattenweichzeichnung")
+    if not 0 <= vehicle_shadow_contact_percent <= 150:
+        raise HTTPException(status_code=400, detail="Ungültige Kontaktstärke")
     content = mask.file.read(MAX_CONFIGURATION_IMAGE_BYTES + 1)
     if len(content) > MAX_CONFIGURATION_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Die Fahrzeugmaske ist zu groß")
@@ -2973,6 +3013,11 @@ def save_vehicle_correction(
     photo.vehicle_offset_x_percent = vehicle_offset_x_percent
     photo.vehicle_offset_y_percent = vehicle_offset_y_percent
     photo.vehicle_shadow_opacity_percent = vehicle_shadow_opacity_percent
+    photo.vehicle_shadow_distance_percent = vehicle_shadow_distance_percent
+    photo.vehicle_shadow_angle_degrees = vehicle_shadow_angle_degrees
+    photo.vehicle_shadow_spread_percent = vehicle_shadow_spread_percent
+    photo.vehicle_shadow_blur_percent = vehicle_shadow_blur_percent
+    photo.vehicle_shadow_contact_percent = vehicle_shadow_contact_percent
     photo.quality_review_required = True
     photo.quality_review_reason = (
         "Das manuell korrigierte Optimierungsergebnis wird erstellt."

@@ -468,9 +468,23 @@ def test_manual_editor_shadow_uses_preview_vehicle_position(
         *,
         x: int,
         y: int,
+        distance_percent: int,
+        angle_degrees: int,
+        spread_percent: int,
+        blur_percent: int,
+        contact_percent: int,
         **_: object,
     ) -> Image.Image:
-        shadow_position.update(x=x, y=y, alpha_size=alpha.size)
+        shadow_position.update(
+            x=x,
+            y=y,
+            alpha_size=alpha.size,
+            distance_percent=distance_percent,
+            angle_degrees=angle_degrees,
+            spread_percent=spread_percent,
+            blur_percent=blur_percent,
+            contact_percent=contact_percent,
+        )
         return Image.new("RGBA", canvas_size, (0, 0, 0, 0))
 
     monkeypatch.setattr(processing_module, "_create_vehicle_shadow", fake_shadow)
@@ -483,6 +497,11 @@ def test_manual_editor_shadow_uses_preview_vehicle_position(
             height=600,
             orientation_key="front-left",
             shadow_opacity_percent=40,
+            shadow_distance_percent=7,
+            shadow_angle_degrees=135,
+            shadow_spread_percent=120,
+            shadow_blur_percent=145,
+            shadow_contact_percent=85,
             reflection_opacity_percent=0,
             vehicle_scale_percent=50,
             vehicle_offset_x_percent=10,
@@ -495,6 +514,11 @@ def test_manual_editor_shadow_uses_preview_vehicle_position(
         "x": pytest.approx(330, abs=1),
         "y": pytest.approx(180, abs=1),
         "alpha_size": pytest.approx((300, 200), abs=1),
+        "distance_percent": 7,
+        "angle_degrees": 135,
+        "spread_percent": 120,
+        "blur_percent": 145,
+        "contact_percent": 85,
     }
 
 

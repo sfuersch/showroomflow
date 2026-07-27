@@ -34,6 +34,11 @@
             <label><span class="field-label">Horizontal verschieben</span><input id="vehicle-offset-x" type="range" min="-35" max="35" value="{{ photo.vehicle_offset_x_percent }}"><output id="vehicle-offset-x-output">{{ photo.vehicle_offset_x_percent }} %</output></label>
             <label><span class="field-label">Vertikal verschieben</span><input id="vehicle-offset-y" type="range" min="-35" max="35" value="{{ photo.vehicle_offset_y_percent }}"><output id="vehicle-offset-y-output">{{ photo.vehicle_offset_y_percent }} %</output></label>
             <label><span class="field-label">Schattenintensität</span><input id="vehicle-shadow-opacity" type="range" min="0" max="80" value="{{ vehicle_shadow_opacity_percent }}"><output id="vehicle-shadow-opacity-output">{{ vehicle_shadow_opacity_percent }} %</output><small>0 % deaktiviert den Schatten. Der Wert gilt nur für dieses Bild.</small></label>
+            <label><span class="field-label">Schattenabstand</span><input id="vehicle-shadow-distance" type="range" min="0" max="20" value="{{ vehicle_shadow_distance_percent }}"><output id="vehicle-shadow-distance-output">{{ vehicle_shadow_distance_percent }} %</output><small>Verschiebt nur den weichen Umgebungsschatten. Der Reifenkontakt bleibt am Fahrzeug.</small></label>
+            <label><span class="field-label">Schattenrichtung</span><input id="vehicle-shadow-angle" type="range" min="0" max="359" value="{{ vehicle_shadow_angle_degrees }}"><output id="vehicle-shadow-angle-output">{{ vehicle_shadow_angle_degrees }}°</output><small>0° = rechts, 90° = unten, 180° = links, 270° = oben.</small></label>
+            <label><span class="field-label">Schattengröße</span><input id="vehicle-shadow-spread" type="range" min="50" max="180" value="{{ vehicle_shadow_spread_percent }}"><output id="vehicle-shadow-spread-output">{{ vehicle_shadow_spread_percent }} %</output><small>Vergrößert oder verkleinert die Fläche des weichen Schattens.</small></label>
+            <label><span class="field-label">Weichzeichnung</span><input id="vehicle-shadow-blur" type="range" min="20" max="200" value="{{ vehicle_shadow_blur_percent }}"><output id="vehicle-shadow-blur-output">{{ vehicle_shadow_blur_percent }} %</output><small>Niedrige Werte erzeugen eine härtere, hohe Werte eine weichere Kante.</small></label>
+            <label><span class="field-label">Kontaktstärke</span><input id="vehicle-shadow-contact" type="range" min="0" max="150" value="{{ vehicle_shadow_contact_percent }}"><output id="vehicle-shadow-contact-output">{{ vehicle_shadow_contact_percent }} %</output><small>Regelt den dunklen Schatten direkt an Reifen und Fahrzeugunterseite.</small></label>
         </div>
         <div class="correction-canvas-wrap correction-result-preview"><canvas id="vehicle-preview" aria-label="Live-Vorschau der Fahrzeugplatzierung"></canvas></div>
         <p class="muted"><small>Die Vorschau verwendet dieselbe Platzierung wie das endgültige Bild. Der Bodenschatten wird aus der korrigierten Fahrzeugmaske neu erzeugt.</small></p>
@@ -46,6 +51,11 @@
         <input id="vehicle-offset-x-field" type="hidden" name="vehicle_offset_x_percent" value="{{ photo.vehicle_offset_x_percent }}">
         <input id="vehicle-offset-y-field" type="hidden" name="vehicle_offset_y_percent" value="{{ photo.vehicle_offset_y_percent }}">
         <input id="vehicle-shadow-opacity-field" type="hidden" name="vehicle_shadow_opacity_percent" value="{{ vehicle_shadow_opacity_percent }}">
+        <input id="vehicle-shadow-distance-field" type="hidden" name="vehicle_shadow_distance_percent" value="{{ vehicle_shadow_distance_percent }}">
+        <input id="vehicle-shadow-angle-field" type="hidden" name="vehicle_shadow_angle_degrees" value="{{ vehicle_shadow_angle_degrees }}">
+        <input id="vehicle-shadow-spread-field" type="hidden" name="vehicle_shadow_spread_percent" value="{{ vehicle_shadow_spread_percent }}">
+        <input id="vehicle-shadow-blur-field" type="hidden" name="vehicle_shadow_blur_percent" value="{{ vehicle_shadow_blur_percent }}">
+        <input id="vehicle-shadow-contact-field" type="hidden" name="vehicle_shadow_contact_percent" value="{{ vehicle_shadow_contact_percent }}">
         {% else %}
         <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Die Vorschau reagiert sofort. Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der markierten Fläche.</small></label>
         <label class="checkbox-row"><input type="checkbox" name="refine_edges" value="true" checked><span><strong>Kanten automatisch verfeinern</strong><small>Richtet den gemalten Rand innerhalb eines schmalen Sicherheitsbereichs an sichtbaren Bildkanten aus. Geschützte Flächen außerhalb dieses Bereichs bleiben unverändert.</small></span></label>
@@ -76,6 +86,11 @@
     const vehicleOffsetX = document.getElementById('vehicle-offset-x');
     const vehicleOffsetY = document.getElementById('vehicle-offset-y');
     const vehicleShadowOpacity = document.getElementById('vehicle-shadow-opacity');
+    const vehicleShadowDistance = document.getElementById('vehicle-shadow-distance');
+    const vehicleShadowAngle = document.getElementById('vehicle-shadow-angle');
+    const vehicleShadowSpread = document.getElementById('vehicle-shadow-spread');
+    const vehicleShadowBlur = document.getElementById('vehicle-shadow-blur');
+    const vehicleShadowContact = document.getElementById('vehicle-shadow-contact');
     const maskCanvas = document.createElement('canvas');
     const maskContext = maskCanvas.getContext('2d', {willReadFrequently: true});
     const initialMaskCanvas = document.createElement('canvas');
@@ -207,7 +222,12 @@
                 vehicleBottom,
                 vehicleWidth,
                 vehicleHeight,
-                shadowOpacity
+                shadowOpacity,
+                Number(vehicleShadowDistance.value),
+                Number(vehicleShadowAngle.value),
+                Number(vehicleShadowSpread.value),
+                Number(vehicleShadowBlur.value),
+                Number(vehicleShadowContact.value)
             );
         }
         context.drawImage(subject, x, y, width, height);
@@ -246,17 +266,36 @@
         return maskBoundsCache;
     }
 
-    function drawVehicleShadow(context, left, bottom, width, height, opacityPercent) {
-        const broadHeight = Math.max(12, height * .085);
+    function drawVehicleShadow(
+        context,
+        left,
+        bottom,
+        width,
+        height,
+        opacityPercent,
+        distancePercent,
+        angleDegrees,
+        spreadPercent,
+        blurPercent,
+        contactPercent
+    ) {
+        const spread = Math.max(50, Math.min(180, spreadPercent)) / 100;
+        const blur = Math.max(20, Math.min(200, blurPercent)) / 100;
+        const broadWidth = width * .84 * spread;
+        const broadHeight = Math.max(12, height * .085 * (.65 + spread * .35));
         const opacity = Math.max(0, Math.min(80, opacityPercent)) / 100;
+        const distance = height * Math.max(0, Math.min(20, distancePercent)) / 100;
+        const angle = (angleDegrees % 360) * Math.PI / 180;
+        const offsetX = Math.cos(angle) * distance;
+        const offsetY = Math.sin(angle) * distance;
         context.save();
-        context.filter = `blur(${Math.max(8, broadHeight * .55)}px)`;
+        context.filter = `blur(${Math.max(2, broadHeight * .55 * blur)}px)`;
         context.fillStyle = `rgba(0, 0, 0, ${opacity})`;
         context.beginPath();
         context.ellipse(
-            left + width / 2,
-            bottom - broadHeight * .22,
-            width * .42,
+            left + width / 2 + offsetX,
+            bottom - broadHeight * .22 + offsetY,
+            broadWidth / 2,
             broadHeight / 2,
             0,
             0,
@@ -266,9 +305,10 @@
         context.restore();
 
         const contactHeight = Math.max(6, height * .025);
+        const contactStrength = Math.max(0, Math.min(150, contactPercent)) / 100;
         context.save();
         context.filter = `blur(${Math.max(3, contactHeight * .45)}px)`;
-        context.fillStyle = `rgba(0, 0, 0, ${Math.min(.9, opacity * 1.75)})`;
+        context.fillStyle = `rgba(0, 0, 0, ${Math.min(.9, opacity * 1.75 * contactStrength)})`;
         [0.24, 0.76].forEach(position => {
             context.beginPath();
             context.ellipse(
@@ -412,14 +452,19 @@
         scheduleRender();
     });
     [
-        [vehicleScale, 'vehicle-scale-output', 'vehicle-scale-field'],
-        [vehicleOffsetX, 'vehicle-offset-x-output', 'vehicle-offset-x-field'],
-        [vehicleOffsetY, 'vehicle-offset-y-output', 'vehicle-offset-y-field'],
-        [vehicleShadowOpacity, 'vehicle-shadow-opacity-output', 'vehicle-shadow-opacity-field']
-    ].forEach(([control, outputId, fieldId]) => {
+        [vehicleScale, 'vehicle-scale-output', 'vehicle-scale-field', ' %'],
+        [vehicleOffsetX, 'vehicle-offset-x-output', 'vehicle-offset-x-field', ' %'],
+        [vehicleOffsetY, 'vehicle-offset-y-output', 'vehicle-offset-y-field', ' %'],
+        [vehicleShadowOpacity, 'vehicle-shadow-opacity-output', 'vehicle-shadow-opacity-field', ' %'],
+        [vehicleShadowDistance, 'vehicle-shadow-distance-output', 'vehicle-shadow-distance-field', ' %'],
+        [vehicleShadowAngle, 'vehicle-shadow-angle-output', 'vehicle-shadow-angle-field', '°'],
+        [vehicleShadowSpread, 'vehicle-shadow-spread-output', 'vehicle-shadow-spread-field', ' %'],
+        [vehicleShadowBlur, 'vehicle-shadow-blur-output', 'vehicle-shadow-blur-field', ' %'],
+        [vehicleShadowContact, 'vehicle-shadow-contact-output', 'vehicle-shadow-contact-field', ' %']
+    ].forEach(([control, outputId, fieldId, suffix]) => {
         if (!control) return;
         control.addEventListener('input', () => {
-            document.getElementById(outputId).value = `${control.value} %`;
+            document.getElementById(outputId).value = `${control.value}${suffix}`;
             document.getElementById(fieldId).value = control.value;
             scheduleRender();
         });

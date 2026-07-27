@@ -99,6 +99,11 @@ class CompositionOptions:
     contour_max_height_percent: int = 72
     vehicle_bottom_percent: int = 90
     shadow_opacity_percent: int = 32
+    shadow_distance_percent: int = 0
+    shadow_angle_degrees: int = 90
+    shadow_spread_percent: int = 100
+    shadow_blur_percent: int = 100
+    shadow_contact_percent: int = 100
     reflection_opacity_percent: int = 10
     brightness_percent: int = 100
     background_zoom_percent: int = 100
@@ -1758,6 +1763,11 @@ def compose_showroom(
                 opacity_percent=shadow_opacity,
                 perspective=perspective,
                 depth_multiplier=scene_adjustment.shadow_depth_multiplier,
+                distance_percent=options.shadow_distance_percent,
+                angle_degrees=options.shadow_angle_degrees,
+                spread_percent=options.shadow_spread_percent,
+                blur_percent=options.shadow_blur_percent,
+                contact_percent=options.shadow_contact_percent,
             ),
         )
 
@@ -1826,17 +1836,31 @@ def _create_vehicle_shadow(
     opacity_percent: int,
     perspective: str,
     depth_multiplier: float = 1.0,
+    distance_percent: int = 0,
+    angle_degrees: int = 90,
+    spread_percent: int = 100,
+    blur_percent: int = 100,
+    contact_percent: int = 100,
 ) -> Image.Image:
     """Build a soft underbody shadow plus darker tyre contact shadows."""
     vehicle_width, vehicle_height = alpha.size
     bottom = y + vehicle_height
+    distance = vehicle_height * max(0, min(20, distance_percent)) / 100
+    angle = math.radians(angle_degrees % 360)
+    shadow_offset_x = round(math.cos(angle) * distance)
+    shadow_offset_y = round(math.sin(angle) * distance)
+    spread = max(50, min(180, spread_percent)) / 100
+    blur = max(20, min(200, blur_percent)) / 100
 
     broad_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     broad_draw = ImageDraw.Draw(broad_shadow)
-    broad_width = round(vehicle_width * 0.84)
-    broad_height = max(18, round(vehicle_height * 0.085 * depth_multiplier))
-    broad_left = x + (vehicle_width - broad_width) // 2
-    broad_top = bottom - round(broad_height * 0.72)
+    broad_width = round(vehicle_width * 0.84 * spread)
+    broad_height = max(
+        18,
+        round(vehicle_height * 0.085 * depth_multiplier * (0.65 + spread * 0.35)),
+    )
+    broad_left = x + (vehicle_width - broad_width) // 2 + shadow_offset_x
+    broad_top = bottom - round(broad_height * 0.72) + shadow_offset_y
     broad_draw.ellipse(
         (
             broad_left,
@@ -1847,13 +1871,17 @@ def _create_vehicle_shadow(
         fill=(0, 0, 0, round(255 * opacity_percent / 100)),
     )
     broad_shadow = broad_shadow.filter(
-        ImageFilter.GaussianBlur(max(10, round(broad_height * 0.55)))
+        ImageFilter.GaussianBlur(max(2, round(broad_height * 0.55 * blur)))
     )
 
     contact_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     contact_draw = ImageDraw.Draw(contact_shadow)
     contact_height = max(8, round(vehicle_height * 0.025))
-    contact_alpha = min(230, round(255 * opacity_percent / 100 * 1.75))
+    contact_strength = max(0, min(150, contact_percent)) / 100
+    contact_alpha = min(
+        230,
+        round(255 * opacity_percent / 100 * 1.75 * contact_strength),
+    )
     contact_regions = _vehicle_contact_regions(alpha)
     if not contact_regions:
         fallback_positions = {
@@ -2230,6 +2258,31 @@ def process_photo(photo_id: str) -> None:
                             photo.vehicle_shadow_opacity_percent
                             if photo.vehicle_shadow_opacity_percent is not None
                             else composition.shadow_opacity_percent
+                        ),
+                        shadow_distance_percent=(
+                            photo.vehicle_shadow_distance_percent
+                            if photo.vehicle_shadow_distance_percent is not None
+                            else 0
+                        ),
+                        shadow_angle_degrees=(
+                            photo.vehicle_shadow_angle_degrees
+                            if photo.vehicle_shadow_angle_degrees is not None
+                            else 90
+                        ),
+                        shadow_spread_percent=(
+                            photo.vehicle_shadow_spread_percent
+                            if photo.vehicle_shadow_spread_percent is not None
+                            else 100
+                        ),
+                        shadow_blur_percent=(
+                            photo.vehicle_shadow_blur_percent
+                            if photo.vehicle_shadow_blur_percent is not None
+                            else 100
+                        ),
+                        shadow_contact_percent=(
+                            photo.vehicle_shadow_contact_percent
+                            if photo.vehicle_shadow_contact_percent is not None
+                            else 100
                         ),
                         reflection_opacity_percent=composition.reflection_opacity_percent,
                         brightness_percent=composition.brightness_percent,
