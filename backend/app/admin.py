@@ -2840,7 +2840,7 @@ def vehicle_correction(
     admin = _require_quality_operator(request, db)
     if isinstance(admin, RedirectResponse):
         return admin
-    photo, job, step, _ = _vehicle_correction_photo(db, admin, photo_id)
+    photo, job, step, orientation = _vehicle_correction_photo(db, admin, photo_id)
     if not photo.preview_cutout_object_key:
         _flash(
             request,
@@ -2850,6 +2850,27 @@ def vehicle_correction(
         return RedirectResponse(
             f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER
         )
+    background = db.get(Background, job.background_id) if job.background_id else None
+    override = (
+        db.scalar(
+            select(BackgroundOrientationComposition).where(
+                BackgroundOrientationComposition.background_id == background.id,
+                BackgroundOrientationComposition.orientation_id == orientation.id,
+            )
+        )
+        if background is not None
+        else None
+    )
+    inherited_shadow = (
+        override.shadow_opacity_percent
+        if override is not None and override.shadow_opacity_percent is not None
+        else (background.shadow_opacity_percent if background else 32)
+    )
+    shadow_opacity = (
+        photo.vehicle_shadow_opacity_percent
+        if photo.vehicle_shadow_opacity_percent is not None
+        else inherited_shadow
+    )
     return templates.TemplateResponse(
         request,
         "admin/window_correction.html",
@@ -2861,6 +2882,7 @@ def vehicle_correction(
             step=step,
             editor_kind="vehicle",
             background_shift_percent=0,
+            vehicle_shadow_opacity_percent=shadow_opacity,
         ),
     )
 
@@ -2906,6 +2928,7 @@ def save_vehicle_correction(
     vehicle_scale_percent: int = Form(default=100),
     vehicle_offset_x_percent: int = Form(default=0),
     vehicle_offset_y_percent: int = Form(default=0),
+    vehicle_shadow_opacity_percent: int = Form(default=32),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
     storage: ObjectStorage = Depends(get_object_storage),
@@ -2921,6 +2944,8 @@ def save_vehicle_correction(
         raise HTTPException(status_code=400, detail="Ungültige horizontale Position")
     if not -35 <= vehicle_offset_y_percent <= 35:
         raise HTTPException(status_code=400, detail="Ungültige vertikale Position")
+    if not 0 <= vehicle_shadow_opacity_percent <= 80:
+        raise HTTPException(status_code=400, detail="Ungültige Schattenintensität")
     content = mask.file.read(MAX_CONFIGURATION_IMAGE_BYTES + 1)
     if len(content) > MAX_CONFIGURATION_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="Die Fahrzeugmaske ist zu groß")
@@ -2947,6 +2972,7 @@ def save_vehicle_correction(
     photo.vehicle_scale_percent = vehicle_scale_percent
     photo.vehicle_offset_x_percent = vehicle_offset_x_percent
     photo.vehicle_offset_y_percent = vehicle_offset_y_percent
+    photo.vehicle_shadow_opacity_percent = vehicle_shadow_opacity_percent
     photo.quality_review_required = True
     photo.quality_review_reason = (
         "Das manuell korrigierte Optimierungsergebnis wird erstellt."
