@@ -2333,8 +2333,9 @@ def test_auto_export_waits_for_explicit_capture_completion(monkeypatch: pytest.M
         assert queued_exports == [export_run.id]
 
 
-def test_dealership_admin_can_only_submit_processed_photo_for_improvement() -> None:
+def test_admins_can_submit_processed_photo_for_quality_review() -> None:
     dealership, user = create_dealership_admin()
+    create_system_admin()
     with TestingSession() as db:
         location = Location(dealership_id=dealership.id, name="Bad Neustadt")
         step = CaptureStep(
@@ -2395,7 +2396,7 @@ def test_dealership_admin_can_only_submit_processed_photo_for_improvement() -> N
     try:
         detail_page = client.get(f"/admin/jobs/{job_id}")
         assert detail_page.status_code == 200
-        assert "Zur Verbesserung vorlegen" in detail_page.text
+        assert "Zur Qualitätsprüfung hinzufügen" in detail_page.text
         assert "Scheibenmaske nachbearbeiten" not in detail_page.text
         assert ">Verarbeitung starten<" not in detail_page.text
 
@@ -2420,6 +2421,48 @@ def test_dealership_admin_can_only_submit_processed_photo_for_improvement() -> N
         assert submitted_photo.quality_review_resolution == "requested_by_dealership"
         assert submitted_photo.quality_review_created_at is not None
         assert submitted_job.status == JobStatus.REVIEW_REQUIRED
+
+        submitted_photo.quality_review_required = False
+        submitted_photo.quality_review_reason = None
+        submitted_photo.quality_review_created_at = None
+        submitted_photo.quality_review_resolution = None
+        submitted_job.status = JobStatus.COMPLETED
+        db.commit()
+
+    dealer_page = client.get(f"/admin/jobs/{job_id}")
+    client.post(
+        "/admin/logout",
+        data={"csrf_token": csrf_from(dealer_page.text)},
+        follow_redirects=False,
+    )
+    system_login_page = client.get("/admin/login")
+    client.post(
+        "/admin/login",
+        data={
+            "email": "system@example.com",
+            "password": "a-secure-system-password",
+            "csrf_token": csrf_from(system_login_page.text),
+        },
+    )
+    app.dependency_overrides[get_object_storage] = lambda: ConfigurationStorage()
+    try:
+        system_detail_page = client.get(f"/admin/jobs/{job_id}")
+        assert system_detail_page.status_code == 200
+        assert "Zur Qualitätsprüfung hinzufügen" in system_detail_page.text
+        system_submitted = client.post(
+            f"/admin/photos/{photo_id}/request-improvement",
+            data={"csrf_token": csrf_from(system_detail_page.text)},
+            follow_redirects=False,
+        )
+    finally:
+        app.dependency_overrides.pop(get_object_storage, None)
+
+    assert system_submitted.status_code == 303
+    with TestingSession() as db:
+        submitted_photo = db.get(PhotoAsset, photo_id)
+        assert submitted_photo is not None
+        assert submitted_photo.quality_review_required is True
+        assert submitted_photo.quality_review_resolution == "requested_by_system_admin"
 
 
 def test_manual_mask_refinement_is_queued_instead_of_running_in_http_request(

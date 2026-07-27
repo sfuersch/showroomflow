@@ -2588,7 +2588,7 @@ def request_photo_improvement(
     if isinstance(admin, RedirectResponse):
         return admin
     _validate_csrf(request, csrf_token)
-    if admin.role != UserRole.DEALERSHIP_ADMIN:
+    if admin.role not in {UserRole.DEALERSHIP_ADMIN, UserRole.SYSTEM_ADMIN}:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
     photo = db.get(PhotoAsset, photo_id)
     if photo is None:
@@ -2607,15 +2607,19 @@ def request_photo_improvement(
     else:
         photo.quality_review_required = True
         photo.quality_review_reason = (
-            "Das Autohaus hat das Ergebnis zur Verbesserung vorgelegt."
+            "Das Bild wurde manuell zur Qualitätsprüfung hinzugefügt."
         )
         photo.quality_review_created_at = datetime.now(timezone.utc)
         photo.quality_reviewed_by_id = None
         photo.quality_reviewed_at = None
-        photo.quality_review_resolution = "requested_by_dealership"
+        photo.quality_review_resolution = (
+            "requested_by_dealership"
+            if admin.role == UserRole.DEALERSHIP_ADMIN
+            else "requested_by_system_admin"
+        )
         job.status = JobStatus.REVIEW_REQUIRED
         db.commit()
-        _flash(request, "Das Bild wurde dem Operator zur Verbesserung vorgelegt.")
+        _flash(request, "Das Bild wurde zur Qualitätsprüfung hinzugefügt.")
     return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
