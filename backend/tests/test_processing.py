@@ -403,6 +403,7 @@ def test_local_composition_applies_manual_vehicle_scale_and_offsets() -> None:
             vehicle_scale_percent=50,
             vehicle_offset_x_percent=10,
             vehicle_offset_y_percent=-5,
+            manual_source_framing=True,
         ),
     )
 
@@ -414,7 +415,7 @@ def test_local_composition_applies_manual_vehicle_scale_and_offsets() -> None:
             for red, green, blue in rendered.get_flattened_data()
         ]
     )
-    assert red_mask.getbbox() == pytest.approx((330, 290, 630, 490), abs=2)
+    assert red_mask.getbbox() == pytest.approx((330, 180, 630, 380), abs=2)
 
 
 def test_local_hybrid_shadow_uses_preserved_vehicle_position(
@@ -451,6 +452,50 @@ def test_local_hybrid_shadow_uses_preserved_vehicle_position(
     )
 
     assert shadow_position == {"x": 100, "y": 120}
+
+
+def test_manual_editor_shadow_uses_preview_vehicle_position(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    background = image_bytes(Image.new("RGB", (800, 600), "black"), "JPEG")
+    cutout = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(cutout).rectangle((100, 120, 699, 519), fill=(255, 0, 0, 255))
+    shadow_position: dict[str, object] = {}
+
+    def fake_shadow(
+        alpha: Image.Image,
+        canvas_size: tuple[int, int],
+        *,
+        x: int,
+        y: int,
+        **_: object,
+    ) -> Image.Image:
+        shadow_position.update(x=x, y=y, alpha_size=alpha.size)
+        return Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+
+    monkeypatch.setattr(processing_module, "_create_vehicle_shadow", fake_shadow)
+
+    compose_showroom(
+        background,
+        image_bytes(cutout, "PNG"),
+        CompositionOptions(
+            width=800,
+            height=600,
+            orientation_key="front-left",
+            shadow_opacity_percent=40,
+            reflection_opacity_percent=0,
+            vehicle_scale_percent=50,
+            vehicle_offset_x_percent=10,
+            vehicle_offset_y_percent=-5,
+            manual_source_framing=True,
+        ),
+    )
+
+    assert shadow_position == {
+        "x": pytest.approx(330, abs=1),
+        "y": pytest.approx(180, abs=1),
+        "alpha_size": pytest.approx((300, 200), abs=1),
+    }
 
 
 @pytest.mark.parametrize(

@@ -114,6 +114,7 @@ class CompositionOptions:
     vehicle_scale_percent: int = 100
     vehicle_offset_x_percent: int = 0
     vehicle_offset_y_percent: int = 0
+    manual_source_framing: bool = False
 
 
 @dataclass(frozen=True)
@@ -1590,48 +1591,47 @@ def compose_showroom(
             options.contour_target_area_percent * scene_adjustment.scale_multiplier**2
         ),
     )
-    framing = calculate_contour_framing(
-        contour,
-        output_width=options.width,
-        output_height=options.height,
-        target_area_percent=options.contour_target_area_percent,
-        max_width_percent=options.contour_max_width_percent,
-        max_height_percent=options.contour_max_height_percent,
-    )
-    preserve_original_framing = should_preserve_original_framing(
-        frame,
-        options=options,
-        preferred_framing=framing,
-    )
-    if preserve_original_framing:
+    if options.manual_source_framing:
+        # The quality editor previews a transform of the complete source canvas.
+        # Apply the exact same coordinate system here before cropping transparent
+        # margins. This keeps scale and offsets pixel-consistent with the browser.
         vehicle = ImageOps.fit(
             vehicle,
             (options.width, options.height),
             method=Image.Resampling.LANCZOS,
         )
-        fitted_box = vehicle.getchannel("A").point(
+        manual_scale = max(50, min(160, options.vehicle_scale_percent)) / 100
+        if abs(manual_scale - 1) >= 0.001:
+            vehicle = vehicle.resize(
+                (
+                    max(1, round(vehicle.width * manual_scale)),
+                    max(1, round(vehicle.height * manual_scale)),
+                ),
+                Image.Resampling.LANCZOS,
+            )
+        x = round((options.width - vehicle.width) / 2)
+        y = round((options.height - vehicle.height) / 2)
+        x += round(
+            options.width
+            * max(-35, min(35, options.vehicle_offset_x_percent))
+            / 100
+        )
+        y += round(
+            options.height
+            * max(-35, min(35, options.vehicle_offset_y_percent))
+            / 100
+        )
+        transformed_box = vehicle.getchannel("A").point(
             lambda value: 255 if value >= 128 else 0
         ).getbbox()
-        if fitted_box is None:
+        if transformed_box is None:
             raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
-        x, y = fitted_box[0], fitted_box[1]
-        vehicle = vehicle.crop(fitted_box)
+        x += transformed_box[0]
+        y += transformed_box[1]
+        vehicle = vehicle.crop(transformed_box)
         bottom = y + vehicle.height
         scene_adjustment = SceneAdjustment()
     else:
-        vehicle = vehicle.crop(alpha_box)
-        if abs(scene_adjustment.rotation_degrees) >= 0.05:
-            vehicle = vehicle.rotate(
-                scene_adjustment.rotation_degrees,
-                resample=Image.Resampling.BICUBIC,
-                expand=True,
-            )
-            rotated_box = vehicle.getchannel("A").point(
-                lambda value: 255 if value >= 128 else 0
-            ).getbbox()
-            if rotated_box is not None:
-                vehicle = vehicle.crop(rotated_box)
-        contour = VehicleContour(vehicle.width, vehicle.height)
         framing = calculate_contour_framing(
             contour,
             output_width=options.width,
@@ -1640,39 +1640,90 @@ def compose_showroom(
             max_width_percent=options.contour_max_width_percent,
             max_height_percent=options.contour_max_height_percent,
         )
-        target_width = options.width * framing.width_fraction
-        target_height = options.height * framing.height_fraction
-        scale = min(target_width / vehicle.width, target_height / vehicle.height)
-        vehicle = vehicle.resize(
-            (max(1, int(vehicle.width * scale)), max(1, int(vehicle.height * scale))),
-            Image.Resampling.LANCZOS,
+        preserve_original_framing = should_preserve_original_framing(
+            frame,
+            options=options,
+            preferred_framing=framing,
         )
-        x = (options.width - vehicle.width) // 2
-        bottom = int(
-            options.height * max(55, min(98, options.vehicle_bottom_percent)) / 100
+        if preserve_original_framing:
+            vehicle = ImageOps.fit(
+                vehicle,
+                (options.width, options.height),
+                method=Image.Resampling.LANCZOS,
+            )
+            fitted_box = vehicle.getchannel("A").point(
+                lambda value: 255 if value >= 128 else 0
+            ).getbbox()
+            if fitted_box is None:
+                raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
+            x, y = fitted_box[0], fitted_box[1]
+            vehicle = vehicle.crop(fitted_box)
+            bottom = y + vehicle.height
+            scene_adjustment = SceneAdjustment()
+        else:
+            vehicle = vehicle.crop(alpha_box)
+            if abs(scene_adjustment.rotation_degrees) >= 0.05:
+                vehicle = vehicle.rotate(
+                    scene_adjustment.rotation_degrees,
+                    resample=Image.Resampling.BICUBIC,
+                    expand=True,
+                )
+                rotated_box = vehicle.getchannel("A").point(
+                    lambda value: 255 if value >= 128 else 0
+                ).getbbox()
+                if rotated_box is not None:
+                    vehicle = vehicle.crop(rotated_box)
+            contour = VehicleContour(vehicle.width, vehicle.height)
+            framing = calculate_contour_framing(
+                contour,
+                output_width=options.width,
+                output_height=options.height,
+                target_area_percent=options.contour_target_area_percent,
+                max_width_percent=options.contour_max_width_percent,
+                max_height_percent=options.contour_max_height_percent,
+            )
+            target_width = options.width * framing.width_fraction
+            target_height = options.height * framing.height_fraction
+            scale = min(target_width / vehicle.width, target_height / vehicle.height)
+            vehicle = vehicle.resize(
+                (
+                    max(1, int(vehicle.width * scale)),
+                    max(1, int(vehicle.height * scale)),
+                ),
+                Image.Resampling.LANCZOS,
+            )
+            x = (options.width - vehicle.width) // 2
+            bottom = int(
+                options.height
+                * max(55, min(98, options.vehicle_bottom_percent))
+                / 100
+            )
+            y = bottom - vehicle.height
+        manual_scale = max(50, min(160, options.vehicle_scale_percent)) / 100
+        if abs(manual_scale - 1) >= 0.001:
+            center_x = x + vehicle.width / 2
+            vehicle = vehicle.resize(
+                (
+                    max(1, round(vehicle.width * manual_scale)),
+                    max(1, round(vehicle.height * manual_scale)),
+                ),
+                Image.Resampling.LANCZOS,
+            )
+            x = round(center_x - vehicle.width / 2)
+            y = round(bottom - vehicle.height)
+        x += round(
+            options.width
+            * max(-35, min(35, options.vehicle_offset_x_percent))
+            / 100
         )
-        y = bottom - vehicle.height
-    manual_scale = max(50, min(160, options.vehicle_scale_percent)) / 100
-    if abs(manual_scale - 1) >= 0.001:
-        center_x = x + vehicle.width / 2
-        vehicle = vehicle.resize(
-            (
-                max(1, round(vehicle.width * manual_scale)),
-                max(1, round(vehicle.height * manual_scale)),
-            ),
-            Image.Resampling.LANCZOS,
+        y += round(
+            options.height
+            * max(-35, min(35, options.vehicle_offset_y_percent))
+            / 100
         )
-        x = round(center_x - vehicle.width / 2)
-        y = round(bottom - vehicle.height)
-    x += round(
-        options.width * max(-35, min(35, options.vehicle_offset_x_percent)) / 100
-    )
-    y += round(
-        options.height * max(-35, min(35, options.vehicle_offset_y_percent)) / 100
-    )
-    x = max(-vehicle.width + 40, min(options.width - 40, x))
-    y = max(-vehicle.height + 40, min(options.height - 40, y))
-    bottom = y + vehicle.height
+        x = max(-vehicle.width + 40, min(options.width - 40, x))
+        y = max(-vehicle.height + 40, min(options.height - 40, y))
+        bottom = y + vehicle.height
 
     if options.brightness_percent != 100:
         rgb = ImageEnhance.Brightness(vehicle.convert("RGB")).enhance(
@@ -2192,6 +2243,7 @@ def process_photo(photo_id: str) -> None:
                         vehicle_scale_percent=photo.vehicle_scale_percent,
                         vehicle_offset_x_percent=photo.vehicle_offset_x_percent,
                         vehicle_offset_y_percent=photo.vehicle_offset_y_percent,
+                        manual_source_framing=True,
                     ),
                 )
                 photo.quality_review_required = True
