@@ -502,6 +502,10 @@ def test_vehicle_shadow_follows_perspective_line_to_both_bumpers() -> None:
 
     # The distant and near halves use different ground heights.
     assert strongest_row(90, 145) + 15 < strongest_row(355, 410)
+    # Beyond each wheel the shadow stays at that wheel's ground height. It
+    # must not extrapolate the diagonal upwards/downwards behind the vehicle.
+    assert strongest_row(65, 90) == pytest.approx(strongest_row(90, 145), abs=4)
+    assert strongest_row(410, 445) == pytest.approx(strongest_row(355, 410), abs=4)
 
 
 def test_manual_editor_shadow_uses_preview_vehicle_position(

@@ -333,28 +333,45 @@
         const offsetX = Math.cos(angle) * distance;
         const offsetY = Math.sin(angle) * distance;
         const anchorDistance = Math.max(1, rightContactX - leftContactX);
-        const slope = (rightContactY - leftContactY) / anchorDistance;
+        let leftGroundY = leftContactY;
+        let rightGroundY = rightContactY;
+        const maximumGroundDelta = height * .32;
+        const groundDelta = rightGroundY - leftGroundY;
+        if (Math.abs(groundDelta) > maximumGroundDelta) {
+            const groundCenter = (leftGroundY + rightGroundY) / 2;
+            const limitedHalfDelta = Math.sign(groundDelta) * maximumGroundDelta / 2;
+            leftGroundY = groundCenter - limitedHalfDelta;
+            rightGroundY = groundCenter + limitedHalfDelta;
+        }
+        const slope = (rightGroundY - leftGroundY) / anchorDistance;
         const center = (left + right) / 2;
         const halfWidth = Math.max(1, (right - left) / 2) * spread;
         const broadLeft = center - halfWidth;
         const broadRight = center + halfWidth;
-        const groundYAt = x => leftContactY + slope * (x - leftContactX);
+        const groundYAt = x => {
+            if (x <= leftContactX) return leftGroundY;
+            if (x >= rightContactX) return rightGroundY;
+            return leftGroundY + slope * (x - leftContactX);
+        };
         const lineInset = broadHeight * .42;
+        const pathXPositions = [broadLeft];
+        [leftContactX, rightContactX].forEach(contactX => {
+            if (broadLeft < contactX && contactX < broadRight) pathXPositions.push(contactX);
+        });
+        pathXPositions.push(broadRight);
         context.save();
         context.filter = `blur(${Math.max(2, broadHeight * .55 * blur)}px)`;
         context.fillStyle = `rgba(0, 0, 0, ${opacity})`;
         context.strokeStyle = `rgba(0, 0, 0, ${opacity})`;
         context.lineWidth = broadHeight;
         context.lineCap = 'round';
+        context.lineJoin = 'round';
         context.beginPath();
-        context.moveTo(
-            broadLeft + offsetX,
-            groundYAt(broadLeft) - lineInset + offsetY
-        );
-        context.lineTo(
-            broadRight + offsetX,
-            groundYAt(broadRight) - lineInset + offsetY
-        );
+        pathXPositions.forEach((pathX, index) => {
+            const pathY = groundYAt(pathX) - lineInset + offsetY;
+            if (index === 0) context.moveTo(pathX + offsetX, pathY);
+            else context.lineTo(pathX + offsetX, pathY);
+        });
         context.stroke();
         context.restore();
 

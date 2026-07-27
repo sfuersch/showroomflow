@@ -1856,7 +1856,16 @@ def _create_vehicle_shadow(
     active_left, _, active_right, _ = alpha_box
     left_anchor, right_anchor = _vehicle_ground_anchors(alpha)
     anchor_distance = max(1, right_anchor[0] - left_anchor[0])
-    ground_slope = (right_anchor[1] - left_anchor[1]) / anchor_distance
+    left_ground_y = float(left_anchor[1])
+    right_ground_y = float(right_anchor[1])
+    maximum_ground_delta = vehicle_height * 0.32
+    ground_delta = right_ground_y - left_ground_y
+    if abs(ground_delta) > maximum_ground_delta:
+        ground_center = (left_ground_y + right_ground_y) / 2
+        limited_half_delta = math.copysign(maximum_ground_delta / 2, ground_delta)
+        left_ground_y = ground_center - limited_half_delta
+        right_ground_y = ground_center + limited_half_delta
+    ground_slope = (right_ground_y - left_ground_y) / anchor_distance
     active_center = (active_left + active_right) / 2
     base_half_width = max(1, (active_right - active_left) / 2)
     shadow_half_width = base_half_width * spread
@@ -1864,23 +1873,32 @@ def _create_vehicle_shadow(
     shadow_right = active_center + shadow_half_width
 
     def ground_y_at(x_position: float) -> float:
-        return left_anchor[1] + ground_slope * (x_position - left_anchor[0])
+        if x_position <= left_anchor[0]:
+            return left_ground_y
+        if x_position >= right_anchor[0]:
+            return right_ground_y
+        return left_ground_y + ground_slope * (x_position - left_anchor[0])
 
     line_y_inset = broad_height * 0.42
-    broad_points = (
+    path_x_positions = [shadow_left]
+    path_x_positions.extend(
+        anchor_x
+        for anchor_x in (left_anchor[0], right_anchor[0])
+        if shadow_left < anchor_x < shadow_right
+    )
+    path_x_positions.append(shadow_right)
+    broad_points = tuple(
         (
-            round(x + shadow_left + shadow_offset_x),
-            round(y + ground_y_at(shadow_left) - line_y_inset + shadow_offset_y),
-        ),
-        (
-            round(x + shadow_right + shadow_offset_x),
-            round(y + ground_y_at(shadow_right) - line_y_inset + shadow_offset_y),
-        ),
+            round(x + point_x + shadow_offset_x),
+            round(y + ground_y_at(point_x) - line_y_inset + shadow_offset_y),
+        )
+        for point_x in path_x_positions
     )
     broad_draw.line(
         broad_points,
         fill=(0, 0, 0, round(255 * opacity_percent / 100)),
         width=broad_height,
+        joint="curve",
     )
     radius = broad_height // 2
     for point_x, point_y in broad_points:
