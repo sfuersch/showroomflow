@@ -1777,54 +1777,49 @@ def compose_showroom(
     return output.getvalue()
 
 
-def _vehicle_contact_regions(alpha: Image.Image) -> list[tuple[int, int, int]]:
-    """Return likely tyre contact runs as (left, right, bottom) in alpha coordinates."""
-    mask = alpha.point(lambda value: 255 if value >= 128 else 0)
-    width, height = mask.size
-    pixels = mask.load()
-    column_bottoms: list[int] = []
-    for x_position in range(width):
-        bottom = -1
-        for y_position in range(height - 1, -1, -1):
-            if pixels[x_position, y_position]:
-                bottom = y_position
-                break
-        column_bottoms.append(bottom)
+def _vehicle_ground_anchors(alpha: Image.Image) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return robust left/right tyre contact anchors in alpha coordinates.
 
-    global_bottom = max(column_bottoms, default=-1)
-    if global_bottom < 0:
-        return []
-    tolerance = max(5, round(height * 0.045))
-    allowed_gap = max(2, round(width * 0.012))
-    minimum_width = max(4, round(width * 0.012))
-    candidate_columns = [
-        index
-        for index, column_bottom in enumerate(column_bottoms)
-        if column_bottom >= global_bottom - tolerance
-    ]
-    if not candidate_columns:
-        return []
+    Each half of the vehicle is measured independently. This matters for
+    diagonal views where the distant wheel is visibly higher than the near
+    wheel and a shadow based on the single lowest alpha pixel would float
+    below half of the vehicle.
+    """
+    mask = np.asarray(alpha, dtype=np.uint8) >= 128
+    active_y, active_x = np.nonzero(mask)
+    width, height = alpha.size
+    if not len(active_x):
+        return ((round(width * 0.2), height - 1), (round(width * 0.8), height - 1))
 
-    runs: list[list[int]] = [[candidate_columns[0]]]
-    for x_position in candidate_columns[1:]:
-        if x_position - runs[-1][-1] <= allowed_gap:
-            runs[-1].append(x_position)
-        else:
-            runs.append([x_position])
+    active_left = int(active_x.min())
+    active_right = int(active_x.max())
+    active_width = max(1, active_right - active_left + 1)
+    column_bottoms = np.full(width, -1, dtype=np.int32)
+    for x_position in np.unique(active_x):
+        column_rows = np.flatnonzero(mask[:, x_position])
+        if len(column_rows):
+            column_bottoms[x_position] = int(column_rows[-1])
 
-    regions = [
-        (
-            run[0],
-            run[-1],
-            max(column_bottoms[run[0] : run[-1] + 1]),
-        )
-        for run in runs
-        if minimum_width <= run[-1] - run[0] + 1 <= width * 0.24
-    ]
-    if len(regions) > 4:
-        regions = sorted(regions, key=lambda region: region[1] - region[0], reverse=True)[:4]
-        regions.sort()
-    return regions
+    def anchor(start_ratio: float, end_ratio: float) -> tuple[int, int]:
+        band_left = max(active_left, round(active_left + active_width * start_ratio))
+        band_right = min(active_right, round(active_left + active_width * end_ratio))
+        band_x = np.arange(band_left, band_right + 1)
+        valid_x = band_x[column_bottoms[band_x] >= 0]
+        if not len(valid_x):
+            fallback_x = round((band_left + band_right) / 2)
+            return (fallback_x, int(active_y.max()))
+
+        valid_bottoms = column_bottoms[valid_x]
+        lower_edge = float(np.percentile(valid_bottoms, 94))
+        tolerance = max(2, round(height * 0.012))
+        contact_x = valid_x[valid_bottoms >= lower_edge - tolerance]
+        if not len(contact_x):
+            contact_x = valid_x[valid_bottoms == valid_bottoms.max()]
+        center_x = int(round(float(np.median(contact_x))))
+        center_y = int(round(float(np.median(column_bottoms[contact_x]))))
+        return (center_x, center_y)
+
+    return (anchor(0.08, 0.45), anchor(0.55, 0.92))
 
 
 def _create_vehicle_shadow(
@@ -1842,9 +1837,8 @@ def _create_vehicle_shadow(
     blur_percent: int = 100,
     contact_percent: int = 100,
 ) -> Image.Image:
-    """Build a soft underbody shadow plus darker tyre contact shadows."""
+    """Build a perspective-aware underbody shadow and tyre contact shadows."""
     vehicle_width, vehicle_height = alpha.size
-    bottom = y + vehicle_height
     distance = vehicle_height * max(0, min(20, distance_percent)) / 100
     angle = math.radians(angle_degrees % 360)
     shadow_offset_x = round(math.cos(angle) * distance)
@@ -1854,22 +1848,46 @@ def _create_vehicle_shadow(
 
     broad_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     broad_draw = ImageDraw.Draw(broad_shadow)
-    broad_width = round(vehicle_width * 0.84 * spread)
     broad_height = max(
         18,
-        round(vehicle_height * 0.085 * depth_multiplier * (0.65 + spread * 0.35)),
+        round(vehicle_height * 0.075 * depth_multiplier * (0.68 + spread * 0.32)),
     )
-    broad_left = x + (vehicle_width - broad_width) // 2 + shadow_offset_x
-    broad_top = bottom - round(broad_height * 0.72) + shadow_offset_y
-    broad_draw.ellipse(
+    alpha_box = alpha.getbbox() or (0, 0, vehicle_width, vehicle_height)
+    active_left, _, active_right, _ = alpha_box
+    left_anchor, right_anchor = _vehicle_ground_anchors(alpha)
+    anchor_distance = max(1, right_anchor[0] - left_anchor[0])
+    ground_slope = (right_anchor[1] - left_anchor[1]) / anchor_distance
+    active_center = (active_left + active_right) / 2
+    base_half_width = max(1, (active_right - active_left) / 2)
+    shadow_half_width = base_half_width * spread
+    shadow_left = active_center - shadow_half_width
+    shadow_right = active_center + shadow_half_width
+
+    def ground_y_at(x_position: float) -> float:
+        return left_anchor[1] + ground_slope * (x_position - left_anchor[0])
+
+    line_y_inset = broad_height * 0.42
+    broad_points = (
         (
-            broad_left,
-            broad_top,
-            broad_left + broad_width,
-            broad_top + broad_height,
+            round(x + shadow_left + shadow_offset_x),
+            round(y + ground_y_at(shadow_left) - line_y_inset + shadow_offset_y),
         ),
-        fill=(0, 0, 0, round(255 * opacity_percent / 100)),
+        (
+            round(x + shadow_right + shadow_offset_x),
+            round(y + ground_y_at(shadow_right) - line_y_inset + shadow_offset_y),
+        ),
     )
+    broad_draw.line(
+        broad_points,
+        fill=(0, 0, 0, round(255 * opacity_percent / 100)),
+        width=broad_height,
+    )
+    radius = broad_height // 2
+    for point_x, point_y in broad_points:
+        broad_draw.ellipse(
+            (point_x - radius, point_y - radius, point_x + radius, point_y + radius),
+            fill=(0, 0, 0, round(255 * opacity_percent / 100)),
+        )
     broad_shadow = broad_shadow.filter(
         ImageFilter.GaussianBlur(max(2, round(broad_height * 0.55 * blur)))
     )
@@ -1882,26 +1900,10 @@ def _create_vehicle_shadow(
         230,
         round(255 * opacity_percent / 100 * 1.75 * contact_strength),
     )
-    contact_regions = _vehicle_contact_regions(alpha)
-    if not contact_regions:
-        fallback_positions = {
-            "side": (0.20, 0.80),
-            "straight": (0.17, 0.83),
-            "diagonal": (0.26, 0.74),
-        }[perspective]
-        contact_regions = [
-            (
-                round(vehicle_width * position),
-                round(vehicle_width * position),
-                vehicle_height - 1,
-            )
-            for position in fallback_positions
-        ]
-    for left, right, contact_bottom in contact_regions:
-        region_width = right - left + 1
-        contact_width = max(round(vehicle_width * 0.055), round(region_width * 1.45))
-        center_x = x + (left + right) // 2
-        center_y = y + contact_bottom
+    contact_width = max(10, round(vehicle_width * 0.07))
+    for contact_x, contact_y in (left_anchor, right_anchor):
+        center_x = x + contact_x
+        center_y = y + contact_y
         contact_draw.ellipse(
             (
                 center_x - contact_width // 2,
