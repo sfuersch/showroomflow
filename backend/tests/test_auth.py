@@ -2513,6 +2513,12 @@ def test_manual_mask_refinement_is_queued_instead_of_running_in_http_request(
         },
     )
     correction_page = client.get(f"/admin/photos/{photo_id}/correction")
+    assert correction_page.status_code == 200
+    assert 'data-mode="magic"' in correction_page.text
+    assert 'data-mode="pan"' in correction_page.text
+    assert 'id="correction-zoom"' in correction_page.text
+    assert 'id="magic-tolerance"' in correction_page.text
+    assert "Apple Pencil" in correction_page.text
     storage = ConfigurationStorage()
     app.dependency_overrides[get_object_storage] = lambda: storage
     mask = Image.new("RGBA", (800, 600), (255, 255, 255, 0))

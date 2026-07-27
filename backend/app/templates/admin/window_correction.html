@@ -7,10 +7,25 @@
     <div class="correction-toolbar" role="toolbar" aria-label="Werkzeuge für die Hintergrundmaske">
         <button type="button" class="button button-primary correction-mode active" data-mode="add">Hintergrund einsetzen</button>
         <button type="button" class="button button-secondary correction-mode" data-mode="remove">Original schützen</button>
+        <button type="button" class="button button-secondary correction-mode" data-mode="magic">Magischer Pinsel</button>
+        <button type="button" class="button button-secondary correction-mode" data-mode="pan">Verschieben</button>
         <label>Pinselgröße <input id="brush-size" type="range" min="8" max="140" value="45"><output id="brush-output">45</output></label>
+        <label>Toleranz <input id="magic-tolerance" type="range" min="5" max="80" value="26"><output id="magic-output">26</output></label>
         <button type="button" class="button button-quiet" id="reset-mask">Maske zurücksetzen</button>
     </div>
-    <div class="correction-canvas-wrap"><canvas id="correction-canvas" aria-label="Scheibenmaske bearbeiten"></canvas></div>
+    <div class="correction-zoom-toolbar" role="toolbar" aria-label="Vergrößerung">
+        <button type="button" class="button button-secondary correction-zoom-step" data-zoom-step="-25" aria-label="Verkleinern">−</button>
+        <label>Zoom <input id="correction-zoom" type="range" min="50" max="400" step="10" value="100"><output id="zoom-output">100 %</output></label>
+        <button type="button" class="button button-secondary correction-zoom-step" data-zoom-step="25" aria-label="Vergrößern">+</button>
+        <button type="button" class="button button-quiet" id="zoom-fit">Einpassen</button>
+        <span class="muted correction-tool-hint">Apple Pencil zeichnet präzise. Mit „Verschieben“ lässt sich der vergrößerte Ausschnitt bewegen.</span>
+    </div>
+    <p id="correction-editor-status" class="muted correction-editor-status" role="status" aria-live="polite"></p>
+    <div class="correction-canvas-wrap" id="correction-viewport">
+        <div class="correction-canvas-stage" id="correction-stage">
+            <canvas id="correction-canvas" aria-label="Scheibenmaske bearbeiten"></canvas>
+        </div>
+    </div>
     <form id="correction-form" method="post" action="/admin/photos/{{ photo.id }}/correction" enctype="multipart/form-data">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Die Vorschau reagiert sofort. Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der markierten Fläche.</small></label>
@@ -23,16 +38,37 @@
 (() => {
     const view = document.getElementById('correction-canvas');
     const viewContext = view.getContext('2d');
+    const viewport = document.getElementById('correction-viewport');
+    const stage = document.getElementById('correction-stage');
+    const brush = document.getElementById('brush-size');
+    const brushOutput = document.getElementById('brush-output');
+    const magicTolerance = document.getElementById('magic-tolerance');
+    const magicOutput = document.getElementById('magic-output');
+    const zoomControl = document.getElementById('correction-zoom');
+    const zoomOutput = document.getElementById('zoom-output');
+    const editorStatus = document.getElementById('correction-editor-status');
+    const shift = document.getElementById('background-shift');
+    const shiftOutput = document.getElementById('shift-output');
     const maskCanvas = document.createElement('canvas');
     const maskContext = maskCanvas.getContext('2d', {willReadFrequently: true});
     const initialMaskCanvas = document.createElement('canvas');
+    const foregroundCanvas = document.createElement('canvas');
+    const tintCanvas = document.createElement('canvas');
+    const backgroundCanvas = document.createElement('canvas');
+    const analysisCanvas = document.createElement('canvas');
     const original = new Image();
     const maskImage = new Image();
     const background = new Image();
     let mode = 'add';
     let drawing = false;
+    let panning = false;
+    let lastBrushPoint = null;
+    let panOrigin = null;
     let brushCursor = null;
     let initialized = false;
+    let fitScale = 1;
+    let renderFrame = null;
+    let analysisPixels = null;
 
     function brushPoint(event) {
         const bounds = view.getBoundingClientRect();
@@ -46,8 +82,16 @@
         };
     }
 
+    function scheduleRender() {
+        if (renderFrame !== null) return;
+        renderFrame = window.requestAnimationFrame(() => {
+            renderFrame = null;
+            render();
+        });
+    }
+
     function drawBrushCursor() {
-        if (!brushCursor) return;
+        if (!brushCursor || !['add', 'remove'].includes(mode)) return;
         viewContext.save();
         viewContext.beginPath();
         viewContext.ellipse(
@@ -69,71 +113,109 @@
         viewContext.restore();
     }
 
+    function renderBackground() {
+        const context = backgroundCanvas.getContext('2d');
+        context.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+        if (!background.complete || !background.naturalWidth) return;
+        const shiftAmount = Number(shift.value) / 100;
+        const coverScale = Math.max(
+            view.width / background.naturalWidth,
+            view.height / background.naturalHeight
+        );
+        const fittedWidth = background.naturalWidth * coverScale;
+        const fittedHeight = background.naturalHeight * coverScale;
+        const fitted = document.createElement('canvas');
+        fitted.width = view.width;
+        fitted.height = view.height;
+        const fittedContext = fitted.getContext('2d');
+        fittedContext.drawImage(
+            background,
+            (view.width - fittedWidth) / 2,
+            (view.height - fittedHeight) / 2,
+            fittedWidth,
+            fittedHeight
+        );
+        const zoom = 1 + shiftAmount;
+        context.drawImage(
+            fitted,
+            (view.width - view.width * zoom) / 2,
+            view.height - view.height * zoom,
+            view.width * zoom,
+            view.height * zoom
+        );
+    }
+
     function render() {
         if (!initialized) return;
         viewContext.clearRect(0, 0, view.width, view.height);
         if (background.complete && background.naturalWidth) {
-            const shiftAmount = Number(shift.value) / 100;
-            const coverScale = Math.max(
-                view.width / background.naturalWidth,
-                view.height / background.naturalHeight
-            );
-            const fittedBackground = document.createElement('canvas');
-            fittedBackground.width = view.width;
-            fittedBackground.height = view.height;
-            const fittedContext = fittedBackground.getContext('2d');
-            const fittedWidth = background.naturalWidth * coverScale;
-            const fittedHeight = background.naturalHeight * coverScale;
-            fittedContext.drawImage(
-                background,
-                (view.width - fittedWidth) / 2,
-                (view.height - fittedHeight) / 2,
-                fittedWidth,
-                fittedHeight
-            );
-            const zoom = 1 + shiftAmount;
-            viewContext.drawImage(
-                fittedBackground,
-                (view.width - view.width * zoom) / 2,
-                view.height - view.height * zoom,
-                view.width * zoom,
-                view.height * zoom
-            );
-            const foreground = document.createElement('canvas');
-            foreground.width = view.width;
-            foreground.height = view.height;
-            const foregroundContext = foreground.getContext('2d');
+            viewContext.drawImage(backgroundCanvas, 0, 0);
+            const foregroundContext = foregroundCanvas.getContext('2d');
+            foregroundContext.clearRect(0, 0, view.width, view.height);
+            foregroundContext.globalCompositeOperation = 'source-over';
             foregroundContext.drawImage(original, 0, 0, view.width, view.height);
             foregroundContext.globalCompositeOperation = 'destination-out';
             foregroundContext.drawImage(maskCanvas, 0, 0);
-            viewContext.drawImage(foreground, 0, 0);
+            foregroundContext.globalCompositeOperation = 'source-over';
+            viewContext.drawImage(foregroundCanvas, 0, 0);
         } else {
             viewContext.drawImage(original, 0, 0, view.width, view.height);
         }
-        const tint = document.createElement('canvas');
-        tint.width = view.width;
-        tint.height = view.height;
-        const context = tint.getContext('2d');
+        const context = tintCanvas.getContext('2d');
+        context.clearRect(0, 0, view.width, view.height);
+        context.globalCompositeOperation = 'source-over';
         context.drawImage(maskCanvas, 0, 0);
         context.globalCompositeOperation = 'source-in';
         context.fillStyle = 'rgba(34, 211, 238, .78)';
-        context.fillRect(0, 0, tint.width, tint.height);
+        context.fillRect(0, 0, tintCanvas.width, tintCanvas.height);
+        context.globalCompositeOperation = 'source-over';
         viewContext.globalAlpha = .52;
-        viewContext.drawImage(tint, 0, 0);
+        viewContext.drawImage(tintCanvas, 0, 0);
         viewContext.globalAlpha = 1;
         drawBrushCursor();
+    }
+
+    function calculateFitScale() {
+        const availableWidth = Math.max(280, viewport.clientWidth - 24);
+        const availableHeight = Math.max(320, Math.min(window.innerHeight * .68, 760));
+        fitScale = Math.min(1, availableWidth / view.width, availableHeight / view.height);
+    }
+
+    function applyZoom(preserveCenter = true) {
+        if (!initialized) return;
+        const previousWidth = stage.offsetWidth || 1;
+        const previousHeight = stage.offsetHeight || 1;
+        const centerX = (viewport.scrollLeft + viewport.clientWidth / 2) / previousWidth;
+        const centerY = (viewport.scrollTop + viewport.clientHeight / 2) / previousHeight;
+        const zoom = Number(zoomControl.value) / 100;
+        const cssWidth = Math.max(1, Math.round(view.width * fitScale * zoom));
+        const cssHeight = Math.max(1, Math.round(view.height * fitScale * zoom));
+        stage.style.width = `${cssWidth}px`;
+        stage.style.height = `${cssHeight}px`;
+        view.style.width = `${cssWidth}px`;
+        view.style.height = `${cssHeight}px`;
+        zoomOutput.value = `${zoomControl.value} %`;
+        if (preserveCenter) {
+            window.requestAnimationFrame(() => {
+                viewport.scrollLeft = Math.max(0, centerX * cssWidth - viewport.clientWidth / 2);
+                viewport.scrollTop = Math.max(0, centerY * cssHeight - viewport.clientHeight / 2);
+            });
+        }
     }
 
     function initialize() {
         view.width = original.naturalWidth;
         view.height = original.naturalHeight;
-        maskCanvas.width = view.width;
-        maskCanvas.height = view.height;
-        initialMaskCanvas.width = view.width;
-        initialMaskCanvas.height = view.height;
+        [maskCanvas, initialMaskCanvas, foregroundCanvas, tintCanvas, backgroundCanvas].forEach(canvas => {
+            canvas.width = view.width;
+            canvas.height = view.height;
+        });
         maskContext.drawImage(maskImage, 0, 0, view.width, view.height);
         initialMaskCanvas.getContext('2d').drawImage(maskCanvas, 0, 0);
         initialized = true;
+        calculateFitScale();
+        applyZoom(false);
+        renderBackground();
         render();
     }
     Promise.all([
@@ -148,65 +230,243 @@
 
     document.querySelectorAll('.correction-mode').forEach(button => button.addEventListener('click', () => {
         mode = button.dataset.mode;
+        drawing = false;
+        panning = false;
+        lastBrushPoint = null;
+        brushCursor = null;
         document.querySelectorAll('.correction-mode').forEach(item => item.classList.toggle('active', item === button));
+        view.classList.toggle('is-pan', mode === 'pan');
+        view.classList.toggle('is-magic', mode === 'magic');
+        editorStatus.textContent = mode === 'magic'
+            ? 'Klicke auf eine zusammenhängende Scheiben- oder Außenfläche. Ähnliche Nachbarpixel werden automatisch markiert.'
+            : '';
+        scheduleRender();
     }));
-    const brush = document.getElementById('brush-size');
-    const brushOutput = document.getElementById('brush-output');
     brush.addEventListener('input', () => {
         brushOutput.value = brush.value;
         if (brushCursor) {
             const bounds = view.getBoundingClientRect();
             brushCursor.radiusX = Number(brush.value) * view.width / bounds.width / 2;
             brushCursor.radiusY = Number(brush.value) * view.height / bounds.height / 2;
-            render();
+            scheduleRender();
         }
     });
-    const shift = document.getElementById('background-shift');
-    const shiftOutput = document.getElementById('shift-output');
+    magicTolerance.addEventListener('input', () => {
+        magicOutput.value = magicTolerance.value;
+    });
     shift.addEventListener('input', () => {
         shiftOutput.value = `${shift.value} %`;
-        render();
+        renderBackground();
+        scheduleRender();
     });
 
-    function paint(event) {
-        if (!initialized) return;
-        brushCursor = brushPoint(event);
-        if (!drawing) {
-            render();
-            return;
-        }
+    function stamp(point) {
         maskContext.save();
         maskContext.globalCompositeOperation = mode === 'add' ? 'source-over' : 'destination-out';
         maskContext.fillStyle = '#fff';
         maskContext.beginPath();
-        maskContext.ellipse(
-            brushCursor.x,
-            brushCursor.y,
-            brushCursor.radiusX,
-            brushCursor.radiusY,
-            0,
-            0,
-            Math.PI * 2
-        );
+        maskContext.ellipse(point.x, point.y, point.radiusX, point.radiusY, 0, 0, Math.PI * 2);
         maskContext.fill();
         maskContext.restore();
-        render();
     }
-    view.addEventListener('pointerenter', paint);
-    view.addEventListener('pointerdown', event => { drawing = true; view.setPointerCapture(event.pointerId); paint(event); });
-    view.addEventListener('pointermove', paint);
-    view.addEventListener('pointerup', event => { drawing = false; paint(event); });
-    view.addEventListener('pointercancel', () => { drawing = false; brushCursor = null; render(); });
-    view.addEventListener('pointerleave', () => {
-        if (!drawing) {
-            brushCursor = null;
-            render();
+
+    function paintSegment(point) {
+        if (!lastBrushPoint) {
+            stamp(point);
+            lastBrushPoint = point;
+            return;
         }
+        const distance = Math.hypot(point.x - lastBrushPoint.x, point.y - lastBrushPoint.y);
+        const spacing = Math.max(1, Math.min(point.radiusX, point.radiusY) * .35);
+        const steps = Math.max(1, Math.ceil(distance / spacing));
+        for (let index = 1; index <= steps; index += 1) {
+            const ratio = index / steps;
+            stamp({
+                x: lastBrushPoint.x + (point.x - lastBrushPoint.x) * ratio,
+                y: lastBrushPoint.y + (point.y - lastBrushPoint.y) * ratio,
+                radiusX: point.radiusX,
+                radiusY: point.radiusY
+            });
+        }
+        lastBrushPoint = point;
+    }
+
+    function paintEvent(event) {
+        if (!initialized || !['add', 'remove'].includes(mode)) return;
+        const events = drawing && typeof event.getCoalescedEvents === 'function'
+            ? event.getCoalescedEvents()
+            : [event];
+        (events.length ? events : [event]).forEach(item => {
+            brushCursor = brushPoint(item);
+            if (drawing) paintSegment(brushCursor);
+        });
+        scheduleRender();
+    }
+
+    function prepareAnalysis() {
+        if (analysisPixels) return;
+        const scale = Math.min(1, 1400 / Math.max(view.width, view.height));
+        analysisCanvas.width = Math.max(1, Math.round(view.width * scale));
+        analysisCanvas.height = Math.max(1, Math.round(view.height * scale));
+        const context = analysisCanvas.getContext('2d', {willReadFrequently: true});
+        context.drawImage(original, 0, 0, analysisCanvas.width, analysisCanvas.height);
+        analysisPixels = context.getImageData(0, 0, analysisCanvas.width, analysisCanvas.height);
+    }
+
+    function magicSelect(event) {
+        prepareAnalysis();
+        const point = brushPoint(event);
+        const width = analysisCanvas.width;
+        const height = analysisCanvas.height;
+        const seedX = Math.max(0, Math.min(width - 1, Math.round(point.x * width / view.width)));
+        const seedY = Math.max(0, Math.min(height - 1, Math.round(point.y * height / view.height)));
+        const seedOffset = (seedY * width + seedX) * 4;
+        const pixels = analysisPixels.data;
+        const seedR = pixels[seedOffset];
+        const seedG = pixels[seedOffset + 1];
+        const seedB = pixels[seedOffset + 2];
+        const tolerance = Number(magicTolerance.value);
+        const threshold = tolerance * tolerance * 3;
+        const visited = new Uint8Array(width * height);
+        const queue = new Int32Array(width * height);
+        const selection = new ImageData(width, height);
+        let head = 0;
+        let tail = 0;
+        queue[tail++] = seedY * width + seedX;
+        visited[seedY * width + seedX] = 1;
+        let selected = 0;
+        while (head < tail) {
+            const pixelIndex = queue[head++];
+            const offset = pixelIndex * 4;
+            const red = pixels[offset] - seedR;
+            const green = pixels[offset + 1] - seedG;
+            const blue = pixels[offset + 2] - seedB;
+            if (red * red + green * green + blue * blue > threshold) continue;
+            selection.data[offset] = 255;
+            selection.data[offset + 1] = 255;
+            selection.data[offset + 2] = 255;
+            selection.data[offset + 3] = 255;
+            selected += 1;
+            const x = pixelIndex % width;
+            const y = Math.floor(pixelIndex / width);
+            if (x > 0 && !visited[pixelIndex - 1]) {
+                visited[pixelIndex - 1] = 1;
+                queue[tail++] = pixelIndex - 1;
+            }
+            if (x + 1 < width && !visited[pixelIndex + 1]) {
+                visited[pixelIndex + 1] = 1;
+                queue[tail++] = pixelIndex + 1;
+            }
+            if (y > 0 && !visited[pixelIndex - width]) {
+                visited[pixelIndex - width] = 1;
+                queue[tail++] = pixelIndex - width;
+            }
+            if (y + 1 < height && !visited[pixelIndex + width]) {
+                visited[pixelIndex + width] = 1;
+                queue[tail++] = pixelIndex + width;
+            }
+        }
+        if (selected < 4) {
+            editorStatus.textContent = 'Kein zusammenhängender Bereich erkannt. Erhöhe die Toleranz oder klicke etwas weiter innerhalb der Fläche.';
+            return;
+        }
+        const selectionCanvas = document.createElement('canvas');
+        selectionCanvas.width = width;
+        selectionCanvas.height = height;
+        selectionCanvas.getContext('2d').putImageData(selection, 0, 0);
+        maskContext.save();
+        maskContext.imageSmoothingEnabled = true;
+        maskContext.globalCompositeOperation = 'source-over';
+        maskContext.drawImage(selectionCanvas, 0, 0, view.width, view.height);
+        maskContext.restore();
+        const percentage = Math.round(selected / (width * height) * 1000) / 10;
+        editorStatus.textContent = `Zusammenhängender Bereich markiert (${percentage} % des Bildes). Prüfe die türkise Vorschau und schütze bei Bedarf Originalbereiche.`;
+        scheduleRender();
+    }
+
+    view.addEventListener('pointerenter', paintEvent);
+    view.addEventListener('pointerdown', event => {
+        if (!initialized || (event.pointerType === 'mouse' && event.button !== 0)) return;
+        event.preventDefault();
+        view.setPointerCapture(event.pointerId);
+        if (mode === 'pan') {
+            panning = true;
+            panOrigin = {
+                x: event.clientX,
+                y: event.clientY,
+                left: viewport.scrollLeft,
+                top: viewport.scrollTop
+            };
+            view.classList.add('is-panning');
+            return;
+        }
+        if (mode === 'magic') {
+            magicSelect(event);
+            return;
+        }
+        drawing = true;
+        lastBrushPoint = null;
+        paintEvent(event);
+    });
+    view.addEventListener('pointermove', event => {
+        if (panning && panOrigin) {
+            event.preventDefault();
+            viewport.scrollLeft = panOrigin.left - (event.clientX - panOrigin.x);
+            viewport.scrollTop = panOrigin.top - (event.clientY - panOrigin.y);
+            return;
+        }
+        paintEvent(event);
+    });
+    view.addEventListener('pointerup', event => {
+        if (panning) {
+            panning = false;
+            panOrigin = null;
+            view.classList.remove('is-panning');
+        }
+        if (drawing) paintEvent(event);
+        drawing = false;
+        lastBrushPoint = null;
+    });
+    view.addEventListener('pointercancel', () => {
+        drawing = false;
+        panning = false;
+        lastBrushPoint = null;
+        panOrigin = null;
+        brushCursor = null;
+        view.classList.remove('is-panning');
+        scheduleRender();
+    });
+    view.addEventListener('pointerleave', () => {
+        if (!drawing && !panning) {
+            brushCursor = null;
+            scheduleRender();
+        }
+    });
+    zoomControl.addEventListener('input', () => applyZoom());
+    document.querySelectorAll('.correction-zoom-step').forEach(button => button.addEventListener('click', () => {
+        zoomControl.value = Math.max(
+            Number(zoomControl.min),
+            Math.min(Number(zoomControl.max), Number(zoomControl.value) + Number(button.dataset.zoomStep))
+        );
+        applyZoom();
+    }));
+    document.getElementById('zoom-fit').addEventListener('click', () => {
+        zoomControl.value = 100;
+        calculateFitScale();
+        applyZoom(false);
+        viewport.scrollLeft = 0;
+        viewport.scrollTop = 0;
+    });
+    window.addEventListener('resize', () => {
+        if (!initialized || Number(zoomControl.value) !== 100) return;
+        calculateFitScale();
+        applyZoom(false);
     });
     document.getElementById('reset-mask').addEventListener('click', () => {
         maskContext.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
         maskContext.drawImage(initialMaskCanvas, 0, 0);
-        render();
+        editorStatus.textContent = 'Die automatisch erzeugte Ausgangsmaske wurde wiederhergestellt.';
+        scheduleRender();
     });
     document.getElementById('correction-form').addEventListener('submit', event => {
         event.preventDefault();
