@@ -33,6 +33,7 @@
             <label><span class="field-label">Fahrzeuggröße</span><input id="vehicle-scale" type="range" min="50" max="160" value="{{ photo.vehicle_scale_percent }}"><output id="vehicle-scale-output">{{ photo.vehicle_scale_percent }} %</output></label>
             <label><span class="field-label">Horizontal verschieben</span><input id="vehicle-offset-x" type="range" min="-35" max="35" value="{{ photo.vehicle_offset_x_percent }}"><output id="vehicle-offset-x-output">{{ photo.vehicle_offset_x_percent }} %</output></label>
             <label><span class="field-label">Vertikal verschieben</span><input id="vehicle-offset-y" type="range" min="-35" max="35" value="{{ photo.vehicle_offset_y_percent }}"><output id="vehicle-offset-y-output">{{ photo.vehicle_offset_y_percent }} %</output></label>
+            <label><span class="field-label">Schattenintensität</span><input id="vehicle-shadow-opacity" type="range" min="0" max="80" value="{{ vehicle_shadow_opacity_percent }}"><output id="vehicle-shadow-opacity-output">{{ vehicle_shadow_opacity_percent }} %</output><small>0 % deaktiviert den Schatten. Der Wert gilt nur für dieses Bild.</small></label>
         </div>
         <div class="correction-canvas-wrap correction-result-preview"><canvas id="vehicle-preview" aria-label="Live-Vorschau der Fahrzeugplatzierung"></canvas></div>
         <p class="muted"><small>Die Vorschau verwendet dieselbe Platzierung wie das endgültige Bild. Der Bodenschatten wird aus der korrigierten Fahrzeugmaske neu erzeugt.</small></p>
@@ -44,6 +45,7 @@
         <input id="vehicle-scale-field" type="hidden" name="vehicle_scale_percent" value="{{ photo.vehicle_scale_percent }}">
         <input id="vehicle-offset-x-field" type="hidden" name="vehicle_offset_x_percent" value="{{ photo.vehicle_offset_x_percent }}">
         <input id="vehicle-offset-y-field" type="hidden" name="vehicle_offset_y_percent" value="{{ photo.vehicle_offset_y_percent }}">
+        <input id="vehicle-shadow-opacity-field" type="hidden" name="vehicle_shadow_opacity_percent" value="{{ vehicle_shadow_opacity_percent }}">
         {% else %}
         <label><span class="field-label">Hintergrund nach oben verschieben (%)</span><input id="background-shift" type="range" name="background_shift_percent" min="0" max="35" value="{{ background_shift_percent }}"><output id="shift-output">{{ background_shift_percent }} %</output><small>Die Vorschau reagiert sofort. Ein höherer Wert zeigt mehr Gebäudefassade und Boden sowie weniger Himmel in der markierten Fläche.</small></label>
         <label class="checkbox-row"><input type="checkbox" name="refine_edges" value="true" checked><span><strong>Kanten automatisch verfeinern</strong><small>Richtet den gemalten Rand innerhalb eines schmalen Sicherheitsbereichs an sichtbaren Bildkanten aus. Geschützte Flächen außerhalb dieses Bereichs bleiben unverändert.</small></span></label>
@@ -73,6 +75,7 @@
     const vehicleScale = document.getElementById('vehicle-scale');
     const vehicleOffsetX = document.getElementById('vehicle-offset-x');
     const vehicleOffsetY = document.getElementById('vehicle-offset-y');
+    const vehicleShadowOpacity = document.getElementById('vehicle-shadow-opacity');
     const maskCanvas = document.createElement('canvas');
     const maskContext = maskCanvas.getContext('2d', {willReadFrequently: true});
     const initialMaskCanvas = document.createElement('canvas');
@@ -188,7 +191,8 @@
         const x = (view.width - width) / 2 + view.width * Number(vehicleOffsetX.value) / 100;
         const y = (view.height - height) / 2 + view.height * Number(vehicleOffsetY.value) / 100;
         const bounds = currentMaskBounds();
-        if (bounds) {
+        const shadowOpacity = Number(vehicleShadowOpacity.value);
+        if (bounds && shadowOpacity > 0) {
             const scaleX = width / view.width;
             const scaleY = height / view.height;
             const vehicleLeft = x + bounds.left * scaleX;
@@ -202,7 +206,8 @@
                 vehicleLeft,
                 vehicleBottom,
                 vehicleWidth,
-                vehicleHeight
+                vehicleHeight,
+                shadowOpacity
             );
         }
         context.drawImage(subject, x, y, width, height);
@@ -241,11 +246,12 @@
         return maskBoundsCache;
     }
 
-    function drawVehicleShadow(context, left, bottom, width, height) {
+    function drawVehicleShadow(context, left, bottom, width, height, opacityPercent) {
         const broadHeight = Math.max(12, height * .085);
+        const opacity = Math.max(0, Math.min(80, opacityPercent)) / 100;
         context.save();
         context.filter = `blur(${Math.max(8, broadHeight * .55)}px)`;
-        context.fillStyle = 'rgba(0, 0, 0, .32)';
+        context.fillStyle = `rgba(0, 0, 0, ${opacity})`;
         context.beginPath();
         context.ellipse(
             left + width / 2,
@@ -262,7 +268,7 @@
         const contactHeight = Math.max(6, height * .025);
         context.save();
         context.filter = `blur(${Math.max(3, contactHeight * .45)}px)`;
-        context.fillStyle = 'rgba(0, 0, 0, .48)';
+        context.fillStyle = `rgba(0, 0, 0, ${Math.min(.9, opacity * 1.75)})`;
         [0.24, 0.76].forEach(position => {
             context.beginPath();
             context.ellipse(
@@ -408,7 +414,8 @@
     [
         [vehicleScale, 'vehicle-scale-output', 'vehicle-scale-field'],
         [vehicleOffsetX, 'vehicle-offset-x-output', 'vehicle-offset-x-field'],
-        [vehicleOffsetY, 'vehicle-offset-y-output', 'vehicle-offset-y-field']
+        [vehicleOffsetY, 'vehicle-offset-y-output', 'vehicle-offset-y-field'],
+        [vehicleShadowOpacity, 'vehicle-shadow-opacity-output', 'vehicle-shadow-opacity-field']
     ].forEach(([control, outputId, fieldId]) => {
         if (!control) return;
         control.addEventListener('input', () => {

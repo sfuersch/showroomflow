@@ -442,6 +442,9 @@ class PhotoAsset(Timestamped, Base):
     vehicle_scale_percent: Mapped[int] = mapped_column(Integer, default=100)
     vehicle_offset_x_percent: Mapped[int] = mapped_column(Integer, default=0)
     vehicle_offset_y_percent: Mapped[int] = mapped_column(Integer, default=0)
+    vehicle_shadow_opacity_percent: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     processed_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
     processing_attempts: Mapped[int] = mapped_column(Integer, default=0)
     processing_error: Mapped[str | None] = mapped_column(String(1000), nullable=True)

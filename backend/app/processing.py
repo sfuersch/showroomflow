@@ -2226,7 +2226,11 @@ def process_photo(photo_id: str) -> None:
                         contour_max_width_percent=composition.contour_max_width_percent,
                         contour_max_height_percent=composition.contour_max_height_percent,
                         vehicle_bottom_percent=composition.vehicle_bottom_percent,
-                        shadow_opacity_percent=composition.shadow_opacity_percent,
+                        shadow_opacity_percent=(
+                            photo.vehicle_shadow_opacity_percent
+                            if photo.vehicle_shadow_opacity_percent is not None
+                            else composition.shadow_opacity_percent
+                        ),
                         reflection_opacity_percent=composition.reflection_opacity_percent,
                         brightness_percent=composition.brightness_percent,
                         capture_step_name=step.name,

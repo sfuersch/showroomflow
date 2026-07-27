@@ -2694,6 +2694,7 @@ def test_optimized_photo_can_be_masked_scaled_and_moved_in_quality_review(
     assert 'id="vehicle-scale"' in correction_page.text
     assert 'id="vehicle-offset-x"' in correction_page.text
     assert 'id="vehicle-offset-y"' in correction_page.text
+    assert 'id="vehicle-shadow-opacity"' in correction_page.text
     assert 'id="vehicle-preview"' in correction_page.text
 
     storage = ConfigurationStorage()
@@ -2710,6 +2711,7 @@ def test_optimized_photo_can_be_masked_scaled_and_moved_in_quality_review(
                 "vehicle_scale_percent": "112",
                 "vehicle_offset_x_percent": "-4",
                 "vehicle_offset_y_percent": "6",
+                "vehicle_shadow_opacity_percent": "47",
             },
             files={"mask": ("mask.png", mask_output.getvalue(), "image/png")},
             headers={"Accept": "application/json"},
@@ -2731,6 +2733,7 @@ def test_optimized_photo_can_be_masked_scaled_and_moved_in_quality_review(
         assert saved_photo.vehicle_scale_percent == 112
         assert saved_photo.vehicle_offset_x_percent == -4
         assert saved_photo.vehicle_offset_y_percent == 6
+        assert saved_photo.vehicle_shadow_opacity_percent == 47
         assert "vehicle-mask-manual-" in saved_photo.preview_cutout_object_key
         assert saved_photo.processing_status == ProcessingStatus.QUEUED
         assert saved_photo.quality_review_resolution == "correction_processing"
