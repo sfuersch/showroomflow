@@ -82,6 +82,7 @@ class DealershipSftpSettings(Timestamped, Base):
     dealership_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("dealerships.id", ondelete="CASCADE"), primary_key=True
     )
+    protocol: Mapped[str] = mapped_column(String(16), default="sftp")
     host: Mapped[str] = mapped_column(String(255), default="")
     port: Mapped[int] = mapped_column(Integer, default=22)
     username: Mapped[str] = mapped_column(String(255), default="")

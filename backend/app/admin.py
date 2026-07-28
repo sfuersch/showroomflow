@@ -84,8 +84,9 @@ from app.sftp_transfer import (
     fetch_host_key_fingerprint,
     normalize_filename_template,
     normalize_fingerprint,
+    normalize_protocol,
     normalize_remote_directory,
-    test_sftp_connection,
+    test_transfer_connection,
     validate_settings as validate_sftp_settings,
 )
 from app.storage import (
@@ -1558,6 +1559,7 @@ async def update_orientation(
 def update_dealership_sftp(
     dealership_id: uuid.UUID,
     request: Request,
+    protocol: str = Form(default="sftp"),
     host: str = Form(default=""),
     port: int = Form(default=22),
     username: str = Form(default=""),
@@ -1579,6 +1581,7 @@ def update_dealership_sftp(
         config = DealershipSftpSettings(dealership_id=dealership.id)
         db.add(config)
     try:
+        config.protocol = normalize_protocol(protocol)
         config.host = host.strip()
         config.port = port
         config.username = username.strip()
@@ -1599,7 +1602,7 @@ def update_dealership_sftp(
         config.last_test_successful = None
         config.last_test_error = None
         db.commit()
-        _flash(request, "SFTP-Einstellungen wurden gespeichert.")
+        _flash(request, "Übertragungseinstellungen wurden gespeichert.")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}#sftp", status_code=status.HTTP_303_SEE_OTHER
     )
@@ -1619,22 +1622,22 @@ def test_dealership_sftp(
     dealership = _authorized_dealership(db, admin, dealership_id)
     config = db.get(DealershipSftpSettings, dealership.id)
     if config is None:
-        _flash(request, "Bitte speichern Sie zuerst die SFTP-Einstellungen.", "error")
+        _flash(request, "Bitte speichern Sie zuerst die Übertragungseinstellungen.", "error")
     else:
         try:
-            test_sftp_connection(config, get_settings())
+            test_transfer_connection(config, get_settings())
         except Exception as exc:
             config.last_tested_at = datetime.now(timezone.utc)
             config.last_test_successful = False
             config.last_test_error = str(exc)[:1000]
             db.commit()
-            _flash(request, f"SFTP-Verbindung fehlgeschlagen: {exc}", "error")
+            _flash(request, f"Verbindung fehlgeschlagen: {exc}", "error")
         else:
             config.last_tested_at = datetime.now(timezone.utc)
             config.last_test_successful = True
             config.last_test_error = None
             db.commit()
-            _flash(request, "SFTP-Verbindung erfolgreich geprüft.")
+            _flash(request, "Verbindung erfolgreich geprüft.")
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}#sftp", status_code=status.HTTP_303_SEE_OTHER
     )
@@ -1654,7 +1657,13 @@ def fetch_dealership_sftp_fingerprint(
     dealership = _authorized_dealership(db, admin, dealership_id)
     config = db.get(DealershipSftpSettings, dealership.id)
     if config is None or not config.host.strip():
-        _flash(request, "Bitte speichern Sie zuerst SFTP-Server und Port.", "error")
+        _flash(request, "Bitte speichern Sie zuerst Server und Port.", "error")
+    elif normalize_protocol(config.protocol) != "sftp":
+        _flash(
+            request,
+            "Ein SSH-Hostschlüssel wird nur für SFTP benötigt. FTPS prüft das TLS-Zertifikat.",
+            "error",
+        )
     else:
         try:
             fingerprint = fetch_host_key_fingerprint(config.host, config.port)
@@ -3130,7 +3139,7 @@ def transfer_vehicle_export(
     elif export_run.transfer_status in {"queued", "processing"}:
         _flash(request, "Diese ZIP-Datei wird bereits übertragen.", "error")
     elif config is None or not config.is_enabled:
-        _flash(request, "Die SFTP-Übertragung ist für dieses Autohaus nicht aktiviert.", "error")
+        _flash(request, "Die Dateiübertragung ist für dieses Autohaus nicht aktiviert.", "error")
     else:
         export_run.transfer_status = "queued"
         export_run.transfer_error = None
@@ -3143,7 +3152,7 @@ def transfer_vehicle_export(
             db.commit()
             _flash(request, "Die Übertragung konnte nicht gestartet werden.", "error")
         else:
-            _flash(request, "Die SFTP-Übertragung wurde gestartet.")
+            _flash(request, "Die Dateiübertragung wurde gestartet.")
     return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
 

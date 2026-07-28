@@ -59,17 +59,17 @@
 
 <section class="card section-card" id="sftp">
     <div class="section-heading">
-        <div><h2>SFTP-Übertragung</h2><p>Fertige ZIP-Dateien sicher an das Zielsystem dieses Autohauses senden.</p></div>
+        <div><h2>Dateiübertragung</h2><p>Fertige ZIP-Dateien per SFTP oder verschlüsseltem FTPS an das Zielsystem dieses Autohauses senden.</p></div>
         <div class="section-heading-actions">
             {% if sftp_settings and sftp_settings.last_test_successful is not none %}<span class="status {{ 'status-active' if sftp_settings.last_test_successful else 'status-inactive' }}">{{ 'Verbindung geprüft' if sftp_settings.last_test_successful else 'Prüfung fehlgeschlagen' }}</span>{% endif %}
             <details class="info-popover">
-                <summary aria-label="Informationen zur SFTP-Konfiguration" title="Informationen zur SFTP-Konfiguration">i</summary>
+                <summary aria-label="Informationen zur Dateiübertragung" title="Informationen zur Dateiübertragung">i</summary>
                 <div class="info-popover-content">
-                    <h3>SFTP kurz erklärt</h3>
+                    <h3>Dateiübertragung kurz erklärt</h3>
                     <ol>
-                        <li>Server, Port, Benutzername, Passwort und Zielverzeichnis eintragen. Die Übertragung zunächst deaktiviert speichern.</li>
-                        <li><strong>Hostschlüssel abrufen</strong> wählen. Der Fingerabdruck stellt sicher, dass später derselbe Server angesprochen wird.</li>
-                        <li><strong>SFTP-Übertragung aktiv</strong> einschalten und erneut speichern.</li>
+                        <li>Protokoll, Server, Port, Benutzername, Passwort und Zielverzeichnis eintragen. Die Übertragung zunächst deaktiviert speichern.</li>
+                        <li>Bei SFTP <strong>Hostschlüssel abrufen</strong> wählen. Bei FTPS wird stattdessen das TLS-Zertifikat des Servers automatisch geprüft.</li>
+                        <li><strong>Dateiübertragung aktiv</strong> einschalten und erneut speichern.</li>
                         <li>Mit <strong>Verbindung prüfen</strong> Zugangsdaten und Zielverzeichnis testen.</li>
                     </ol>
                     <p>In der Dateinamensvorlage wird <code>&lt;VIN&gt;</code> bei jeder Übertragung durch die Fahrgestellnummer ersetzt. Bei aktiviertem automatischem Export wird die fertige ZIP-Datei selbstständig übertragen. Im Fahrzeugauftrag kann sie außerdem manuell oder erneut gesendet werden. Das gespeicherte Passwort wird verschlüsselt und nicht wieder angezeigt.</p>
@@ -79,17 +79,23 @@
     </div>
     <form class="form-grid" method="post" action="/admin/dealerships/{{ dealership.id }}/sftp">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label>SFTP-Server
-            <input type="text" name="host" value="{{ sftp_settings.host if sftp_settings else '' }}" maxlength="255" placeholder="sftp.example.de">
+        <label>Übertragungsprotokoll
+            <select name="protocol" id="transfer-protocol" required>
+                <option value="sftp" {% if not sftp_settings or sftp_settings.protocol == 'sftp' %}selected{% endif %}>SFTP (SSH, meist Port 22)</option>
+                <option value="ftps" {% if sftp_settings and sftp_settings.protocol == 'ftps' %}selected{% endif %}>FTPS (explizites TLS, meist Port 21)</option>
+            </select>
+        </label>
+        <label>Server
+            <input type="text" name="host" value="{{ sftp_settings.host if sftp_settings else '' }}" maxlength="255" placeholder="ftp.example.de">
         </label>
         <label>Port
-            <input type="number" name="port" min="1" max="65535" value="{{ sftp_settings.port if sftp_settings else 22 }}" required>
+            <input type="number" name="port" id="transfer-port" min="1" max="65535" value="{{ sftp_settings.port if sftp_settings else 22 }}" required>
         </label>
         <label>Benutzername
             <input type="text" name="username" value="{{ sftp_settings.username if sftp_settings else '' }}" maxlength="255" autocomplete="off">
         </label>
         <label>Passwort
-            <input type="password" name="password" autocomplete="new-password" placeholder="{{ 'Gespeichert · leer lassen für unverändert' if sftp_password_configured else 'SFTP-Passwort' }}">
+            <input type="password" name="password" autocomplete="new-password" placeholder="{{ 'Gespeichert · leer lassen für unverändert' if sftp_password_configured else 'Passwort' }}">
         </label>
         <label class="span-2">Zielverzeichnis
             <input type="text" name="remote_directory" value="{{ sftp_settings.remote_directory if sftp_settings else '/' }}" maxlength="500" placeholder="/upload/showroomflow">
@@ -98,23 +104,25 @@
             <input type="text" name="filename_template" value="{{ sftp_settings.filename_template if sftp_settings else '<VIN>.zip' }}" maxlength="255" placeholder="225067-ZHZ-img_<VIN>.zip" required>
             <small><code>&lt;VIN&gt;</code> wird automatisch durch die Fahrgestellnummer ersetzt. Beispiel: <code>225067-ZHZ-img_&lt;VIN&gt;.zip</code></small>
         </label>
-        <label class="span-2">SHA-256-Hostschlüssel
+        <label class="span-2" id="sftp-fingerprint-field">SHA-256-Hostschlüssel (nur SFTP)
             <input type="text" name="host_key_fingerprint" value="{{ sftp_settings.host_key_fingerprint if sftp_settings else '' }}" maxlength="128" placeholder="SHA256:…">
             <small>Der Fingerabdruck schützt vor einer Verbindung zum falschen Server. Server und Port zunächst speichern, dann den Schlüssel unten abrufen.</small>
         </label>
         <label class="check-row span-2">
             <input type="checkbox" name="is_enabled" {% if sftp_settings and sftp_settings.is_enabled %}checked{% endif %}>
-            <span><strong>SFTP-Übertragung aktiv</strong><small>Bei automatischem Export wird die fertige ZIP-Datei direkt übertragen.</small></span>
+            <span><strong>Dateiübertragung aktiv</strong><small>Bei automatischem Export wird die fertige ZIP-Datei direkt übertragen.</small></span>
         </label>
         {% if sftp_settings and sftp_settings.last_test_error %}<p class="field-error span-2">{{ sftp_settings.last_test_error }}</p>{% endif %}
-        <div class="form-actions span-2"><button class="button button-primary" type="submit">SFTP-Einstellungen speichern</button></div>
+        <div class="form-actions span-2"><button class="button button-primary" type="submit">Übertragungseinstellungen speichern</button></div>
     </form>
     {% if sftp_settings and sftp_settings.host %}
     <div class="form-actions">
+        {% if not sftp_settings.protocol or sftp_settings.protocol == 'sftp' %}
         <form method="post" action="/admin/dealerships/{{ dealership.id }}/sftp/fingerprint">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button class="button button-secondary" type="submit">Hostschlüssel abrufen</button>
         </form>
+        {% endif %}
         {% if sftp_password_configured %}
         <form method="post" action="/admin/dealerships/{{ dealership.id }}/sftp/test">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -191,4 +199,28 @@
         <div class="form-actions"><button class="button button-primary" type="submit">Benutzer hinzufügen</button></div>
     </form>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+    const protocol = document.getElementById("transfer-protocol");
+    const port = document.getElementById("transfer-port");
+    const fingerprint = document.getElementById("sftp-fingerprint-field");
+    if (!protocol || !port || !fingerprint) return;
+
+    let previousProtocol = protocol.value;
+    const updateProtocolFields = () => {
+        const previousDefault = previousProtocol === "ftps" ? "21" : "22";
+        if (!port.value || port.value === previousDefault) {
+            port.value = protocol.value === "ftps" ? "21" : "22";
+        }
+        fingerprint.hidden = protocol.value !== "sftp";
+        previousProtocol = protocol.value;
+    };
+
+    protocol.addEventListener("change", updateProtocolFields);
+    updateProtocolFields();
+})();
+</script>
 {% endblock %}
