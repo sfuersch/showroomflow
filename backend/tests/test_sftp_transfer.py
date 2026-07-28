@@ -12,8 +12,10 @@ from app.sftp_transfer import (
     encrypt_password,
     fetch_host_key_fingerprint,
     key_fingerprint,
+    normalize_filename_template,
     normalize_fingerprint,
     normalize_remote_directory,
+    render_filename,
     upload_archive,
     validate_settings,
 )
@@ -30,6 +32,26 @@ def test_sftp_password_is_encrypted_and_can_be_decrypted() -> None:
 def test_remote_directory_rejects_parent_traversal() -> None:
     with pytest.raises(SftpConfigurationError):
         normalize_remote_directory("/incoming/../private")
+
+
+def test_sftp_filename_template_replaces_vin() -> None:
+    template = normalize_filename_template("225067-ZHZ-img_<VIN>.zip")
+
+    assert render_filename(template, "WF0/TEST 123") == "225067-ZHZ-img_WF0_TEST_123.zip"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "225067-ZHZ-img.zip",
+        "../<VIN>.zip",
+        "archive/<VIN>.zip",
+        "<VIN>.jpg",
+    ],
+)
+def test_sftp_filename_template_rejects_unsafe_values(template: str) -> None:
+    with pytest.raises(SftpConfigurationError):
+        normalize_filename_template(template)
 
 
 def test_sha256_fingerprint_is_normalized_and_matches_paramiko_key() -> None:
