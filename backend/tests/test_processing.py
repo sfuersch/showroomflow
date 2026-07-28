@@ -472,7 +472,7 @@ def test_vehicle_ground_anchors_follow_each_wheel_independently() -> None:
     assert right_anchor[1] - left_anchor[1] >= 20
 
 
-def test_vehicle_shadow_is_connected_and_follows_diagonal_ground_plane() -> None:
+def test_vehicle_shadow_stays_attached_to_diagonal_vehicle_contour() -> None:
     alpha = Image.new("L", (400, 240), 0)
     draw = ImageDraw.Draw(alpha)
     draw.rectangle((25, 25, 374, 155), fill=255)
@@ -490,34 +490,23 @@ def test_vehicle_shadow_is_connected_and_follows_diagonal_ground_plane() -> None
         contact_percent=0,
     ).getchannel("A")
 
-    # The broad shadow reaches beneath both bumper ends instead of only
-    # forming an ellipse between the wheels.
-    assert shadow.crop((65, 180, 105, 310)).getbbox() is not None
-    assert shadow.crop((420, 180, 465, 340)).getbbox() is not None
+    # The shadow fills the underbody gap between the wheels.
+    assert shadow.crop((190, 195, 310, 285)).getbbox() is not None
 
-    def strongest_row(left: int, right: int) -> int:
-        rows = [
-            sum(shadow.crop((left, row, right, row + 1)).get_flattened_data())
-            for row in range(150, 330)
-        ]
-        return 150 + rows.index(max(rows))
+    # It remains close to the original vehicle width. In particular there
+    # must be no long dark streaks to the left or right of a diagonal car.
+    assert shadow.crop((0, 0, 55, 350)).getbbox() is None
+    assert shadow.crop((445, 0, 500, 350)).getbbox() is None
 
-    # The projected silhouette follows the receding ground plane gradually.
-    sampled_rows = [
-        strongest_row(70, 100),
-        strongest_row(140, 180),
-        strongest_row(230, 270),
-        strongest_row(320, 360),
-        strongest_row(400, 430),
-    ]
-    assert sampled_rows == sorted(sampled_rows)
-    assert sampled_rows[-1] - sampled_rows[0] >= 25
-
-    # Even with two wheels at different heights the result is one connected
-    # cast shadow, not two detached bars or ellipses.
+    # Even with two wheels at different heights the result is one connected,
+    # contour-following underbody area rather than detached bars.
     shadow_pixels = (np.asarray(shadow) >= 10).astype(np.uint8)
     component_count, _ = cv2.connectedComponents(shadow_pixels)
     assert component_count == 2  # transparent background + one shadow
+
+    active_rows, active_columns = np.nonzero(shadow_pixels)
+    assert active_columns.max() - active_columns.min() < 410
+    assert active_rows.max() - active_rows.min() < 125
 
 
 def test_manual_editor_shadow_uses_preview_vehicle_position(
