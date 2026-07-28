@@ -1290,9 +1290,13 @@ def create_photoroom_shadowed_composition(
         )
 
     request_data = {
-        "removeBackground": "false",
+        # ``referenceBox`` is not supported when background removal is
+        # disabled. Existing transparency remains authoritative through
+        # ``keepExistingAlphaChannel=auto`` while Photoroom adds the shadow.
+        "removeBackground": "true",
         "keepExistingAlphaChannel": "auto",
         "referenceBox": "originalImage",
+        "background.color": "transparent",
         "outputSize": f"{settings.output_width}x{settings.output_height}",
         "padding": "0",
         "shadow.mode": shadow_mode,
