@@ -233,6 +233,7 @@
                 leftContactY,
                 rightContactX,
                 rightContactY,
+                bounds.lowerProfile,
                 shadowOpacity,
                 Number(vehicleShadowDistance.value),
                 Number(vehicleShadowAngle.value),
@@ -297,6 +298,23 @@
         };
         const leftGround = groundAnchor(.08, .45);
         const rightGround = groundAnchor(.55, .92);
+        const lowerProfile = [];
+        let previousBottom = -1;
+        for (let x = left; x <= right; x += 1) {
+            if (columnBottoms[x] >= 0) previousBottom = columnBottoms[x];
+            lowerProfile.push({
+                x: x / ratio,
+                y: (previousBottom >= 0 ? previousBottom : bottom) / ratio
+            });
+        }
+        let nextBottom = -1;
+        for (let index = lowerProfile.length - 1; index >= 0; index -= 1) {
+            const sourceX = left + index;
+            if (columnBottoms[sourceX] >= 0) nextBottom = columnBottoms[sourceX];
+            if (columnBottoms[sourceX] < 0 && nextBottom >= 0) {
+                lowerProfile[index].y = nextBottom / ratio;
+            }
+        }
         maskBoundsCache = {
             left: left / ratio,
             top: top / ratio,
@@ -305,7 +323,8 @@
             groundLeftX: leftGround.x / ratio,
             groundLeftY: leftGround.y / ratio,
             groundRightX: rightGround.x / ratio,
-            groundRightY: rightGround.y / ratio
+            groundRightY: rightGround.y / ratio,
+            lowerProfile
         };
         return maskBoundsCache;
     }
@@ -325,6 +344,7 @@
         leftContactY,
         rightContactX,
         rightContactY,
+        lowerProfile,
         opacityPercent,
         distancePercent,
         angleDegrees,
@@ -336,12 +356,18 @@
         const height = Math.max(1, bottom - top);
         const spread = Math.max(50, Math.min(180, spreadPercent)) / 100;
         const blur = Math.max(20, Math.min(200, blurPercent)) / 100;
-        const broadHeight = Math.max(12, height * .09 * (.72 + spread * .28));
+        const broadDepth = Math.max(7, height * .035 * (.75 + spread * .25));
         const opacity = Math.max(0, Math.min(80, opacityPercent)) / 100;
         const distance = height * Math.max(0, Math.min(20, distancePercent)) / 100;
         const angle = (angleDegrees % 360) * Math.PI / 180;
-        const offsetX = Math.cos(angle) * distance;
-        const offsetY = Math.sin(angle) * distance;
+        const offsetX = Math.max(
+            -width * .05,
+            Math.min(width * .05, Math.cos(angle) * distance)
+        );
+        const offsetY = Math.max(
+            -height * .03,
+            Math.min(height * .03, Math.sin(angle) * distance)
+        );
         const anchorDistance = Math.max(1, rightContactX - leftContactX);
         let leftGroundY = leftContactY;
         let rightGroundY = rightContactY;
@@ -355,76 +381,58 @@
         }
         const slope = (rightGroundY - leftGroundY) / anchorDistance;
         const center = (left + right) / 2;
-        const halfWidth = Math.max(1, (right - left) / 2) * spread;
-        const broadLeft = center - halfWidth;
-        const broadRight = center + halfWidth;
+        const minimumGround = Math.min(leftGroundY, rightGroundY) - height * .025;
+        const maximumGround = Math.max(leftGroundY, rightGroundY) + height * .025;
         const groundYAt = x => {
-            return leftGroundY + slope * (x - leftContactX);
+            const projected = leftGroundY + slope * (x - leftContactX);
+            return Math.max(minimumGround, Math.min(maximumGround, projected));
         };
 
-        const placedSilhouette = document.createElement('canvas');
-        placedSilhouette.width = view.width;
-        placedSilhouette.height = view.height;
-        const silhouetteContext = placedSilhouette.getContext('2d');
-        silhouetteContext.drawImage(
-            subject,
-            subjectX,
-            subjectY,
-            subjectWidth,
-            subjectHeight
-        );
-        silhouetteContext.globalCompositeOperation = 'source-in';
-        silhouetteContext.fillStyle = '#000';
-        silhouetteContext.fillRect(0, 0, view.width, view.height);
-
-        const targetTopLeftY = groundYAt(broadLeft) - broadHeight + offsetY;
-        const targetTopRightY = groundYAt(broadRight) - broadHeight + offsetY;
-        const horizontalScale = (broadRight - broadLeft) / width;
-        const horizontalSlope = (targetTopRightY - targetTopLeftY) / width;
-        const verticalScale = broadHeight * 1.08 / height;
-        const translateX = broadLeft + offsetX - horizontalScale * left;
-        const translateY = (
-            targetTopLeftY
-            - horizontalSlope * left
-            - verticalScale * top
-        );
+        const points = (lowerProfile || []).map(point => ({
+            sourceX: subjectX + point.x * subjectWidth / view.width,
+            sourceY: subjectY + point.y * subjectHeight / view.height
+        }));
+        if (points.length < 2) return;
+        const mappedPoints = points.map(point => ({
+            x: center + (point.sourceX - center) * spread + offsetX,
+            top: point.sourceY - Math.max(2, height * .008) + offsetY,
+            bottom: Math.max(point.sourceY, groundYAt(point.sourceX))
+                + broadDepth + offsetY
+        }));
         context.save();
-        context.filter = `blur(${Math.max(2, broadHeight * .55 * blur)}px)`;
-        context.globalAlpha = opacity;
-        context.setTransform(
-            horizontalScale,
-            horizontalSlope,
-            0,
-            verticalScale,
-            translateX,
-            translateY
-        );
-        context.drawImage(placedSilhouette, 0, 0);
+        context.beginPath();
+        context.moveTo(mappedPoints[0].x, mappedPoints[0].top);
+        mappedPoints.slice(1).forEach(point => context.lineTo(point.x, point.top));
+        [...mappedPoints].reverse().forEach(point => {
+            context.lineTo(point.x, Math.max(point.top + 2, point.bottom));
+        });
+        context.closePath();
+        context.fillStyle = '#000';
+        context.filter = `blur(${Math.max(2, broadDepth * .7 * blur)}px)`;
+        context.globalAlpha = opacity * .58;
+        context.fill();
         context.restore();
 
         const contactStrength = Math.max(0, Math.min(150, contactPercent)) / 100;
         if (contactStrength <= 0) return;
-        const contactHeight = Math.max(6, height * .025);
-        const contactSource = document.createElement('canvas');
-        contactSource.width = view.width;
-        contactSource.height = view.height;
-        const contactContext = contactSource.getContext('2d');
-        contactContext.drawImage(placedSilhouette, 0, 0);
-        contactContext.globalCompositeOperation = 'destination-in';
-        const contactGradient = contactContext.createLinearGradient(
-            0,
-            top + height * .52,
-            0,
-            bottom
-        );
-        contactGradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
-        contactGradient.addColorStop(1, 'rgba(0, 0, 0, 1)');
-        contactContext.fillStyle = contactGradient;
-        contactContext.fillRect(0, top, view.width, height);
+        const contactHeight = Math.max(5, height * .018);
         context.save();
-        context.filter = `blur(${Math.max(3, contactHeight * .45)}px)`;
+        context.beginPath();
+        context.moveTo(points[0].sourceX, points[0].sourceY - contactHeight * .25);
+        points.slice(1).forEach(point => {
+            context.lineTo(point.sourceX, point.sourceY - contactHeight * .25);
+        });
+        [...points].reverse().forEach(point => {
+            context.lineTo(
+                point.sourceX,
+                Math.max(point.sourceY, groundYAt(point.sourceX)) + contactHeight
+            );
+        });
+        context.closePath();
+        context.fillStyle = '#000';
+        context.filter = `blur(${Math.max(2, contactHeight * .55)}px)`;
         context.globalAlpha = Math.min(.9, opacity * 1.75 * contactStrength);
-        context.drawImage(contactSource, 0, Math.max(1, height * .006));
+        context.fill();
         context.restore();
     }
 
