@@ -28,6 +28,10 @@ class SftpTransferError(RuntimeError):
     """An archive could not be transferred."""
 
 
+DEFAULT_SFTP_FILENAME_TEMPLATE = "<VIN>.zip"
+VIN_FILENAME_TOKEN = "<VIN>"
+
+
 def _fernet(settings: Settings) -> Fernet:
     key = base64.urlsafe_b64encode(hashlib.sha256(settings.secret_key.encode()).digest())
     return Fernet(key)
@@ -55,6 +59,37 @@ def normalize_remote_directory(value: str) -> str:
         raise SftpConfigurationError("Das SFTP-Zielverzeichnis darf kein '..' enthalten.")
     normalized = posixpath.normpath(cleaned)
     return normalized if normalized != "." else "/"
+
+
+def normalize_filename_template(value: str | None) -> str:
+    cleaned = (value or "").strip() or DEFAULT_SFTP_FILENAME_TEMPLATE
+    if VIN_FILENAME_TOKEN not in cleaned:
+        raise SftpConfigurationError(
+            "Die SFTP-Dateinamensvorlage muss den Platzhalter <VIN> enthalten."
+        )
+    if (
+        cleaned in {".", ".."}
+        or "/" in cleaned
+        or "\\" in cleaned
+        or any(ord(character) < 32 for character in cleaned)
+    ):
+        raise SftpConfigurationError("Die SFTP-Dateinamensvorlage ist ungültig.")
+    if not cleaned.lower().endswith(".zip"):
+        raise SftpConfigurationError(
+            "Die SFTP-Dateinamensvorlage muss auf '.zip' enden."
+        )
+    if len(cleaned.replace(VIN_FILENAME_TOKEN, "W" * 17)) > 255:
+        raise SftpConfigurationError("Der erzeugte SFTP-Dateiname ist zu lang.")
+    return cleaned
+
+
+def render_filename(template: str | None, vin: str) -> str:
+    normalized = normalize_filename_template(template)
+    safe_vin = re.sub(r"[^A-Za-z0-9_-]", "_", vin.strip()) or "FAHRZEUG"
+    filename = normalized.replace(VIN_FILENAME_TOKEN, safe_vin)
+    if len(filename) > 255:
+        raise SftpConfigurationError("Der erzeugte SFTP-Dateiname ist zu lang.")
+    return filename
 
 
 def normalize_fingerprint(value: str) -> str:
@@ -102,6 +137,7 @@ def validate_settings(config: DealershipSftpSettings, runtime: Settings) -> str:
     if not config.password_encrypted:
         raise SftpConfigurationError("Es ist noch kein SFTP-Passwort hinterlegt.")
     normalize_remote_directory(config.remote_directory)
+    normalize_filename_template(config.filename_template)
     normalize_fingerprint(config.host_key_fingerprint)
     return decrypt_password(config.password_encrypted, runtime)
 
@@ -219,7 +255,8 @@ def transfer_export_run(export_run_id: str) -> None:
             db.commit()
 
             content = ObjectStorage(runtime).get_object(object_key=export_run.object_key)
-            remote_path = upload_archive(config, runtime, export_run.zip_filename, content)
+            remote_filename = render_filename(config.filename_template, job.vin)
+            remote_path = upload_archive(config, runtime, remote_filename, content)
             export_run.transfer_status = "completed"
             export_run.transferred_at = datetime.now(timezone.utc)
             export_run.remote_path = remote_path

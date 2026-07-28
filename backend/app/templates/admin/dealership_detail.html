@@ -72,7 +72,7 @@
                         <li><strong>SFTP-Übertragung aktiv</strong> einschalten und erneut speichern.</li>
                         <li>Mit <strong>Verbindung prüfen</strong> Zugangsdaten und Zielverzeichnis testen.</li>
                     </ol>
-                    <p>Bei aktiviertem automatischem Export wird die fertige ZIP-Datei selbstständig übertragen. Im Fahrzeugauftrag kann sie außerdem manuell oder erneut gesendet werden. Das gespeicherte Passwort wird verschlüsselt und nicht wieder angezeigt.</p>
+                    <p>In der Dateinamensvorlage wird <code>&lt;VIN&gt;</code> bei jeder Übertragung durch die Fahrgestellnummer ersetzt. Bei aktiviertem automatischem Export wird die fertige ZIP-Datei selbstständig übertragen. Im Fahrzeugauftrag kann sie außerdem manuell oder erneut gesendet werden. Das gespeicherte Passwort wird verschlüsselt und nicht wieder angezeigt.</p>
                 </div>
             </details>
         </div>
@@ -93,6 +93,10 @@
         </label>
         <label class="span-2">Zielverzeichnis
             <input type="text" name="remote_directory" value="{{ sftp_settings.remote_directory if sftp_settings else '/' }}" maxlength="500" placeholder="/upload/showroomflow">
+        </label>
+        <label class="span-2">Dateinamensvorlage
+            <input type="text" name="filename_template" value="{{ sftp_settings.filename_template if sftp_settings else '<VIN>.zip' }}" maxlength="255" placeholder="225067-ZHZ-img_<VIN>.zip" required>
+            <small><code>&lt;VIN&gt;</code> wird automatisch durch die Fahrgestellnummer ersetzt. Beispiel: <code>225067-ZHZ-img_&lt;VIN&gt;.zip</code></small>
         </label>
         <label class="span-2">SHA-256-Hostschlüssel
             <input type="text" name="host_key_fingerprint" value="{{ sftp_settings.host_key_fingerprint if sftp_settings else '' }}" maxlength="128" placeholder="SHA256:…">

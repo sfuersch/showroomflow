@@ -82,6 +82,7 @@ from app.sftp_transfer import (
     SftpConfigurationError,
     encrypt_password,
     fetch_host_key_fingerprint,
+    normalize_filename_template,
     normalize_fingerprint,
     normalize_remote_directory,
     test_sftp_connection,
@@ -1562,6 +1563,7 @@ def update_dealership_sftp(
     username: str = Form(default=""),
     password: str = Form(default=""),
     remote_directory: str = Form(default="/"),
+    filename_template: str = Form(default="<VIN>.zip"),
     host_key_fingerprint: str = Form(default=""),
     is_enabled: str | None = Form(default=None),
     csrf_token: str = Form(),
@@ -1581,6 +1583,7 @@ def update_dealership_sftp(
         config.port = port
         config.username = username.strip()
         config.remote_directory = normalize_remote_directory(remote_directory)
+        config.filename_template = normalize_filename_template(filename_template)
         config.host_key_fingerprint = (
             normalize_fingerprint(host_key_fingerprint) if host_key_fingerprint.strip() else ""
         )
