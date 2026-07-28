@@ -1289,16 +1289,14 @@ def create_photoroom_shadowed_composition(
             "Für den KI-Hauptschatten ist keine Schattenintensität eingestellt"
         )
 
-    background_extension = "png" if background_content_type == "image/png" else "jpg"
     request_data = {
         "removeBackground": "false",
         "keepExistingAlphaChannel": "auto",
         "referenceBox": "originalImage",
         "outputSize": f"{settings.output_width}x{settings.output_height}",
         "padding": "0",
-        "background.scaling": "fill",
         "shadow.mode": shadow_mode,
-        "export.format": "jpeg",
+        "export.format": "png",
     }
     request = client.post if client is not None else httpx.post
     sandbox_active = (
@@ -1316,11 +1314,6 @@ def create_photoroom_shadowed_composition(
                     "placed-vehicle.png",
                     placed_vehicle_png,
                     "image/png",
-                ),
-                "background.imageFile": (
-                    f"showroom-background.{background_extension}",
-                    background_bytes,
-                    background_content_type,
                 ),
             },
             data=request_data,
@@ -1363,16 +1356,37 @@ def create_photoroom_shadowed_composition(
             f"(HTTP {response.status_code}): {detail}"
         )
     try:
-        finished = Image.open(io.BytesIO(response.content))
-        finished.load()
+        shadowed_vehicle = Image.open(io.BytesIO(response.content)).convert("RGBA")
+        shadowed_vehicle.load()
     except (OSError, ValueError) as exc:
         raise ImageProcessingError(
             "Photoroom hat kein gültiges korrigiertes Bild geliefert"
         ) from exc
-    if finished.size != expected_size:
+    if shadowed_vehicle.size != expected_size:
         raise ImageProcessingError(
             "Photoroom hat die korrigierte Fahrzeugplatzierung verändert"
         )
+    shadowed_alpha = shadowed_vehicle.getchannel("A")
+    if shadowed_alpha.getextrema()[0] == 255:
+        raise ImageProcessingError(
+            "Photoroom hat den KI-Schatten ohne transparenten Hintergrund geliefert"
+        )
+    try:
+        background = ImageOps.fit(
+            Image.open(io.BytesIO(background_bytes)).convert("RGB"),
+            expected_size,
+            method=Image.Resampling.LANCZOS,
+        ).convert("RGBA")
+        background.load()
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError(
+            "Der Showroom-Hintergrund für den korrigierten KI-Schatten ist ungültig"
+        ) from exc
+
+    # Photoroom only creates the transparent vehicle/shadow layer here. The
+    # configured Showroom background is composited locally so it can neither
+    # disappear nor be rescaled by the external service.
+    finished = Image.alpha_composite(background, shadowed_vehicle)
     output = io.BytesIO()
     finished.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
     return output.getvalue()
