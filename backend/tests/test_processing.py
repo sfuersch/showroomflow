@@ -1564,7 +1564,16 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
     )
     placed_bytes = image_bytes(placed_vehicle, "PNG")
     background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
-    api_result = image_bytes(Image.new("RGB", (800, 600), "gray"), "JPEG")
+    shadowed_vehicle = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(shadowed_vehicle).rectangle(
+        (250, 500, 669, 519),
+        fill=(0, 0, 0, 90),
+    )
+    ImageDraw.Draw(shadowed_vehicle).rectangle(
+        (260, 180, 659, 499),
+        fill=(20, 30, 40, 255),
+    )
+    api_result = image_bytes(shadowed_vehicle, "PNG")
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url == "https://image-api.photoroom.com/v2/edit"
@@ -1573,7 +1582,7 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
         body = request.content
         assert b'name="imageFile"' in body
         assert b"placed-vehicle.png" in body
-        assert b'name="background.imageFile"' in body
+        assert b'name="background.imageFile"' not in body
         assert b'name="removeBackground"' in body
         assert b"false" in body
         assert b'name="keepExistingAlphaChannel"' in body
@@ -1585,10 +1594,12 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
         assert b"ai.hard" in body
         assert b'name="outputSize"' in body
         assert b"800x600" in body
+        assert b'name="export.format"' in body
+        assert b"png" in body
         return httpx.Response(
             200,
             content=api_result,
-            headers={"content-type": "image/jpeg"},
+            headers={"content-type": "image/png"},
         )
 
     settings = Settings(
@@ -1610,3 +1621,49 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
     finished = Image.open(io.BytesIO(result))
     assert finished.size == (800, 600)
     assert finished.format == "JPEG"
+    assert finished.convert("RGB").getpixel((20, 20)) == pytest.approx(
+        (255, 255, 255),
+        abs=3,
+    )
+    assert finished.convert("RGB").getpixel((400, 300)) == pytest.approx(
+        (20, 30, 40),
+        abs=5,
+    )
+    shadow_pixel = finished.convert("RGB").getpixel((400, 510))
+    assert all(145 <= value <= 185 for value in shadow_pixel)
+
+
+def test_photoroom_shadowed_correction_rejects_opaque_result() -> None:
+    placed_vehicle = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(placed_vehicle).rectangle(
+        (260, 180, 659, 499),
+        fill=(20, 30, 40, 255),
+    )
+    opaque_api_result = image_bytes(Image.new("RGB", (800, 600), "black"), "PNG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=opaque_api_result,
+            headers={"content-type": "image/png"},
+        )
+
+    settings = Settings(
+        output_width=800,
+        output_height=600,
+        photoroom_api_key="test-key",
+        photoroom_sandbox=True,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(
+            ImageProcessingError,
+            match="ohne transparenten Hintergrund",
+        ):
+            create_photoroom_shadowed_composition(
+                image_bytes(placed_vehicle, "PNG"),
+                image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG"),
+                "image/jpeg",
+                settings,
+                shadow_opacity_percent=42,
+                client=client,
+            )
