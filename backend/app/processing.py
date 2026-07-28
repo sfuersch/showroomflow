@@ -1248,6 +1248,136 @@ def create_photoroom_showroom(
     return output.getvalue()
 
 
+def create_photoroom_shadowed_composition(
+    placed_vehicle_png: bytes,
+    background_bytes: bytes,
+    background_content_type: str,
+    settings: Settings,
+    *,
+    shadow_opacity_percent: int,
+    photoroom_sandbox: bool | None = None,
+    client: httpx.Client | None = None,
+    usage_context: ExternalApiUsageContext | None = None,
+) -> bytes:
+    """Add an AI shadow without changing an operator-approved transform.
+
+    ``placed_vehicle_png`` already has the final output dimensions and contains
+    the corrected vehicle at its final coordinates. Keeping the existing alpha
+    channel and using the original image as reference prevents Photoroom from
+    fitting or centering the subject again.
+    """
+    try:
+        placed_vehicle = Image.open(io.BytesIO(placed_vehicle_png)).convert("RGBA")
+        placed_vehicle.load()
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError(
+            "Die korrigierte Fahrzeugebene ist ungültig"
+        ) from exc
+    expected_size = (settings.output_width, settings.output_height)
+    if placed_vehicle.size != expected_size:
+        raise ImageProcessingError(
+            "Die korrigierte Fahrzeugebene hat nicht das erwartete Ausgabeformat"
+        )
+    if placed_vehicle.getchannel("A").getbbox() is None:
+        raise ImageProcessingError(
+            "Die korrigierte Fahrzeugebene enthält kein Fahrzeug"
+        )
+
+    shadow_mode = photoroom_shadow_mode(shadow_opacity_percent)
+    if shadow_mode is None:
+        raise ImageProcessingError(
+            "Für den KI-Hauptschatten ist keine Schattenintensität eingestellt"
+        )
+
+    background_extension = "png" if background_content_type == "image/png" else "jpg"
+    request_data = {
+        "removeBackground": "false",
+        "keepExistingAlphaChannel": "auto",
+        "referenceBox": "originalImage",
+        "outputSize": f"{settings.output_width}x{settings.output_height}",
+        "padding": "0",
+        "background.scaling": "fill",
+        "shadow.mode": shadow_mode,
+        "export.format": "jpeg",
+    }
+    request = client.post if client is not None else httpx.post
+    sandbox_active = (
+        settings.photoroom_sandbox
+        if photoroom_sandbox is None
+        else photoroom_sandbox
+    )
+    started = time.perf_counter()
+    try:
+        response = request(
+            "https://image-api.photoroom.com/v2/edit",
+            headers={"x-api-key": _photoroom_api_key(settings, photoroom_sandbox)},
+            files={
+                "imageFile": (
+                    "placed-vehicle.png",
+                    placed_vehicle_png,
+                    "image/png",
+                ),
+                "background.imageFile": (
+                    f"showroom-background.{background_extension}",
+                    background_bytes,
+                    background_content_type,
+                ),
+            },
+            data=request_data,
+            timeout=180,
+        )
+    except httpx.HTTPError as exc:
+        record_external_api_usage(
+            usage_context,
+            provider="photoroom",
+            operation="quality_correction_shadow",
+            sandbox=sandbox_active,
+            outcome="network_error",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            error_message=str(exc),
+        )
+        raise ImageProcessingError(
+            "Photoroom ist für den korrigierten KI-Schatten nicht erreichbar"
+        ) from exc
+    record_external_api_usage(
+        usage_context,
+        provider="photoroom",
+        operation="quality_correction_shadow",
+        sandbox=sandbox_active,
+        outcome=(
+            "success"
+            if response.status_code == 200
+            else "throttled"
+            if response.status_code == 429
+            else "error"
+        ),
+        http_status=response.status_code,
+        duration_ms=round((time.perf_counter() - started) * 1000),
+        error_message=None if response.status_code == 200 else response.text,
+    )
+    raise_for_photoroom_rate_limit(response)
+    if response.status_code != 200:
+        detail = response.text.replace("\n", " ")[:300]
+        raise ImageProcessingError(
+            "KI-Schatten für die Korrektur fehlgeschlagen "
+            f"(HTTP {response.status_code}): {detail}"
+        )
+    try:
+        finished = Image.open(io.BytesIO(response.content))
+        finished.load()
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError(
+            "Photoroom hat kein gültiges korrigiertes Bild geliefert"
+        ) from exc
+    if finished.size != expected_size:
+        raise ImageProcessingError(
+            "Photoroom hat die korrigierte Fahrzeugplatzierung verändert"
+        )
+    output = io.BytesIO()
+    finished.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
+    return output.getvalue()
+
+
 def apply_cutout_mask_to_original(original_bytes: bytes, cutout_png_bytes: bytes) -> bytes:
     """Keep original pixels while using the AI result only as transparency mask."""
     try:
@@ -1552,6 +1682,8 @@ def compose_showroom(
     background_bytes: bytes,
     vehicle_png_bytes: bytes,
     options: CompositionOptions,
+    *,
+    vehicle_layer_only: bool = False,
 ) -> bytes:
     try:
         background = Image.open(io.BytesIO(background_bytes)).convert("RGB")
@@ -1559,11 +1691,15 @@ def compose_showroom(
     except (OSError, ValueError) as exc:
         raise ImageProcessingError("Ein Eingabebild ist ungültig") from exc
 
-    canvas = ImageOps.fit(
-        background,
-        (options.width, options.height),
-        method=Image.Resampling.LANCZOS,
-    ).convert("RGBA")
+    canvas = (
+        Image.new("RGBA", (options.width, options.height), (0, 0, 0, 0))
+        if vehicle_layer_only
+        else ImageOps.fit(
+            background,
+            (options.width, options.height),
+            method=Image.Resampling.LANCZOS,
+        ).convert("RGBA")
+    )
     alpha_box = vehicle.getchannel("A").point(
         lambda value: 255 if value >= 128 else 0
     ).getbbox()
@@ -1737,7 +1873,11 @@ def compose_showroom(
         rgb.putalpha(vehicle.getchannel("A"))
         vehicle = rgb
 
-    reflection_opacity = max(0, min(60, options.reflection_opacity_percent))
+    reflection_opacity = (
+        0
+        if vehicle_layer_only
+        else max(0, min(60, options.reflection_opacity_percent))
+    )
     if reflection_opacity:
         reflection = ImageOps.flip(vehicle)
         reflection_alpha = reflection.getchannel("A")
@@ -1751,7 +1891,9 @@ def compose_showroom(
         reflection.putalpha(reflection_alpha)
         canvas.alpha_composite(reflection, (x, bottom))
 
-    shadow_opacity = max(0, min(80, options.shadow_opacity_percent))
+    shadow_opacity = (
+        0 if vehicle_layer_only else max(0, min(80, options.shadow_opacity_percent))
+    )
     if shadow_opacity:
         canvas = Image.alpha_composite(
             canvas,
@@ -1773,6 +1915,9 @@ def compose_showroom(
 
     canvas.alpha_composite(vehicle, (x, y))
     output = io.BytesIO()
+    if vehicle_layer_only:
+        canvas.save(output, format="PNG", optimize=True)
+        return output.getvalue()
     canvas.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
     return output.getvalue()
 
@@ -2286,65 +2431,90 @@ def process_photo(photo_id: str) -> None:
                     object_key=photo.preview_cutout_object_key
                 )
                 preview_cutout = apply_cutout_mask_to_original(original, manual_mask)
-                finished = compose_showroom(
-                    composed_background,
-                    preview_cutout,
-                    CompositionOptions(
-                        width=settings.output_width,
-                        height=settings.output_height,
-                        contour_target_area_percent=composition.contour_target_area_percent,
-                        contour_max_width_percent=composition.contour_max_width_percent,
-                        contour_max_height_percent=composition.contour_max_height_percent,
-                        vehicle_bottom_percent=composition.vehicle_bottom_percent,
-                        shadow_opacity_percent=(
-                            photo.vehicle_shadow_opacity_percent
-                            if photo.vehicle_shadow_opacity_percent is not None
-                            else composition.shadow_opacity_percent
-                        ),
-                        shadow_distance_percent=(
-                            photo.vehicle_shadow_distance_percent
-                            if photo.vehicle_shadow_distance_percent is not None
-                            else 0
-                        ),
-                        shadow_angle_degrees=(
-                            photo.vehicle_shadow_angle_degrees
-                            if photo.vehicle_shadow_angle_degrees is not None
-                            else 90
-                        ),
-                        shadow_spread_percent=(
-                            photo.vehicle_shadow_spread_percent
-                            if photo.vehicle_shadow_spread_percent is not None
-                            else 100
-                        ),
-                        shadow_blur_percent=(
-                            photo.vehicle_shadow_blur_percent
-                            if photo.vehicle_shadow_blur_percent is not None
-                            else 100
-                        ),
-                        shadow_contact_percent=(
-                            photo.vehicle_shadow_contact_percent
-                            if photo.vehicle_shadow_contact_percent is not None
-                            else 100
-                        ),
-                        reflection_opacity_percent=composition.reflection_opacity_percent,
-                        brightness_percent=composition.brightness_percent,
-                        capture_step_name=step.name,
-                        orientation_key=orientation.key if orientation else "",
-                        capture_metadata=photo.capture_metadata,
-                        scene_projection_enabled=background.scene_projection_enabled,
-                        scene_horizon_percent=background.scene_horizon_percent,
-                        scene_reference_vertical_degrees=(
-                            background.scene_reference_vertical_degrees
-                        ),
-                        scene_perspective_strength_percent=(
-                            background.scene_perspective_strength_percent
-                        ),
-                        vehicle_scale_percent=photo.vehicle_scale_percent,
-                        vehicle_offset_x_percent=photo.vehicle_offset_x_percent,
-                        vehicle_offset_y_percent=photo.vehicle_offset_y_percent,
-                        manual_source_framing=True,
-                    ),
+                shadow_opacity_percent = (
+                    photo.vehicle_shadow_opacity_percent
+                    if photo.vehicle_shadow_opacity_percent is not None
+                    else composition.shadow_opacity_percent
                 )
+                correction_options = CompositionOptions(
+                    width=settings.output_width,
+                    height=settings.output_height,
+                    contour_target_area_percent=composition.contour_target_area_percent,
+                    contour_max_width_percent=composition.contour_max_width_percent,
+                    contour_max_height_percent=composition.contour_max_height_percent,
+                    vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                    shadow_opacity_percent=shadow_opacity_percent,
+                    shadow_distance_percent=(
+                        photo.vehicle_shadow_distance_percent
+                        if photo.vehicle_shadow_distance_percent is not None
+                        else 0
+                    ),
+                    shadow_angle_degrees=(
+                        photo.vehicle_shadow_angle_degrees
+                        if photo.vehicle_shadow_angle_degrees is not None
+                        else 90
+                    ),
+                    shadow_spread_percent=(
+                        photo.vehicle_shadow_spread_percent
+                        if photo.vehicle_shadow_spread_percent is not None
+                        else 100
+                    ),
+                    shadow_blur_percent=(
+                        photo.vehicle_shadow_blur_percent
+                        if photo.vehicle_shadow_blur_percent is not None
+                        else 100
+                    ),
+                    shadow_contact_percent=(
+                        photo.vehicle_shadow_contact_percent
+                        if photo.vehicle_shadow_contact_percent is not None
+                        else 100
+                    ),
+                    reflection_opacity_percent=composition.reflection_opacity_percent,
+                    brightness_percent=composition.brightness_percent,
+                    capture_step_name=step.name,
+                    orientation_key=orientation.key if orientation else "",
+                    capture_metadata=photo.capture_metadata,
+                    scene_projection_enabled=background.scene_projection_enabled,
+                    scene_horizon_percent=background.scene_horizon_percent,
+                    scene_reference_vertical_degrees=(
+                        background.scene_reference_vertical_degrees
+                    ),
+                    scene_perspective_strength_percent=(
+                        background.scene_perspective_strength_percent
+                    ),
+                    vehicle_scale_percent=photo.vehicle_scale_percent,
+                    vehicle_offset_x_percent=photo.vehicle_offset_x_percent,
+                    vehicle_offset_y_percent=photo.vehicle_offset_y_percent,
+                    manual_source_framing=True,
+                )
+                if shadow_opacity_percent > 0:
+                    if image_settings.provider != "photoroom":
+                        raise ImageProcessingError(
+                            "Der KI-Hauptschatten nach einer Korrektur benötigt Photoroom"
+                        )
+                    placed_vehicle = compose_showroom(
+                        composed_background,
+                        preview_cutout,
+                        correction_options,
+                        vehicle_layer_only=True,
+                    )
+                    finished = create_photoroom_shadowed_composition(
+                        placed_vehicle,
+                        composed_background,
+                        composed_background_content_type,
+                        settings,
+                        shadow_opacity_percent=shadow_opacity_percent,
+                        photoroom_sandbox=photoroom_sandbox_active(
+                            image_settings, settings
+                        ),
+                        usage_context=usage_context,
+                    )
+                else:
+                    finished = compose_showroom(
+                        composed_background,
+                        preview_cutout,
+                        correction_options,
+                    )
                 photo.quality_review_required = True
                 photo.quality_review_reason = (
                     "Das manuell korrigierte Optimierungsergebnis wartet auf die "
@@ -2352,7 +2522,11 @@ def process_photo(photo_id: str) -> None:
                 )
                 photo.quality_score = 100
                 photo.quality_issues = []
-                photo.quality_model_version = "optimized-manual-correction-v1"
+                photo.quality_model_version = (
+                    "optimized-manual-correction-photoroom-shadow-v2"
+                    if shadow_opacity_percent > 0
+                    else "optimized-manual-correction-v1"
+                )
                 if photo.quality_review_created_at is None:
                     photo.quality_review_created_at = datetime.now(timezone.utc)
                 photo.quality_reviewed_by_id = None

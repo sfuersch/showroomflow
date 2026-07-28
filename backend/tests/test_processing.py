@@ -31,6 +31,7 @@ from app.processing import (
     create_automatic_background_mask,
     create_openai_semantic_mask,
     create_photoroom_cutout,
+    create_photoroom_shadowed_composition,
     extract_openai_magenta_mask,
     format_retry_delay,
     ImageProviderRateLimitError,
@@ -719,6 +720,33 @@ def test_showroom_composition_has_configured_output_size() -> None:
     finished = Image.open(io.BytesIO(result))
     assert finished.format == "JPEG"
     assert finished.size == (1920, 1440)
+
+
+def test_showroom_vehicle_layer_keeps_manual_transform_on_transparent_canvas() -> None:
+    background = Image.new("RGB", (400, 300), "white")
+    vehicle = Image.new("RGBA", (400, 300), (0, 0, 0, 0))
+    ImageDraw.Draw(vehicle).rectangle((100, 100, 299, 249), fill=(20, 30, 40, 255))
+
+    result = compose_showroom(
+        image_bytes(background, "JPEG"),
+        image_bytes(vehicle, "PNG"),
+        CompositionOptions(
+            width=400,
+            height=300,
+            vehicle_scale_percent=80,
+            vehicle_offset_x_percent=10,
+            vehicle_offset_y_percent=-5,
+            manual_source_framing=True,
+        ),
+        vehicle_layer_only=True,
+    )
+
+    finished = Image.open(io.BytesIO(result)).convert("RGBA")
+    alpha_box = finished.getchannel("A").getbbox()
+    assert finished.size == (400, 300)
+    assert alpha_box is not None
+    assert alpha_box == pytest.approx((160, 95, 320, 215), abs=2)
+    assert finished.getpixel((20, 20))[3] == 0
 
 
 def test_showroom_composition_rejects_empty_cutout() -> None:
@@ -1526,3 +1554,59 @@ def test_photoroom_shadow_can_be_disabled() -> None:
         )
 
     assert requests == 2
+
+
+def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
+    placed_vehicle = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(placed_vehicle).rectangle(
+        (260, 180, 659, 499),
+        fill=(20, 30, 40, 255),
+    )
+    placed_bytes = image_bytes(placed_vehicle, "PNG")
+    background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+    api_result = image_bytes(Image.new("RGB", (800, 600), "gray"), "JPEG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://image-api.photoroom.com/v2/edit"
+        assert request.headers["x-api-key"] == "sandbox_test-key"
+        assert "pr-hd-background-removal" not in request.headers
+        body = request.content
+        assert b'name="imageFile"' in body
+        assert b"placed-vehicle.png" in body
+        assert b'name="background.imageFile"' in body
+        assert b'name="removeBackground"' in body
+        assert b"false" in body
+        assert b'name="keepExistingAlphaChannel"' in body
+        assert b"auto" in body
+        assert b'name="referenceBox"' in body
+        assert b"originalImage" in body
+        assert b'name="padding"' in body
+        assert b'name="shadow.mode"' in body
+        assert b"ai.hard" in body
+        assert b'name="outputSize"' in body
+        assert b"800x600" in body
+        return httpx.Response(
+            200,
+            content=api_result,
+            headers={"content-type": "image/jpeg"},
+        )
+
+    settings = Settings(
+        output_width=800,
+        output_height=600,
+        photoroom_api_key="test-key",
+        photoroom_sandbox=True,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = create_photoroom_shadowed_composition(
+            placed_bytes,
+            background,
+            "image/jpeg",
+            settings,
+            shadow_opacity_percent=42,
+            client=client,
+        )
+
+    finished = Image.open(io.BytesIO(result))
+    assert finished.size == (800, 600)
+    assert finished.format == "JPEG"
