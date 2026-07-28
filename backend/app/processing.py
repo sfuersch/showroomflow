@@ -1837,15 +1837,12 @@ def _create_vehicle_shadow(
     blur_percent: int = 100,
     contact_percent: int = 100,
 ) -> Image.Image:
-    """Build a conservative shadow from the vehicle's lower contour.
+    """Build a grounded showroom shadow without projecting the body shape.
 
-    Projecting the complete silhouette creates long dark streaks in diagonal
-    views because the roof is compressed onto the ground plane.  A real
-    vehicle shadow that is useful for showroom composition is primarily
-    visible between the lower body contour and the tyre contact plane.  The
-    broad layer therefore follows that lower contour and never extends beyond
-    the vehicle by more than the configured, tightly limited cast offset.  A
-    second layer keeps the tyre and sill contact dark and attached.
+    Only the tyre anchors are derived from the alpha mask. The visible shadow
+    consists of a soft underbody ellipse and two compact contact ellipses.
+    This prevents bumpers, wheel arches and a sloping underside from becoming
+    rectangular blocks or long wedges in diagonal views.
     """
     vehicle_width, vehicle_height = alpha.size
     distance = vehicle_height * max(0, min(20, distance_percent)) / 100
@@ -1880,133 +1877,79 @@ def _create_vehicle_shadow(
     left_anchor, right_anchor = _vehicle_ground_anchors(alpha)
     left_ground_y = float(left_anchor[1])
     right_ground_y = float(right_anchor[1])
-    maximum_ground_delta = active_height * 0.22
-    ground_delta = right_ground_y - left_ground_y
-    if abs(ground_delta) > maximum_ground_delta:
-        ground_center = (left_ground_y + right_ground_y) / 2
-        limited_half_delta = math.copysign(maximum_ground_delta / 2, ground_delta)
-        left_ground_y = ground_center - limited_half_delta
-        right_ground_y = ground_center + limited_half_delta
-
-    anchor_distance = max(1, right_anchor[0] - left_anchor[0])
-    ground_slope = (right_ground_y - left_ground_y) / anchor_distance
-
-    minimum_ground = min(left_ground_y, right_ground_y) - active_height * 0.025
-    maximum_ground = max(left_ground_y, right_ground_y) + active_height * 0.025
-
-    def ground_y_at(x_position: float) -> float:
-        projected = left_ground_y + ground_slope * (x_position - left_anchor[0])
-        return max(minimum_ground, min(maximum_ground, projected))
-
-    column_bottoms = np.full(vehicle_width, -1, dtype=np.float32)
-    for x_position in range(active_left, active_right + 1):
-        rows = np.flatnonzero(alpha_array[:, x_position] >= 32)
-        if len(rows):
-            column_bottoms[x_position] = float(rows[-1])
-    profile_x = np.arange(active_left, active_right + 1)
-    valid_profile_x = profile_x[column_bottoms[profile_x] >= 0]
-    if not len(valid_profile_x):
-        return Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-    lower_profile = np.interp(
-        profile_x,
-        valid_profile_x,
-        column_bottoms[valid_profile_x],
+    anchor_distance = max(1.0, float(right_anchor[0] - left_anchor[0]))
+    maximum_ground_delta = active_height * 0.16
+    ground_delta = max(
+        -maximum_ground_delta,
+        min(maximum_ground_delta, right_ground_y - left_ground_y),
     )
-    smoothing_width = max(3, round(active_width * 0.018))
-    if smoothing_width % 2 == 0:
-        smoothing_width += 1
-    lower_profile = cv2.GaussianBlur(
-        lower_profile.reshape(1, -1).astype(np.float32),
-        (smoothing_width, 1),
-        0,
-    ).reshape(-1)
+    ground_angle = math.degrees(math.atan2(ground_delta, anchor_distance))
+    ground_angle = max(-8.0, min(8.0, ground_angle))
 
-    active_center = (active_left + active_right) / 2
-    mapped_x = active_center + (profile_x - active_center) * spread
-    mapped_x = mapped_x + x + shadow_offset_x
-    broad_depth = max(
-        7,
-        round(active_height * 0.035 * depth_multiplier * (0.75 + spread * 0.25)),
+    center_x = x + (left_anchor[0] + right_anchor[0]) / 2 + shadow_offset_x
+    center_y = y + (left_ground_y + right_ground_y) / 2 + shadow_offset_y
+    perspective_depth = {
+        "side": 0.052,
+        "straight": 0.060,
+        "diagonal": 0.068,
+    }.get(perspective, 0.060)
+    broad_width = max(12, round(active_width * min(1.04, 0.82 * spread)))
+    broad_height = max(
+        6,
+        round(
+            active_height
+            * perspective_depth
+            * max(0.65, min(1.5, depth_multiplier))
+        ),
     )
-    contour_overlap = max(2, round(active_height * 0.008))
-    broad_top = lower_profile + y - contour_overlap + shadow_offset_y
-    broad_bottom = np.maximum(
-        lower_profile,
-        np.array([ground_y_at(value) for value in profile_x]),
-    )
-    broad_bottom = broad_bottom + y + broad_depth + shadow_offset_y
-    broad_bottom = np.maximum(broad_bottom, broad_top + 2)
-
-    projected_alpha_array = np.zeros(
+    broad_mask_array = np.zeros(
         (canvas_size[1], canvas_size[0]),
         dtype=np.uint8,
     )
-    broad_polygon = np.concatenate(
-        [
-            np.column_stack((mapped_x, broad_top)),
-            np.column_stack((mapped_x[::-1], broad_bottom[::-1])),
-        ]
-    )
-    broad_polygon[:, 0] = np.clip(broad_polygon[:, 0], 0, canvas_size[0] - 1)
-    broad_polygon[:, 1] = np.clip(broad_polygon[:, 1], 0, canvas_size[1] - 1)
-    cv2.fillPoly(
-        projected_alpha_array,
-        [np.round(broad_polygon).astype(np.int32)],
+    cv2.ellipse(
+        broad_mask_array,
+        (round(center_x), round(center_y)),
+        (max(1, broad_width // 2), max(1, broad_height // 2)),
+        ground_angle,
+        0,
+        360,
         255,
+        -1,
     )
-    projected_alpha = Image.fromarray(projected_alpha_array, mode="L").filter(
-        ImageFilter.GaussianBlur(max(2, round(broad_depth * 0.7 * blur)))
+    broad_blur = max(3, round(active_height * 0.022 * blur))
+    broad_mask = Image.fromarray(broad_mask_array, mode="L").filter(
+        ImageFilter.GaussianBlur(broad_blur)
     )
-    # The broad underbody area must stay considerably lighter than the tyre
-    # contact. Otherwise a diagonal ground plane looks like a black wedge.
-    broad_opacity = round(255 * opacity_percent / 100 * 0.58)
-    projected_alpha = projected_alpha.point(
+    broad_opacity = round(255 * opacity_percent / 100 * 0.42)
+    broad_mask = broad_mask.point(
         lambda value: min(255, value * broad_opacity // 255)
     )
     broad_shadow = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
-    broad_shadow.putalpha(projected_alpha)
+    broad_shadow.putalpha(broad_mask)
 
-    # The contact layer uses the same lower contour without direction or
-    # spread. It remains directly attached to tyres, sills and bumpers.
-    contact_height = max(5, round(active_height * 0.018))
+    # Never connect the contact zones with a polygon. That would recreate the
+    # block artefact whenever the two visible wheels have different heights.
+    contact_height = max(3, round(active_height * 0.022))
+    contact_width = max(8, round(active_width * 0.16))
     contact_strength = max(0, min(150, contact_percent)) / 100
     contact_alpha = min(
-        230,
-        round(255 * opacity_percent / 100 * 1.75 * contact_strength),
+        215,
+        round(255 * opacity_percent / 100 * 1.45 * contact_strength),
     )
     contact_canvas = np.zeros((canvas_size[1], canvas_size[0]), dtype=np.uint8)
-    contact_top = lower_profile + y - max(1, round(contact_height * 0.25))
-    contact_bottom = np.maximum(
-        lower_profile,
-        np.array([ground_y_at(value) for value in profile_x]),
-    )
-    contact_bottom = contact_bottom + y + contact_height
-    contact_bottom = np.maximum(contact_bottom, contact_top + 2)
-    contact_polygon = np.concatenate(
-        [
-            np.column_stack((profile_x + x, contact_top)),
-            np.column_stack(
-                ((profile_x + x)[::-1], contact_bottom[::-1])
-            ),
-        ]
-    )
-    contact_polygon[:, 0] = np.clip(
-        contact_polygon[:, 0],
-        0,
-        canvas_size[0] - 1,
-    )
-    contact_polygon[:, 1] = np.clip(
-        contact_polygon[:, 1],
-        0,
-        canvas_size[1] - 1,
-    )
-    cv2.fillPoly(
-        contact_canvas,
-        [np.round(contact_polygon).astype(np.int32)],
-        255,
-    )
+    for anchor_x, anchor_y in (left_anchor, right_anchor):
+        cv2.ellipse(
+            contact_canvas,
+            (round(x + anchor_x), round(y + anchor_y)),
+            (max(1, contact_width // 2), max(1, contact_height // 2)),
+            ground_angle,
+            0,
+            360,
+            255,
+            -1,
+        )
     contact_mask = Image.fromarray(contact_canvas, mode="L").filter(
-        ImageFilter.GaussianBlur(max(2, round(contact_height * 0.55)))
+        ImageFilter.GaussianBlur(max(2, round(contact_height * 0.65)))
     )
     contact_mask = contact_mask.point(
         lambda value: min(255, value * contact_alpha // 255)

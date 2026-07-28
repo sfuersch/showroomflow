@@ -220,11 +220,6 @@
             const rightContactY = y + bounds.groundRightY * scaleY;
             drawVehicleShadow(
                 context,
-                subject,
-                x,
-                y,
-                width,
-                height,
                 vehicleLeft,
                 vehicleTop,
                 vehicleRight,
@@ -233,7 +228,6 @@
                 leftContactY,
                 rightContactX,
                 rightContactY,
-                bounds.lowerProfile,
                 shadowOpacity,
                 Number(vehicleShadowDistance.value),
                 Number(vehicleShadowAngle.value),
@@ -298,23 +292,6 @@
         };
         const leftGround = groundAnchor(.08, .45);
         const rightGround = groundAnchor(.55, .92);
-        const lowerProfile = [];
-        let previousBottom = -1;
-        for (let x = left; x <= right; x += 1) {
-            if (columnBottoms[x] >= 0) previousBottom = columnBottoms[x];
-            lowerProfile.push({
-                x: x / ratio,
-                y: (previousBottom >= 0 ? previousBottom : bottom) / ratio
-            });
-        }
-        let nextBottom = -1;
-        for (let index = lowerProfile.length - 1; index >= 0; index -= 1) {
-            const sourceX = left + index;
-            if (columnBottoms[sourceX] >= 0) nextBottom = columnBottoms[sourceX];
-            if (columnBottoms[sourceX] < 0 && nextBottom >= 0) {
-                lowerProfile[index].y = nextBottom / ratio;
-            }
-        }
         maskBoundsCache = {
             left: left / ratio,
             top: top / ratio,
@@ -323,19 +300,13 @@
             groundLeftX: leftGround.x / ratio,
             groundLeftY: leftGround.y / ratio,
             groundRightX: rightGround.x / ratio,
-            groundRightY: rightGround.y / ratio,
-            lowerProfile
+            groundRightY: rightGround.y / ratio
         };
         return maskBoundsCache;
     }
 
     function drawVehicleShadow(
         context,
-        subject,
-        subjectX,
-        subjectY,
-        subjectWidth,
-        subjectHeight,
         left,
         top,
         right,
@@ -344,7 +315,6 @@
         leftContactY,
         rightContactX,
         rightContactY,
-        lowerProfile,
         opacityPercent,
         distancePercent,
         angleDegrees,
@@ -356,7 +326,6 @@
         const height = Math.max(1, bottom - top);
         const spread = Math.max(50, Math.min(180, spreadPercent)) / 100;
         const blur = Math.max(20, Math.min(200, blurPercent)) / 100;
-        const broadDepth = Math.max(7, height * .035 * (.75 + spread * .25));
         const opacity = Math.max(0, Math.min(80, opacityPercent)) / 100;
         const distance = height * Math.max(0, Math.min(20, distancePercent)) / 100;
         const angle = (angleDegrees % 360) * Math.PI / 180;
@@ -369,70 +338,50 @@
             Math.min(height * .03, Math.sin(angle) * distance)
         );
         const anchorDistance = Math.max(1, rightContactX - leftContactX);
-        let leftGroundY = leftContactY;
-        let rightGroundY = rightContactY;
-        const maximumGroundDelta = height * .22;
-        const groundDelta = rightGroundY - leftGroundY;
-        if (Math.abs(groundDelta) > maximumGroundDelta) {
-            const groundCenter = (leftGroundY + rightGroundY) / 2;
-            const limitedHalfDelta = Math.sign(groundDelta) * maximumGroundDelta / 2;
-            leftGroundY = groundCenter - limitedHalfDelta;
-            rightGroundY = groundCenter + limitedHalfDelta;
-        }
-        const slope = (rightGroundY - leftGroundY) / anchorDistance;
-        const center = (left + right) / 2;
-        const minimumGround = Math.min(leftGroundY, rightGroundY) - height * .025;
-        const maximumGround = Math.max(leftGroundY, rightGroundY) + height * .025;
-        const groundYAt = x => {
-            const projected = leftGroundY + slope * (x - leftContactX);
-            return Math.max(minimumGround, Math.min(maximumGround, projected));
-        };
-
-        const points = (lowerProfile || []).map(point => ({
-            sourceX: subjectX + point.x * subjectWidth / view.width,
-            sourceY: subjectY + point.y * subjectHeight / view.height
-        }));
-        if (points.length < 2) return;
-        const mappedPoints = points.map(point => ({
-            x: center + (point.sourceX - center) * spread + offsetX,
-            top: point.sourceY - Math.max(2, height * .008) + offsetY,
-            bottom: Math.max(point.sourceY, groundYAt(point.sourceX))
-                + broadDepth + offsetY
-        }));
+        const maximumGroundDelta = height * .16;
+        const groundDelta = Math.max(
+            -maximumGroundDelta,
+            Math.min(maximumGroundDelta, rightContactY - leftContactY)
+        );
+        const groundAngle = Math.max(
+            -8,
+            Math.min(8, Math.atan2(groundDelta, anchorDistance) * 180 / Math.PI)
+        );
+        const centerX = (leftContactX + rightContactX) / 2 + offsetX;
+        const centerY = (leftContactY + rightContactY) / 2 + offsetY;
+        const broadWidth = Math.max(12, width * Math.min(1.04, .82 * spread));
+        const broadHeight = Math.max(6, height * .068);
         context.save();
+        context.translate(centerX, centerY);
+        context.rotate(groundAngle * Math.PI / 180);
         context.beginPath();
-        context.moveTo(mappedPoints[0].x, mappedPoints[0].top);
-        mappedPoints.slice(1).forEach(point => context.lineTo(point.x, point.top));
-        [...mappedPoints].reverse().forEach(point => {
-            context.lineTo(point.x, Math.max(point.top + 2, point.bottom));
-        });
-        context.closePath();
+        context.ellipse(0, 0, broadWidth / 2, broadHeight / 2, 0, 0, Math.PI * 2);
         context.fillStyle = '#000';
-        context.filter = `blur(${Math.max(2, broadDepth * .7 * blur)}px)`;
-        context.globalAlpha = opacity * .58;
+        context.filter = `blur(${Math.max(3, height * .022 * blur)}px)`;
+        context.globalAlpha = opacity * .42;
         context.fill();
         context.restore();
 
         const contactStrength = Math.max(0, Math.min(150, contactPercent)) / 100;
         if (contactStrength <= 0) return;
-        const contactHeight = Math.max(5, height * .018);
+        const contactHeight = Math.max(3, height * .022);
+        const contactWidth = Math.max(8, width * .16);
         context.save();
-        context.beginPath();
-        context.moveTo(points[0].sourceX, points[0].sourceY - contactHeight * .25);
-        points.slice(1).forEach(point => {
-            context.lineTo(point.sourceX, point.sourceY - contactHeight * .25);
-        });
-        [...points].reverse().forEach(point => {
-            context.lineTo(
-                point.sourceX,
-                Math.max(point.sourceY, groundYAt(point.sourceX)) + contactHeight
-            );
-        });
-        context.closePath();
+        context.filter = `blur(${Math.max(2, contactHeight * .65)}px)`;
         context.fillStyle = '#000';
-        context.filter = `blur(${Math.max(2, contactHeight * .55)}px)`;
-        context.globalAlpha = Math.min(.9, opacity * 1.75 * contactStrength);
-        context.fill();
+        context.globalAlpha = Math.min(.84, opacity * 1.45 * contactStrength);
+        [
+            [leftContactX, leftContactY],
+            [rightContactX, rightContactY]
+        ].forEach(([contactX, contactY]) => {
+            context.save();
+            context.translate(contactX, contactY);
+            context.rotate(groundAngle * Math.PI / 180);
+            context.beginPath();
+            context.ellipse(0, 0, contactWidth / 2, contactHeight / 2, 0, 0, Math.PI * 2);
+            context.fill();
+            context.restore();
+        });
         context.restore();
     }
 

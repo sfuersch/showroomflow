@@ -472,7 +472,7 @@ def test_vehicle_ground_anchors_follow_each_wheel_independently() -> None:
     assert right_anchor[1] - left_anchor[1] >= 20
 
 
-def test_vehicle_shadow_stays_attached_to_diagonal_vehicle_contour() -> None:
+def test_vehicle_shadow_uses_compact_layers_for_diagonal_vehicle() -> None:
     alpha = Image.new("L", (400, 240), 0)
     draw = ImageDraw.Draw(alpha)
     draw.rectangle((25, 25, 374, 155), fill=255)
@@ -490,23 +490,23 @@ def test_vehicle_shadow_stays_attached_to_diagonal_vehicle_contour() -> None:
         contact_percent=0,
     ).getchannel("A")
 
-    # The shadow fills the underbody gap between the wheels.
+    # A soft ambient layer fills the underbody gap between the wheels.
     assert shadow.crop((190, 195, 310, 285)).getbbox() is not None
 
     # It remains close to the original vehicle width. In particular there
-    # must be no long dark streaks to the left or right of a diagonal car.
+    # must be no long dark streaks or rectangular body projection.
     assert shadow.crop((0, 0, 55, 350)).getbbox() is None
     assert shadow.crop((445, 0, 500, 350)).getbbox() is None
 
-    # Even with two wheels at different heights the result is one connected,
-    # contour-following underbody area rather than detached bars.
+    # Even with wheels at different heights the visible layers remain compact.
     shadow_pixels = (np.asarray(shadow) >= 10).astype(np.uint8)
-    component_count, _ = cv2.connectedComponents(shadow_pixels)
-    assert component_count == 2  # transparent background + one shadow
-
     active_rows, active_columns = np.nonzero(shadow_pixels)
     assert active_columns.max() - active_columns.min() < 410
-    assert active_rows.max() - active_rows.min() < 125
+    assert active_rows.max() - active_rows.min() < 80
+
+    # Strong pixels occupy only a narrow part of the vehicle rectangle.
+    strong_pixels = np.asarray(shadow) >= 70
+    assert strong_pixels.sum() < 400 * 240 * 0.08
 
 
 def test_manual_editor_shadow_uses_preview_vehicle_position(
