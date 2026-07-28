@@ -1584,11 +1584,13 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
         assert b"placed-vehicle.png" in body
         assert b'name="background.imageFile"' not in body
         assert b'name="removeBackground"' in body
-        assert b"false" in body
+        assert b"true" in body
         assert b'name="keepExistingAlphaChannel"' in body
         assert b"auto" in body
         assert b'name="referenceBox"' in body
         assert b"originalImage" in body
+        assert b'name="background.color"' in body
+        assert b"transparent" in body
         assert b'name="padding"' in body
         assert b'name="shadow.mode"' in body
         assert b"ai.hard" in body
