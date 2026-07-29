@@ -1,6 +1,6 @@
 """Add optional FTPS certificate fingerprint pinning.
 
-Revision ID: 0036_ftps_certificate_fingerprint
+Revision ID: 0036_ftps_cert_fingerprint
 Revises: 0035_ftps_transfer_protocol
 Create Date: 2026-07-29
 """
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "0036_ftps_certificate_fingerprint"
+revision: str = "0036_ftps_cert_fingerprint"
 down_revision: str | None = "0035_ftps_transfer_protocol"
 branch_labels: str | None = None
 depends_on: str | None = None
