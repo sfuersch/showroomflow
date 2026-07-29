@@ -140,6 +140,54 @@ def fetch_host_key_fingerprint(host: str, port: int) -> str:
             sock.close()
 
 
+def normalize_tls_certificate_fingerprint(value: str) -> str:
+    cleaned = re.sub(r"(?i)^sha256:", "", value.strip())
+    hexadecimal = re.sub(r"[\s:-]", "", cleaned)
+    if re.fullmatch(r"[0-9a-fA-F]{64}", hexadecimal) is None:
+        raise SftpConfigurationError(
+            "Das FTPS-Zertifikat muss als SHA-256-Fingerabdruck angegeben werden."
+        )
+    return "SHA256:" + ":".join(
+        hexadecimal[index : index + 2].upper()
+        for index in range(0, len(hexadecimal), 2)
+    )
+
+
+def tls_certificate_fingerprint(certificate_der: bytes) -> str:
+    digest = hashlib.sha256(certificate_der).hexdigest()
+    return normalize_tls_certificate_fingerprint(digest)
+
+
+def fetch_tls_certificate_fingerprint(host: str, port: int) -> str:
+    cleaned_host = host.strip()
+    if not cleaned_host:
+        raise SftpConfigurationError("Bitte tragen Sie zuerst einen FTPS-Server ein.")
+    if port < 1 or port > 65535:
+        raise SftpConfigurationError("Der FTPS-Port ist ungültig.")
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    client = ftplib.FTP_TLS(context=context, timeout=30)
+    try:
+        client.connect(cleaned_host, port, timeout=15)
+        client.auth()
+        if client.sock is None:
+            raise SftpTransferError("Der FTPS-Server hat keine TLS-Verbindung aufgebaut.")
+        certificate = client.sock.getpeercert(binary_form=True)
+        if not certificate:
+            raise SftpTransferError("Der FTPS-Server hat kein TLS-Zertifikat übermittelt.")
+        return tls_certificate_fingerprint(certificate)
+    except (OSError, ssl.SSLError, ftplib.Error) as exc:
+        raise SftpTransferError(
+            f"FTPS-Zertifikat konnte nicht abgerufen werden: {exc}"
+        ) from exc
+    finally:
+        try:
+            client.close()
+        except (OSError, ssl.SSLError, ftplib.Error):
+            pass
+
+
 def validate_settings(config: DealershipSftpSettings, runtime: Settings) -> str:
     protocol = normalize_protocol(config.protocol)
     if not config.host.strip() or not config.username.strip():
@@ -152,6 +200,8 @@ def validate_settings(config: DealershipSftpSettings, runtime: Settings) -> str:
     normalize_filename_template(config.filename_template)
     if protocol == "sftp":
         normalize_fingerprint(config.host_key_fingerprint)
+    elif (config.tls_certificate_fingerprint or "").strip():
+        normalize_tls_certificate_fingerprint(config.tls_certificate_fingerprint)
     return decrypt_password(config.password_encrypted, runtime)
 
 
@@ -214,13 +264,39 @@ def ftps_connection(
     config: DealershipSftpSettings, runtime: Settings
 ) -> Iterator[ftplib.FTP_TLS]:
     password = validate_settings(config, runtime)
+    expected_certificate = (config.tls_certificate_fingerprint or "").strip()
+    context = ssl.create_default_context()
+    if expected_certificate:
+        # A pinned certificate is verified explicitly immediately after AUTH TLS.
+        # This permits self-signed certificates without weakening other FTPS connections.
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     client = ftplib.FTP_TLS(
-        context=ssl.create_default_context(),
+        context=context,
         timeout=30,
     )
     try:
         client.connect(config.host.strip(), config.port, timeout=15)
         client.auth()
+        if expected_certificate:
+            if client.sock is None:
+                raise SftpTransferError(
+                    "Der FTPS-Server hat keine TLS-Verbindung aufgebaut."
+                )
+            certificate = client.sock.getpeercert(binary_form=True)
+            if not certificate:
+                raise SftpTransferError(
+                    "Der FTPS-Server hat kein TLS-Zertifikat übermittelt."
+                )
+            actual_certificate = tls_certificate_fingerprint(certificate)
+            normalized_expected = normalize_tls_certificate_fingerprint(
+                expected_certificate
+            )
+            if not hmac.compare_digest(actual_certificate, normalized_expected):
+                raise SftpConfigurationError(
+                    "Das FTPS-Zertifikat stimmt nicht mit dem gespeicherten "
+                    f"Fingerabdruck überein (empfangen: {actual_certificate})."
+                )
         client.login(config.username.strip(), password)
         client.prot_p()
         client.set_pasv(True)

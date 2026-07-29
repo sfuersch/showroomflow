@@ -68,7 +68,7 @@
                     <h3>Dateiübertragung kurz erklärt</h3>
                     <ol>
                         <li>Protokoll, Server, Port, Benutzername, Passwort und Zielverzeichnis eintragen. Die Übertragung zunächst deaktiviert speichern.</li>
-                        <li>Bei SFTP <strong>Hostschlüssel abrufen</strong> wählen. Bei FTPS wird stattdessen das TLS-Zertifikat des Servers automatisch geprüft.</li>
+                        <li>Bei SFTP <strong>Hostschlüssel abrufen</strong> wählen. Verwendet der FTPS-Server ein selbstsigniertes Zertifikat, <strong>TLS-Zertifikat abrufen</strong> wählen und den SHA-256-Fingerabdruck möglichst mit dem Anbieter vergleichen.</li>
                         <li><strong>Dateiübertragung aktiv</strong> einschalten und erneut speichern.</li>
                         <li>Mit <strong>Verbindung prüfen</strong> Zugangsdaten und Zielverzeichnis testen.</li>
                     </ol>
@@ -108,6 +108,10 @@
             <input type="text" name="host_key_fingerprint" value="{{ sftp_settings.host_key_fingerprint if sftp_settings else '' }}" maxlength="128" placeholder="SHA256:…">
             <small>Der Fingerabdruck schützt vor einer Verbindung zum falschen Server. Server und Port zunächst speichern, dann den Schlüssel unten abrufen.</small>
         </label>
+        <label class="span-2" id="ftps-certificate-field">SHA-256-TLS-Zertifikat (FTPS, optional)
+            <input type="text" name="tls_certificate_fingerprint" value="{{ sftp_settings.tls_certificate_fingerprint if sftp_settings else '' }}" maxlength="128" placeholder="SHA256:AA:BB:…">
+            <small>Nur für selbstsignierte Zertifikate erforderlich. Ohne Eintrag gilt die normale öffentliche Zertifikatsprüfung. Mit Eintrag wird ausschließlich dieses Zertifikat akzeptiert.</small>
+        </label>
         <label class="check-row span-2">
             <input type="checkbox" name="is_enabled" {% if sftp_settings and sftp_settings.is_enabled %}checked{% endif %}>
             <span><strong>Dateiübertragung aktiv</strong><small>Bei automatischem Export wird die fertige ZIP-Datei direkt übertragen.</small></span>
@@ -117,12 +121,10 @@
     </form>
     {% if sftp_settings and sftp_settings.host %}
     <div class="form-actions">
-        {% if not sftp_settings.protocol or sftp_settings.protocol == 'sftp' %}
         <form method="post" action="/admin/dealerships/{{ dealership.id }}/sftp/fingerprint">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="button button-secondary" type="submit">Hostschlüssel abrufen</button>
+            <button class="button button-secondary" type="submit">{{ 'TLS-Zertifikat abrufen' if sftp_settings.protocol == 'ftps' else 'Hostschlüssel abrufen' }}</button>
         </form>
-        {% endif %}
         {% if sftp_password_configured %}
         <form method="post" action="/admin/dealerships/{{ dealership.id }}/sftp/test">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -207,7 +209,8 @@
     const protocol = document.getElementById("transfer-protocol");
     const port = document.getElementById("transfer-port");
     const fingerprint = document.getElementById("sftp-fingerprint-field");
-    if (!protocol || !port || !fingerprint) return;
+    const certificate = document.getElementById("ftps-certificate-field");
+    if (!protocol || !port || !fingerprint || !certificate) return;
 
     let previousProtocol = protocol.value;
     const updateProtocolFields = () => {
@@ -216,6 +219,7 @@
             port.value = protocol.value === "ftps" ? "21" : "22";
         }
         fingerprint.hidden = protocol.value !== "sftp";
+        certificate.hidden = protocol.value !== "ftps";
         previousProtocol = protocol.value;
     };
 
