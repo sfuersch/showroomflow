@@ -878,7 +878,7 @@ def test_window_background_preserves_foreground_and_glass_transparency() -> None
     assert foreground[0] > 200 and foreground[2] < 50
 
 
-def test_window_background_preserves_calibrated_instrument_cluster_region() -> None:
+def test_window_background_uses_mask_inside_instrument_cluster_region() -> None:
     original = Image.new("RGB", (800, 600), (230, 220, 20))
     window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
     ImageDraw.Draw(window_mask).rectangle((0, 0, 799, 399), fill="white")
@@ -893,12 +893,12 @@ def test_window_background_preserves_calibrated_instrument_cluster_region() -> N
 
     finished = Image.open(io.BytesIO(result)).convert("RGB")
     replaced_glass = finished.getpixel((100, 100))
-    protected_cluster = finished.getpixel((400, 200))
+    replaced_cluster = finished.getpixel((400, 200))
     assert replaced_glass[2] > 200 and replaced_glass[0] < 50
-    assert protected_cluster[0] > 200 and protected_cluster[2] < 50
+    assert replaced_cluster[2] > 200 and replaced_cluster[0] < 50
 
 
-def test_window_background_adds_calibrated_driver_side_window_region() -> None:
+def test_window_background_does_not_extend_mask_at_left_image_edge() -> None:
     original = Image.new("RGB", (800, 600), (230, 220, 20))
     window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
     ImageDraw.Draw(window_mask).rectangle((30, 0, 599, 199), fill="white")
@@ -912,10 +912,10 @@ def test_window_background_adds_calibrated_driver_side_window_region() -> None:
     )
 
     finished = Image.open(io.BytesIO(result)).convert("RGB")
-    calibrated_side_window = finished.getpixel((20, 60))
-    protected_pillar = finished.getpixel((35, 60))
-    assert calibrated_side_window[2] > 200 and calibrated_side_window[0] < 50
-    assert protected_pillar[0] > 200 and protected_pillar[2] < 50
+    untouched_left_edge = finished.getpixel((20, 60))
+    selected_window = finished.getpixel((100, 60))
+    assert untouched_left_edge[0] > 200 and untouched_left_edge[2] < 50
+    assert selected_window[2] > 200 and selected_window[0] < 50
 
 
 def test_window_background_shift_reveals_lower_background_content() -> None:
@@ -1005,7 +1005,7 @@ def test_manual_mask_refinement_limits_grabcut_working_resolution(monkeypatch) -
     assert Image.open(io.BytesIO(refined)).size == original.size
 
 
-def test_window_background_reports_suspicious_protected_overlap() -> None:
+def test_window_background_diagnostics_accept_authoritative_mask() -> None:
     original = Image.new("RGB", (800, 600), (230, 20, 20))
     window_mask = Image.new("RGBA", original.size, (255, 255, 255, 0))
     ImageDraw.Draw(window_mask).rectangle((200, 80, 620, 280), fill="white")
@@ -1018,8 +1018,8 @@ def test_window_background_reports_suspicious_protected_overlap() -> None:
     )
 
     assert isinstance(result, WindowCompositionResult)
-    assert result.quality_review_required is True
-    assert "geschützte Innenraumbereiche" in result.quality_review_reason
+    assert result.quality_review_required is False
+    assert result.quality_review_reason is None
 
 
 def test_interior_mask_preserves_original_position_and_only_replaces_windows() -> None:

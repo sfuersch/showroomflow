@@ -1435,101 +1435,11 @@ def compose_background_through_windows(
         window_alpha = window_mask.getchannel("A")
         if window_alpha.size != original.size:
             window_alpha = window_alpha.resize(original.size, Image.Resampling.LANCZOS)
-        automatic_window_alpha = window_alpha.copy()
-
-        # The open driver's door leaves a small side-window opening at the
-        # upper-left edge of this guided orientation. Text-guided segmentation
-        # misses it regularly because it touches the image boundary, so add a
-        # conservative calibrated glass area without reaching the A-pillar.
-        driver_window_alpha = Image.new("L", original.size, 0)
-        ImageDraw.Draw(driver_window_alpha).polygon(
-            [
-                (round(original.width * x), round(original.height * y))
-                for x, y in (
-                    (0.0, 0.0),
-                    (0.041, 0.0),
-                    (0.042, 0.04),
-                    (0.043, 0.10),
-                    (0.045, 0.16),
-                    (0.047, 0.22),
-                    (0.047, 0.235),
-                    (0.0, 0.235),
-                )
-            ],
-            fill=255,
-        )
-        driver_window_alpha = driver_window_alpha.filter(
-            ImageFilter.GaussianBlur(max(1, round(max(original.size) * 0.0008)))
-        )
-        window_alpha = ImageChops.lighter(window_alpha, driver_window_alpha)
-
-        # This orientation is captured with a guided, stable composition. A
-        # smooth calibrated protection zone is therefore more reliable than a
-        # second semantic mask, which can fragment dark, unlit instrument
-        # clusters. Only glass outside this zone may be replaced.
-        protected_alpha = Image.new("L", original.size, 0)
-        ImageDraw.Draw(protected_alpha).polygon(
-            [
-                (round(original.width * x), round(original.height * y))
-                for x, y in (
-                    (0.30, 0.22),
-                    (0.36, 0.18),
-                    (0.66, 0.18),
-                    (0.74, 0.24),
-                    (0.75, 0.38),
-                    (0.70, 0.43),
-                    (0.32, 0.43),
-                    (0.28, 0.36),
-                    (0.28, 0.27),
-                )
-            ],
-            fill=255,
-        )
-        protected_alpha = protected_alpha.filter(
-            ImageFilter.GaussianBlur(max(2, round(max(original.size) * 0.0025)))
-        )
-
-        # Keep a separate, almost hard mask for the door frame and A-pillar.
-        # Combining it only after the softer cluster protection prevents the
-        # two blurred masks from creating a bright mixed seam at the edge.
-        a_pillar_alpha = Image.new("L", original.size, 0)
-        ImageDraw.Draw(a_pillar_alpha).polygon(
-            [
-                (round(original.width * x), round(original.height * y))
-                for x, y in (
-                    (0.038, 0.0),
-                    (0.060, 0.0),
-                    (0.125, 0.25),
-                    (0.065, 0.27),
-                    (0.044, 0.235),
-                    (0.043, 0.16),
-                    (0.041, 0.10),
-                    (0.040, 0.04),
-                )
-            ],
-            fill=255,
-        )
-        a_pillar_expansion = max(3, round(max(original.size) * 0.0025))
-        if a_pillar_expansion % 2 == 0:
-            a_pillar_expansion += 1
-        a_pillar_alpha = a_pillar_alpha.filter(
-            ImageFilter.MaxFilter(a_pillar_expansion)
-        ).filter(ImageFilter.GaussianBlur(1))
-        protected_alpha = ImageChops.lighter(
-            protected_alpha,
-            a_pillar_alpha,
-        )
-
-        # The service returns alpha=255 for selected glass. Subtract protected
-        # foreground before compositing so the dashboard cannot be cut away.
-        protected_overlap = ImageChops.multiply(automatic_window_alpha, protected_alpha)
-        protected_overlap_fraction = sum(protected_overlap.histogram()[16:]) / (
-            protected_overlap.width * protected_overlap.height
-        )
-        replacement_alpha = ImageChops.multiply(
-            window_alpha,
-            ImageOps.invert(protected_alpha),
-        )
+        # The mask returned by OpenAI, or corrected by an operator, is the
+        # authoritative selection. Do not add or subtract calibrated regions
+        # here: otherwise the final image can differ from the mask shown in the
+        # quality editor.
+        replacement_alpha = window_alpha
 
         histogram = replacement_alpha.histogram()
         selected_fraction = sum(histogram[16:]) / (
@@ -1591,10 +1501,6 @@ def compose_background_through_windows(
     canvas.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
     content = output.getvalue()
     quality_reasons: list[str] = []
-    if protected_overlap_fraction >= 0.008:
-        quality_reasons.append(
-            "Die automatische Scheibenerkennung berührt geschützte Innenraumbereiche."
-        )
     if selected_fraction < 0.04:
         quality_reasons.append("Die erkannte Scheibenfläche ist ungewöhnlich klein.")
     elif selected_fraction > 0.55:
