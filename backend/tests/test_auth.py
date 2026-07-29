@@ -1141,12 +1141,12 @@ def test_admin_adds_brand_and_standard_capture_sequence() -> None:
     assert brand_response.status_code == 200
     assert "Volkswagen" in brand_response.text
     assert defaults_response.status_code == 200
-    assert "36 Standard-Fotopositionen wurden ergänzt" in defaults_response.text
+    assert "37 Standard-Fotopositionen wurden ergänzt" in defaults_response.text
     with TestingSession() as db:
         brands = list(db.scalars(select(Brand)))
         steps = list(db.scalars(select(CaptureStep).order_by(CaptureStep.capture_order)))
         assert [brand.name for brand in brands] == ["Volkswagen"]
-        assert len(steps) == 36
+        assert len(steps) == 37
         assert steps[0].name == "Vorne"
         assert steps[0].requires_processing is True
         steering_wheel = db.scalar(

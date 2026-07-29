@@ -68,7 +68,13 @@ from app.orientations import (
     instance_name,
     mask_prompt_defaults,
 )
-from app.processing import ImageProcessingError, measure_vehicle_frame
+from app.processing import (
+    DEFAULT_OPENAI_MASK_PROMPT_TEMPLATE,
+    OPENAI_MASK_PROTECTION_TOKEN,
+    OPENAI_MASK_PROMPT_TOKEN,
+    ImageProcessingError,
+    measure_vehicle_frame,
+)
 from app.processing_queue import (
     ProcessingQueueUnavailable,
     enqueue_export_transfer,
@@ -1138,6 +1144,10 @@ def image_service_page(request: Request, db: Session = Depends(get_db)):
             request,
             admin,
             image_settings=image_settings,
+            openai_mask_prompt_template=(
+                image_settings.openai_mask_prompt_template
+                or DEFAULT_OPENAI_MASK_PROMPT_TEMPLATE
+            ),
             provider_available=provider_is_available(image_settings, runtime),
             remove_bg_key_configured=bool(runtime.remove_bg_api_key),
             photoroom_live_key_configured=bool(
@@ -1169,6 +1179,7 @@ def update_image_service(
     default_monthly_vehicle_credits: int = Form(),
     photoroom_sandbox: str | None = Form(default=None),
     comparison_mode_enabled: str | None = Form(default=None),
+    openai_mask_prompt_template: str | None = Form(default=None),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
 ):
@@ -1178,21 +1189,36 @@ def update_image_service(
     _validate_csrf(request, csrf_token)
     if admin.role != UserRole.SYSTEM_ADMIN:
         raise HTTPException(status_code=403, detail="Keine Berechtigung")
+    image_settings = get_image_settings(db)
+    prompt_template = (
+        openai_mask_prompt_template.strip()
+        if openai_mask_prompt_template is not None
+        else (
+            image_settings.openai_mask_prompt_template
+            or DEFAULT_OPENAI_MASK_PROMPT_TEMPLATE
+        )
+    )
     if (
         provider not in IMAGE_PROVIDERS
         or not 0 <= default_monthly_vehicle_credits <= 10000
+        or not prompt_template
+        or len(prompt_template) > 12000
+        or OPENAI_MASK_PROMPT_TOKEN not in prompt_template
+        or OPENAI_MASK_PROTECTION_TOKEN not in prompt_template
     ):
         _flash(
             request,
-            "Bitte prüfen Sie Bilddienstleister, Standardkontingent und Konturautomatik.",
+            "Bitte prüfen Sie Bilddienstleister, Standardkontingent und Standard-Prompt. "
+            f"Der Prompt muss {OPENAI_MASK_PROMPT_TOKEN} und "
+            f"{OPENAI_MASK_PROTECTION_TOKEN} enthalten.",
             "error",
         )
     else:
-        image_settings = get_image_settings(db)
         image_settings.provider = provider
         image_settings.photoroom_sandbox = photoroom_sandbox == "on"
         image_settings.comparison_mode_enabled = comparison_mode_enabled == "on"
         image_settings.default_monthly_vehicle_credits = default_monthly_vehicle_credits
+        image_settings.openai_mask_prompt_template = prompt_template
         db.commit()
         if provider_is_available(image_settings, get_settings()) or provider == "disabled":
             _flash(request, "Bilddienstleister-Einstellungen wurden gespeichert.")

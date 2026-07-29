@@ -1115,6 +1115,26 @@ def test_openai_semantic_mask_prompt_mattes_only_reflective_mirror_glass() -> No
     assert "never its reflective glass surface" in prompt
 
 
+def test_openai_semantic_mask_prompt_uses_editable_template_placeholders() -> None:
+    profile = masked_background_profile(
+        "steering-wheel",
+        "window_background",
+        custom_prompt="select this exact exterior",
+        custom_negative_prompt="preserve this exact trim",
+    )
+
+    prompt = openai_semantic_mask_prompt(
+        profile,
+        "MASK=[[MASKENPROMPT]]\nPROTECT=[[SCHUTZPROMPT]]",
+    )
+
+    assert "MASK=select this exact exterior" in prompt
+    assert "PROTECT=" in prompt
+    assert "preserve this exact trim" in prompt
+    assert "[[MASKENPROMPT]]" not in prompt
+    assert "[[SCHUTZPROMPT]]" not in prompt
+
+
 def test_text_guided_cutout_omits_incompatible_hd_header(monkeypatch) -> None:
     original = image_bytes(Image.new("RGB", (800, 600), "navy"), "JPEG")
     cutout = image_bytes(Image.new("RGBA", (800, 600), (20, 30, 40, 255)), "PNG")

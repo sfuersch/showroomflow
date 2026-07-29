@@ -40,6 +40,50 @@ def test_zip_uses_continuous_vin_filenames_and_normalized_images() -> None:
         assert exported.size == (1920, 1440)
 
 
+def test_zip_marks_360_interior_and_preserves_panorama_dimensions() -> None:
+    storage = MemoryStorage({"panorama": image_bytes("navy", size=(2048, 1024))})
+    items = [
+        ExportItem(
+            6,
+            "360° Innenaufnahme",
+            "panorama",
+            filename_marker="i",
+            preserve_dimensions=True,
+        )
+    ]
+
+    archive = build_zip_bytes("WFO123", items, storage, Settings())
+
+    with zipfile.ZipFile(io.BytesIO(archive)) as zip_file:
+        assert zip_file.namelist() == ["WFO123_i01.jpg"]
+        exported = Image.open(io.BytesIO(zip_file.read("WFO123_i01.jpg")))
+        assert exported.size == (2048, 1024)
+
+
+def test_360_marker_keeps_continuous_final_export_position() -> None:
+    storage = MemoryStorage(
+        {
+            "front": image_bytes("red"),
+            "panorama": image_bytes("navy", size=(2048, 1024)),
+        }
+    )
+    items = [
+        ExportItem(1, "Front", "front"),
+        ExportItem(
+            2,
+            "360° Innenaufnahme",
+            "panorama",
+            filename_marker="i",
+            preserve_dimensions=True,
+        ),
+    ]
+
+    archive = build_zip_bytes("WFO123", items, storage, Settings())
+
+    with zipfile.ZipFile(io.BytesIO(archive)) as zip_file:
+        assert zip_file.namelist() == ["WFO123_01.jpg", "WFO123_i02.jpg"]
+
+
 def test_duplicate_export_slot_is_rejected_with_both_names() -> None:
     with pytest.raises(ExportValidationError, match="Front und Werbung"):
         validate_export_items([ExportItem(5, "Front", "front"), ExportItem(5, "Werbung", "ad")])

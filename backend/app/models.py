@@ -543,6 +543,7 @@ class SystemImageSettings(Timestamped, Base):
     contour_target_area_percent: Mapped[int] = mapped_column(Integer, default=36)
     contour_max_width_percent: Mapped[int] = mapped_column(Integer, default=78)
     contour_max_height_percent: Mapped[int] = mapped_column(Integer, default=72)
+    openai_mask_prompt_template: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class VehicleCreditUsage(Base):
