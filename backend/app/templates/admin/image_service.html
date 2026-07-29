@@ -33,6 +33,10 @@
             <input type="checkbox" name="comparison_mode_enabled" {% if image_settings.comparison_mode_enabled %}checked{% endif %}>
             <span><strong>Bildvergleiche aktivieren</strong><small>Zeigt zusätzliche Testvarianten in der Auftragsansicht. Bei Deaktivierung ist nur die reguläre Verarbeitung verfügbar.</small></span>
         </label>
+        <label class="span-2">Standard-Prompt für OpenAI-Masken
+            <textarea name="openai_mask_prompt_template" rows="18" maxlength="12000" required spellcheck="false">{{ openai_mask_prompt_template }}</textarea>
+            <small>Der Prompt gilt systemweit. <code>[[MASKENPROMPT]]</code> wird durch die Auswahlbeschreibung der Orientierung ersetzt, <code>[[SCHUTZPROMPT]]</code> durch deren Schutzbeschreibung. Beide Platzhalter müssen enthalten bleiben.</small>
+        </label>
         {% if image_settings.photoroom_sandbox and not photoroom_sandbox_key_configured %}<p class="muted span-2">Der Sandbox-Modus ist aktiv, aber es ist kein Sandbox-Schlüssel auf dem VPS hinterlegt.</p>{% elif not image_settings.photoroom_sandbox and not photoroom_live_key_configured %}<p class="muted span-2">Der Live-Modus ist aktiv, aber es ist kein Live-Schlüssel auf dem VPS hinterlegt.</p>{% endif %}
         <div class="form-actions span-2"><button class="button button-primary" type="submit">Grundeinstellungen speichern</button></div>
     </form>

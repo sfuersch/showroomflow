@@ -175,6 +175,14 @@ STANDARD_ORIENTATIONS = [
         "window_background",
     ),
     StandardOrientation(
+        "interior-360",
+        "360° Innenaufnahme",
+        "Ein bereits aufgenommenes 360°-Innenraumpanorama aus der Fotomediathek auswählen.",
+        "interior",
+        "original",
+        required=False,
+    ),
+    StandardOrientation(
         "instruments",
         "Instrumente",
         "Instrumente vollständig, gerade und scharf aufnehmen.",
@@ -363,7 +371,7 @@ STANDARD_ORIENTATION_KEYS = frozenset(item.key for item in STANDARD_ORIENTATIONS
 
 
 def default_silhouette_path(key: str | None) -> str | None:
-    if key not in STANDARD_ORIENTATION_KEYS:
+    if key not in STANDARD_ORIENTATION_KEYS or key == "interior-360":
         return None
     return f"/orientation-guides/{key}.png"
 

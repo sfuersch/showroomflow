@@ -212,9 +212,9 @@ class MaskedBackgroundProfile:
     steering_wheel_protection: bool = False
 
 
-def openai_semantic_mask_prompt(profile: MaskedBackgroundProfile) -> str:
-    """Build the visual annotation prompt used for deterministic local extraction."""
-    return f"""
+OPENAI_MASK_PROMPT_TOKEN = "[[MASKENPROMPT]]"
+OPENAI_MASK_PROTECTION_TOKEN = "[[SCHUTZPROMPT]]"
+DEFAULT_OPENAI_MASK_PROMPT_TEMPLATE = f"""
 Create a pixel-aligned annotation of this exact photograph. Preserve the original
 resolution, crop, perspective and every image detail. Do not move, redraw, retouch,
 brighten or replace anything.
@@ -223,7 +223,7 @@ Paint only the regions described below with a flat, fully opaque, uniform pure m
 #FF00FF overlay. The magenta overlay is a technical segmentation label, not a realistic
 edit. Every pixel outside the selected regions must remain identical to the input.
 
-SELECT: {profile.prompt}. Select only the exterior environment visible through glass
+SELECT: {OPENAI_MASK_PROMPT_TOKEN}. Select only the exterior environment visible through glass
 or through a physical vehicle opening. Include every disconnected matching region,
 including small side-window and door-opening regions at an image edge.
 
@@ -234,7 +234,7 @@ mirror housing, frame, mount or stalk. If the protection text below mentions a m
 that protection applies only to its housing, frame, mount and stalk, never its
 reflective glass surface.
 
-NEVER SELECT: {profile.negative_prompt}. Also preserve all vehicle structure and
+NEVER SELECT: {OPENAI_MASK_PROTECTION_TOKEN}. Also preserve all vehicle structure and
 interior components, including A/B/C pillars, roof liner, dashboard, instrument
 cluster, steering wheel, seats, door panels, mirror housings, mirror frames, mirror
 mounts, mirror stalks, window seals, frames, screens, controls and trim. Preserve
@@ -244,6 +244,21 @@ the glass, not the surrounding vehicle parts.
 Return the annotated photograph only. Do not add text, legends, outlines or new
 objects.
 """.strip()
+
+
+def openai_semantic_mask_prompt(
+    profile: MaskedBackgroundProfile,
+    template: str | None = None,
+) -> str:
+    """Build the visual annotation prompt from the editable system template."""
+    selected_template = (template or "").strip() or DEFAULT_OPENAI_MASK_PROMPT_TEMPLATE
+    return selected_template.replace(
+        OPENAI_MASK_PROMPT_TOKEN,
+        profile.prompt,
+    ).replace(
+        OPENAI_MASK_PROTECTION_TOKEN,
+        profile.negative_prompt,
+    )
 
 
 def _openai_mask_working_image(original_bytes: bytes) -> tuple[bytes, tuple[int, int]]:
@@ -330,6 +345,7 @@ def create_openai_semantic_mask(
     settings: Settings,
     profile: MaskedBackgroundProfile,
     *,
+    prompt_template: str | None = None,
     client: httpx.Client | None = None,
     usage_context: ExternalApiUsageContext | None = None,
 ) -> bytes:
@@ -348,7 +364,7 @@ def create_openai_semantic_mask(
             files={"image": ("source.png", working_bytes, "image/png")},
             data={
                 "model": settings.openai_mask_model,
-                "prompt": openai_semantic_mask_prompt(profile),
+                "prompt": openai_semantic_mask_prompt(profile, prompt_template),
                 "size": f"{working_size[0]}x{working_size[1]}",
                 "quality": "high",
                 "output_format": "png",
@@ -1008,6 +1024,7 @@ def create_automatic_background_mask(
     profile: MaskedBackgroundProfile,
     *,
     photoroom_sandbox: bool,
+    prompt_template: str | None = None,
     client: httpx.Client | None = None,
     usage_context: ExternalApiUsageContext | None = None,
 ) -> tuple[bytes, bool]:
@@ -1019,6 +1036,7 @@ def create_automatic_background_mask(
                     original_bytes,
                     settings,
                     profile,
+                    prompt_template=prompt_template,
                     client=client,
                     usage_context=usage_context,
                 ),
@@ -2265,6 +2283,7 @@ def process_photo(photo_id: str) -> None:
                         photoroom_sandbox=photoroom_sandbox_active(
                             image_settings, settings
                         ),
+                        prompt_template=image_settings.openai_mask_prompt_template,
                         usage_context=usage_context,
                     )
                     mask_key = (
@@ -2796,6 +2815,7 @@ def process_photo_variant(photo_id: str, provider: str) -> None:
                         photoroom_sandbox=photoroom_sandbox_active(
                             image_settings, settings
                         ),
+                        prompt_template=image_settings.openai_mask_prompt_template,
                         usage_context=usage_context,
                     )
                 compose_mask = (

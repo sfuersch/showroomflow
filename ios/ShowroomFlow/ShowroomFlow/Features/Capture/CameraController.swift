@@ -17,6 +17,14 @@ struct CameraCaptureMetadata: Codable, Equatable {
         case fieldOfViewDegrees = "field_of_view_degrees"
         case motionAvailable = "motion_available"
     }
+
+    static let libraryImport = CameraCaptureMetadata(
+        horizonAngleDegrees: 0,
+        verticalAngleDegrees: 0,
+        yawAngleDegrees: 0,
+        fieldOfViewDegrees: 0,
+        motionAvailable: false
+    )
 }
 
 struct CapturedCameraPhoto {

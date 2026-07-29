@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -13,6 +14,7 @@ struct CaptureFlowView: View {
     @State private var isCompletingCapture = false
     @State private var showCompletionConfirmation = false
     @State private var isRetakingExistingPhoto = false
+    @State private var selectedLibraryItem: PhotosPickerItem?
     @State private var errorMessage: String?
 
     let job: VehicleJob
@@ -48,6 +50,10 @@ struct CaptureFlowView: View {
             .toolbar(.hidden, for: .navigationBar)
         }
         .task { await prepare() }
+        .onChange(of: selectedLibraryItem) { _, item in
+            guard let item else { return }
+            Task { await importLibraryPhoto(item) }
+        }
         .onDisappear { camera.stop() }
         .confirmationDialog(
             "Aufnahme abschließen?",
@@ -150,6 +156,16 @@ struct CaptureFlowView: View {
                 } else if let photo = existingPhoto(for: step.id),
                           !isRetakingExistingPhoto {
                     existingPhotoView(photo, width: width, height: height)
+                } else if step.orientationKey == "interior-360" {
+                    ContentUnavailableView(
+                        "360°-Innenaufnahme",
+                        systemImage: "pano",
+                        description: Text(
+                            "Wählen Sie das bereits aufgenommene Panorama "
+                                + "über die Schaltfläche rechts aus."
+                        )
+                    )
+                    .foregroundStyle(.white)
                 } else if camera.isReady {
                     CameraPreview(
                         session: camera.session,
@@ -337,6 +353,26 @@ struct CaptureFlowView: View {
                         .allowsHitTesting(false)
                 }
             }
+        } else if step.orientationKey == "interior-360" {
+            PhotosPicker(
+                selection: $selectedLibraryItem,
+                matching: .images,
+                photoLibrary: .shared()
+            ) {
+                if isCapturing {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    railButtonLabel(
+                        "360°-Bild auswählen",
+                        systemImage: "photo.on.rectangle.angled"
+                    )
+                }
+            }
+            .foregroundStyle(.mint)
+            .disabled(isCapturing || isUploading)
+            .accessibilityLabel("360-Grad-Innenaufnahme aus der Fotomediathek auswählen")
         } else {
             VehicleSilhouetteGuide(stepName: step.name)
                 .allowsHitTesting(false)
@@ -607,6 +643,55 @@ struct CaptureFlowView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    @MainActor
+    private func importLibraryPhoto(_ item: PhotosPickerItem) async {
+        isCapturing = true
+        errorMessage = nil
+        defer {
+            isCapturing = false
+            selectedLibraryItem = nil
+        }
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let sourceImage = UIImage(data: data),
+                  let jpegData = normalizedJPEGData(sourceImage)
+            else {
+                throw NSError(
+                    domain: "ShowroomFlow.PhotoLibrary",
+                    code: 1,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "Das ausgewählte 360°-Bild konnte nicht gelesen werden."
+                    ]
+                )
+            }
+            pendingPhoto = CapturedCameraPhoto(
+                data: jpegData,
+                metadata: .libraryImport
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func normalizedJPEGData(_ image: UIImage) -> Data? {
+        let pixelSize = CGSize(
+            width: image.size.width * image.scale,
+            height: image.size.height * image.scale
+        )
+        guard pixelSize.width > 0, pixelSize.height > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let normalizedImage = UIGraphicsImageRenderer(
+            size: pixelSize,
+            format: format
+        ).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: pixelSize))
+        }
+        return normalizedImage.jpegData(compressionQuality: 0.94)
     }
 
     private func usePhoto(_ photo: CapturedCameraPhoto, step: ConfiguredCaptureStep) async {

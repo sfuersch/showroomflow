@@ -19,6 +19,7 @@ from app.models import (
     DealershipSftpSettings,
     ExportRun,
     JobStatus,
+    Orientation,
     PhotoAsset,
     ProcessingStatus,
     SupplementalImage,
@@ -36,6 +37,8 @@ class ExportItem:
     order: int
     name: str
     object_key: str
+    filename_marker: str = ""
+    preserve_dimensions: bool = False
 
 
 def safe_vin(value: str) -> str:
@@ -91,7 +94,13 @@ def arrange_export_items(
         arranged.insert(index, item)
 
     return [
-        ExportItem(position, item.name, item.object_key)
+        ExportItem(
+            position,
+            item.name,
+            item.object_key,
+            item.filename_marker,
+            item.preserve_dimensions,
+        )
         for position, item in enumerate(arranged, start=1)
     ]
 
@@ -99,8 +108,9 @@ def arrange_export_items(
 def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
     rows = list(
         db.execute(
-            select(PhotoAsset, CaptureStep)
+            select(PhotoAsset, CaptureStep, Orientation.key)
             .join(CaptureStep, CaptureStep.id == PhotoAsset.capture_step_id)
+            .outerjoin(Orientation, Orientation.id == CaptureStep.orientation_id)
             .where(
                 PhotoAsset.vehicle_job_id == job.id,
                 PhotoAsset.is_selected.is_(True),
@@ -123,7 +133,7 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
     )
 
     photo_items: list[ExportItem] = []
-    for photo, step in rows:
+    for photo, step, orientation_key in rows:
         if photo.quality_review_required:
             raise ExportValidationError(
                 f'Fotoposition "{step.name}" wartet auf die interne Qualitätsfreigabe.'
@@ -141,7 +151,16 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
             object_key = photo.processed_object_key
         else:
             object_key = photo.original_object_key
-        photo_items.append(ExportItem(int(step.export_order), step.name, object_key))
+        is_360_interior = orientation_key == "interior-360"
+        photo_items.append(
+            ExportItem(
+                int(step.export_order),
+                step.name,
+                object_key,
+                filename_marker="i" if is_360_interior else "",
+                preserve_dimensions=is_360_interior,
+            )
+        )
 
     supplemental_items = [
         ExportItem(item.export_order, item.name, item.object_key)
@@ -151,16 +170,22 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
     return arrange_export_items(photo_items, supplemental_items)
 
 
-def normalize_export_jpeg(content: bytes, settings: Settings) -> bytes:
+def normalize_export_jpeg(
+    content: bytes,
+    settings: Settings,
+    *,
+    preserve_dimensions: bool = False,
+) -> bytes:
     try:
         image = ImageOps.exif_transpose(Image.open(io.BytesIO(content))).convert("RGB")
     except (OSError, ValueError) as exc:
         raise ExportValidationError("Ein Exportbild ist beschädigt oder ungültig.") from exc
-    image = ImageOps.fit(
-        image,
-        (settings.output_width, settings.output_height),
-        method=Image.Resampling.LANCZOS,
-    )
+    if not preserve_dimensions:
+        image = ImageOps.fit(
+            image,
+            (settings.output_width, settings.output_height),
+            method=Image.Resampling.LANCZOS,
+        )
     output = io.BytesIO()
     image.save(output, format="JPEG", quality=92, optimize=True)
     return output.getvalue()
@@ -178,8 +203,12 @@ def build_zip_bytes(
         for position, item in enumerate(validate_export_items(items), start=1):
             content = storage.get_object(object_key=item.object_key)
             zip_file.writestr(
-                f"{filename_prefix}_{position:02d}.jpg",
-                normalize_export_jpeg(content, settings),
+                f"{filename_prefix}_{item.filename_marker}{position:02d}.jpg",
+                normalize_export_jpeg(
+                    content,
+                    settings,
+                    preserve_dimensions=item.preserve_dimensions,
+                ),
             )
     return archive.getvalue()
 
