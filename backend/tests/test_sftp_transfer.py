@@ -12,13 +12,16 @@ from app.sftp_transfer import (
     decrypt_password,
     encrypt_password,
     fetch_host_key_fingerprint,
+    fetch_tls_certificate_fingerprint,
     ftps_connection,
     key_fingerprint,
     normalize_filename_template,
     normalize_fingerprint,
     normalize_protocol,
     normalize_remote_directory,
+    normalize_tls_certificate_fingerprint,
     render_filename,
+    tls_certificate_fingerprint,
     upload_archive,
     validate_settings,
 )
@@ -123,6 +126,56 @@ def test_ftps_configuration_does_not_require_ssh_fingerprint() -> None:
     assert validate_settings(config, runtime) == "secret"
 
 
+def test_tls_certificate_fingerprint_is_normalized() -> None:
+    raw = "ab" * 32
+
+    assert normalize_tls_certificate_fingerprint(raw) == (
+        "SHA256:" + ":".join(["AB"] * 32)
+    )
+    assert normalize_tls_certificate_fingerprint(
+        "sha256:" + ":".join(["ab"] * 32)
+    ) == ("SHA256:" + ":".join(["AB"] * 32))
+    assert tls_certificate_fingerprint(b"certificate") == (
+        normalize_tls_certificate_fingerprint(
+            "03d66dd08835c1ca3f128cceacd1f31ac94163096b20f445ae84285bc0832d72"
+        )
+    )
+
+    with pytest.raises(SftpConfigurationError):
+        normalize_tls_certificate_fingerprint("not-a-fingerprint")
+
+
+def test_ftps_certificate_can_be_fetched_without_ca_trust(monkeypatch) -> None:
+    certificate = b"self-signed-certificate"
+
+    class FakeTlsSocket:
+        def getpeercert(self, *, binary_form: bool):
+            assert binary_form is True
+            return certificate
+
+    class FakeFtps:
+        def __init__(self, *, context, timeout) -> None:
+            assert context.check_hostname is False
+            assert context.verify_mode == 0
+            assert timeout == 30
+            self.sock = FakeTlsSocket()
+
+        def connect(self, host: str, port: int, *, timeout: int) -> None:
+            assert (host, port, timeout) == ("ftp.example.de", 21, 15)
+
+        def auth(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.sftp_transfer.ftplib.FTP_TLS", FakeFtps)
+
+    assert fetch_tls_certificate_fingerprint(
+        "ftp.example.de", 21
+    ) == tls_certificate_fingerprint(certificate)
+
+
 def test_ftps_connection_enables_tls_for_control_and_data_channels(monkeypatch) -> None:
     runtime = Settings(secret_key="s" * 64)
     config = DealershipSftpSettings(
@@ -175,6 +228,65 @@ def test_ftps_connection_enables_tls_for_control_and_data_channels(monkeypatch) 
         ("yield",),
         ("quit",),
     ]
+
+
+def test_ftps_connection_accepts_only_the_pinned_self_signed_certificate(
+    monkeypatch,
+) -> None:
+    runtime = Settings(secret_key="s" * 64)
+    certificate = b"self-signed-certificate"
+    config = DealershipSftpSettings(
+        protocol="ftps",
+        host="ftp.example.de",
+        port=21,
+        username="showroomflow",
+        password_encrypted=encrypt_password("secret", runtime),
+        remote_directory="/",
+        tls_certificate_fingerprint=tls_certificate_fingerprint(certificate),
+    )
+    calls: list[tuple] = []
+
+    class FakeTlsSocket:
+        def getpeercert(self, *, binary_form: bool):
+            assert binary_form is True
+            calls.append(("certificate",))
+            return certificate
+
+    class FakeFtps:
+        def __init__(self, *, context, timeout) -> None:
+            calls.append(("init", context.check_hostname, context.verify_mode, timeout))
+            self.sock = FakeTlsSocket()
+
+        def connect(self, host: str, port: int, *, timeout: int) -> None:
+            calls.append(("connect", host, port, timeout))
+
+        def auth(self) -> None:
+            calls.append(("auth",))
+
+        def login(self, username: str, password: str) -> None:
+            calls.append(("login", username, password))
+
+        def prot_p(self) -> None:
+            calls.append(("prot_p",))
+
+        def set_pasv(self, enabled: bool) -> None:
+            calls.append(("set_pasv", enabled))
+
+        def quit(self) -> None:
+            calls.append(("quit",))
+
+        def close(self) -> None:
+            calls.append(("close",))
+
+    monkeypatch.setattr("app.sftp_transfer.ftplib.FTP_TLS", FakeFtps)
+
+    with ftps_connection(config, runtime):
+        calls.append(("yield",))
+
+    assert calls.index(("certificate",)) < calls.index(
+        ("login", "showroomflow", "secret")
+    )
+    assert ("init", False, 0, 30) in calls
 
 
 def test_upload_archive_uses_temporary_file_and_atomic_rename(monkeypatch) -> None:

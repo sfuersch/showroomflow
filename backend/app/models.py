@@ -90,6 +90,7 @@ class DealershipSftpSettings(Timestamped, Base):
     remote_directory: Mapped[str] = mapped_column(String(500), default="/")
     filename_template: Mapped[str] = mapped_column(String(255), default="<VIN>.zip")
     host_key_fingerprint: Mapped[str] = mapped_column(String(128), default="")
+    tls_certificate_fingerprint: Mapped[str] = mapped_column(String(128), default="")
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_test_successful: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

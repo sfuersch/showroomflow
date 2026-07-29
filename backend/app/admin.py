@@ -82,10 +82,12 @@ from app.sftp_transfer import (
     SftpConfigurationError,
     encrypt_password,
     fetch_host_key_fingerprint,
+    fetch_tls_certificate_fingerprint,
     normalize_filename_template,
     normalize_fingerprint,
     normalize_protocol,
     normalize_remote_directory,
+    normalize_tls_certificate_fingerprint,
     test_transfer_connection,
     validate_settings as validate_sftp_settings,
 )
@@ -1567,6 +1569,7 @@ def update_dealership_sftp(
     remote_directory: str = Form(default="/"),
     filename_template: str = Form(default="<VIN>.zip"),
     host_key_fingerprint: str = Form(default=""),
+    tls_certificate_fingerprint: str = Form(default=""),
     is_enabled: str | None = Form(default=None),
     csrf_token: str = Form(),
     db: Session = Depends(get_db),
@@ -1589,6 +1592,11 @@ def update_dealership_sftp(
         config.filename_template = normalize_filename_template(filename_template)
         config.host_key_fingerprint = (
             normalize_fingerprint(host_key_fingerprint) if host_key_fingerprint.strip() else ""
+        )
+        config.tls_certificate_fingerprint = (
+            normalize_tls_certificate_fingerprint(tls_certificate_fingerprint)
+            if tls_certificate_fingerprint.strip()
+            else ""
         )
         if password:
             config.password_encrypted = encrypt_password(password, get_settings())
@@ -1658,13 +1666,7 @@ def fetch_dealership_sftp_fingerprint(
     config = db.get(DealershipSftpSettings, dealership.id)
     if config is None or not config.host.strip():
         _flash(request, "Bitte speichern Sie zuerst Server und Port.", "error")
-    elif normalize_protocol(config.protocol) != "sftp":
-        _flash(
-            request,
-            "Ein SSH-Hostschlüssel wird nur für SFTP benötigt. FTPS prüft das TLS-Zertifikat.",
-            "error",
-        )
-    else:
+    elif normalize_protocol(config.protocol) == "sftp":
         try:
             fingerprint = fetch_host_key_fingerprint(config.host, config.port)
         except Exception as exc:
@@ -1675,6 +1677,21 @@ def fetch_dealership_sftp_fingerprint(
             config.last_test_error = None
             db.commit()
             _flash(request, f"Hostschlüssel wurde abgerufen: {fingerprint}")
+    else:
+        try:
+            fingerprint = fetch_tls_certificate_fingerprint(config.host, config.port)
+        except Exception as exc:
+            _flash(request, str(exc), "error")
+        else:
+            config.tls_certificate_fingerprint = fingerprint
+            config.last_test_successful = None
+            config.last_test_error = None
+            db.commit()
+            _flash(
+                request,
+                "TLS-Zertifikat wurde abgerufen. Vergleichen Sie den Fingerabdruck "
+                f"nach Möglichkeit mit dem Anbieter: {fingerprint}",
+            )
     return RedirectResponse(
         f"/admin/dealerships/{dealership.id}#sftp", status_code=status.HTTP_303_SEE_OTHER
     )
