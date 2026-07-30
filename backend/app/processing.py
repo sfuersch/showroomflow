@@ -120,6 +120,7 @@ class CompositionOptions:
     vehicle_offset_x_percent: int = 0
     vehicle_offset_y_percent: int = 0
     manual_source_framing: bool = False
+    preserve_source_framing: bool = False
 
 
 @dataclass(frozen=True)
@@ -1666,14 +1667,22 @@ def compose_showroom(
         contour,
         options.orientation_key,
     )
-    options = perspective_composition_options(options, contour)
-    scene_adjustment = calculate_scene_adjustment(options)
-    options = replace(
-        options,
-        contour_target_area_percent=round(
-            options.contour_target_area_percent * scene_adjustment.scale_multiplier**2
-        ),
-    )
+    if options.preserve_source_framing:
+        # A 360° exterior series must retain the exact framing recorded by the
+        # photographer. Only the complete source canvas is fitted to the output
+        # aspect ratio; the vehicle itself is never independently scaled,
+        # centered, or moved to a synthetic ground line.
+        scene_adjustment = SceneAdjustment()
+    else:
+        options = perspective_composition_options(options, contour)
+        scene_adjustment = calculate_scene_adjustment(options)
+        options = replace(
+            options,
+            contour_target_area_percent=round(
+                options.contour_target_area_percent
+                * scene_adjustment.scale_multiplier**2
+            ),
+        )
     if options.manual_source_framing:
         # The quality editor previews a transform of the complete source canvas.
         # Apply the exact same coordinate system here before cropping transparent
@@ -1714,6 +1723,20 @@ def compose_showroom(
         vehicle = vehicle.crop(transformed_box)
         bottom = y + vehicle.height
         scene_adjustment = SceneAdjustment()
+    elif options.preserve_source_framing:
+        vehicle = ImageOps.fit(
+            vehicle,
+            (options.width, options.height),
+            method=Image.Resampling.LANCZOS,
+        )
+        fitted_box = vehicle.getchannel("A").point(
+            lambda value: 255 if value >= 128 else 0
+        ).getbbox()
+        if fitted_box is None:
+            raise ImageProcessingError("Die Freistellung enthält kein Fahrzeug")
+        x, y = fitted_box[0], fitted_box[1]
+        vehicle = vehicle.crop(fitted_box)
+        bottom = y + vehicle.height
     else:
         framing = calculate_contour_framing(
             contour,
@@ -2213,14 +2236,20 @@ def process_photo(photo_id: str) -> None:
             original = storage.get_object(object_key=photo.original_object_key)
             background_image = storage.get_object(object_key=background.object_key)
             processing_mode = orientation.processing_mode if orientation else "optimized"
+            output_width = min(settings.output_width, 3240)
+            output_height = (
+                min(round(output_width * 2 / 3), 2160)
+                if processing_mode == "exterior_360"
+                else settings.output_height
+            )
             preview_cutout: bytes | None = None
             composed_background = background_image
             composed_background_content_type = background.content_type
             if processing_mode not in MASKED_BACKGROUND_MODES:
                 composed_background = transform_background(
                     background_image,
-                    width=settings.output_width,
-                    height=settings.output_height,
+                    width=output_width,
+                    height=output_height,
                     zoom_percent=composition.background_zoom_percent,
                     offset_x_percent=composition.background_offset_x_percent,
                     offset_y_percent=composition.background_offset_y_percent,
@@ -2380,8 +2409,8 @@ def process_photo(photo_id: str) -> None:
                     else composition.shadow_opacity_percent
                 )
                 correction_options = CompositionOptions(
-                    width=settings.output_width,
-                    height=settings.output_height,
+                    width=output_width,
+                    height=output_height,
                     contour_target_area_percent=composition.contour_target_area_percent,
                     contour_max_width_percent=composition.contour_max_width_percent,
                     contour_max_height_percent=composition.contour_max_height_percent,
@@ -2476,11 +2505,16 @@ def process_photo(photo_id: str) -> None:
                 photo.quality_reviewed_at = None
                 photo.quality_review_resolution = "awaiting_operator_approval"
             elif image_settings.provider == "photoroom":
-                preview_cutout = create_photoroom_cutout(
+                photoroom_cutout = create_photoroom_cutout(
                     original,
                     settings,
                     photoroom_sandbox_active(image_settings, settings),
                     usage_context=usage_context,
+                )
+                preview_cutout = (
+                    apply_cutout_mask_to_original(original, photoroom_cutout)
+                    if processing_mode == "exterior_360"
+                    else photoroom_cutout
                 )
                 # Photoroom supplies the high-quality vehicle mask. ShowroomFlow
                 # owns the deterministic composition so that the configured
@@ -2490,8 +2524,8 @@ def process_photo(photo_id: str) -> None:
                     composed_background,
                     preview_cutout,
                     CompositionOptions(
-                        width=settings.output_width,
-                        height=settings.output_height,
+                        width=output_width,
+                        height=output_height,
                         contour_target_area_percent=(
                             composition.contour_target_area_percent
                         ),
@@ -2518,6 +2552,7 @@ def process_photo(photo_id: str) -> None:
                         scene_perspective_strength_percent=(
                             background.scene_perspective_strength_percent
                         ),
+                        preserve_source_framing=processing_mode == "exterior_360",
                     ),
                 )
             elif image_settings.provider == "remove_bg":
@@ -2530,8 +2565,8 @@ def process_photo(photo_id: str) -> None:
                     composed_background,
                     cutout,
                     CompositionOptions(
-                        width=settings.output_width,
-                        height=settings.output_height,
+                        width=output_width,
+                        height=output_height,
                         contour_target_area_percent=composition.contour_target_area_percent,
                         contour_max_width_percent=composition.contour_max_width_percent,
                         contour_max_height_percent=composition.contour_max_height_percent,
@@ -2550,6 +2585,7 @@ def process_photo(photo_id: str) -> None:
                         scene_perspective_strength_percent=(
                             background.scene_perspective_strength_percent
                         ),
+                        preserve_source_framing=processing_mode == "exterior_360",
                     ),
                 )
             else:

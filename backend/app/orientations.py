@@ -5,10 +5,16 @@ PROCESSING_MODES = {
     "optimized",
     "window_background",
     "opening_background",
+    "exterior_360",
     "original",
     "configurable",
 }
-PROCESSING_REQUIRED_MODES = {"optimized", "window_background", "opening_background"}
+PROCESSING_REQUIRED_MODES = {
+    "optimized",
+    "window_background",
+    "opening_background",
+    "exterior_360",
+}
 MASKED_BACKGROUND_MODES = {"window_background", "opening_background"}
 ORIENTATION_CATEGORIES = {"exterior", "interior", "detail", "special"}
 WINDOW_MASK_PROMPT = "windshield, side window"
@@ -159,6 +165,20 @@ STANDARD_ORIENTATIONS = [
         "Vorderen unteren Fahrzeugbereich von rechts aufnehmen.",
         "exterior",
         "optimized",
+    ),
+    StandardOrientation(
+        "exterior-360",
+        "360° Außenaufnahme",
+        (
+            "Zwölf Außenaufnahmen auf dem angezeigten Kreis aufnehmen. "
+            "Die App führt zu Abstand, Winkel und Kamerahaltung."
+        ),
+        "exterior",
+        "exterior_360",
+        required=False,
+        repeatable=True,
+        default_instances=12,
+        max_instances=12,
     ),
     StandardOrientation(
         "driver-entry",
@@ -371,7 +391,7 @@ STANDARD_ORIENTATION_KEYS = frozenset(item.key for item in STANDARD_ORIENTATIONS
 
 
 def default_silhouette_path(key: str | None) -> str | None:
-    if key not in STANDARD_ORIENTATION_KEYS or key == "interior-360":
+    if key not in STANDARD_ORIENTATION_KEYS or key in {"interior-360", "exterior-360"}:
         return None
     return f"/orientation-guides/{key}.png"
 

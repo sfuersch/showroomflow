@@ -13,6 +13,9 @@ struct CaptureFlowView: View {
     @State private var isUploading = false
     @State private var isCompletingCapture = false
     @State private var showCompletionConfirmation = false
+    @State private var show360CameraSelection = false
+    @State private var showThetaCapture = false
+    @State private var showExterior360Capture = false
     @State private var isRetakingExistingPhoto = false
     @State private var selectedLibraryItem: PhotosPickerItem?
     @State private var errorMessage: String?
@@ -53,6 +56,42 @@ struct CaptureFlowView: View {
         .onChange(of: selectedLibraryItem) { _, item in
             guard let item else { return }
             Task { await importLibraryPhoto(item) }
+        }
+        .sheet(isPresented: $show360CameraSelection) {
+            Camera360ProviderSelectionView(
+                selectedDJIPhoto: $selectedLibraryItem
+            ) {
+                show360CameraSelection = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    showThetaCapture = true
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .fullScreenCover(isPresented: $showThetaCapture) {
+            ThetaCaptureView { data in
+                pendingPhoto = CapturedCameraPhoto(
+                    data: data,
+                    metadata: .libraryImport
+                )
+                showThetaCapture = false
+            }
+        }
+        .fullScreenCover(isPresented: $showExterior360Capture, onDismiss: {
+            Task { await resumeAfterExterior360Capture() }
+        }) {
+            if let captureSession {
+                Exterior360CaptureView(
+                    steps: captureSession.captureSteps.filter(isExterior360),
+                    completedStepIDs: Set(captureSession.photos.map(\.captureStepID))
+                ) { step, photo in
+                    let uploaded = try await uploadCapturedPhoto(job.id, step.id, photo)
+                    await MainActor.run {
+                        storeUploadedPhoto(uploaded)
+                    }
+                }
+            }
         }
         .onDisappear { camera.stop() }
         .confirmationDialog(
@@ -156,13 +195,15 @@ struct CaptureFlowView: View {
                 } else if let photo = existingPhoto(for: step.id),
                           !isRetakingExistingPhoto {
                     existingPhotoView(photo, width: width, height: height)
-                } else if step.orientationKey == "interior-360" {
+                } else if isExterior360(step) {
+                    exterior360Viewfinder
+                } else if isInterior360(step) {
                     ContentUnavailableView(
                         "360°-Innenaufnahme",
                         systemImage: "pano",
                         description: Text(
-                            "Wählen Sie das bereits aufgenommene Panorama "
-                                + "über die Schaltfläche rechts aus."
+                            "Nehmen Sie das Panorama mit einer verbundenen 360°-Kamera auf "
+                                + "oder wählen Sie ein vorhandenes 360°-Foto aus."
                         )
                     )
                     .foregroundStyle(.white)
@@ -353,26 +394,6 @@ struct CaptureFlowView: View {
                         .allowsHitTesting(false)
                 }
             }
-        } else if step.orientationKey == "interior-360" {
-            PhotosPicker(
-                selection: $selectedLibraryItem,
-                matching: .images,
-                photoLibrary: .shared()
-            ) {
-                if isCapturing {
-                    ProgressView()
-                        .tint(.white)
-                        .frame(maxWidth: .infinity)
-                } else {
-                    railButtonLabel(
-                        "360°-Bild auswählen",
-                        systemImage: "photo.on.rectangle.angled"
-                    )
-                }
-            }
-            .foregroundStyle(.mint)
-            .disabled(isCapturing || isUploading)
-            .accessibilityLabel("360-Grad-Innenaufnahme aus der Fotomediathek auswählen")
         } else {
             VehicleSilhouetteGuide(stepName: step.name)
                 .allowsHitTesting(false)
@@ -557,6 +578,8 @@ struct CaptureFlowView: View {
                 .foregroundStyle(.mint)
                 .disabled(isUploading)
             }
+        } else if isExterior360(step) {
+            exterior360Controls
         } else if existingPhoto(for: step.id) != nil && !isRetakingExistingPhoto {
             Button {
                 isRetakingExistingPhoto = true
@@ -565,6 +588,39 @@ struct CaptureFlowView: View {
                 railButtonLabel("Neu aufnehmen", systemImage: "camera.rotate")
             }
             .foregroundStyle(.mint)
+        } else if isInterior360(step) {
+            VStack(spacing: 10) {
+                Button {
+                    show360CameraSelection = true
+                } label: {
+                    railButtonLabel(
+                        "Mit 360°-Kamera aufnehmen",
+                        systemImage: "camera.aperture"
+                    )
+                }
+                .foregroundStyle(.mint)
+                .disabled(isCapturing || isUploading)
+
+                PhotosPicker(
+                    selection: $selectedLibraryItem,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    if isCapturing {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        railButtonLabel(
+                            "Foto auswählen",
+                            systemImage: "photo.on.rectangle.angled"
+                        )
+                    }
+                }
+                .foregroundStyle(.white)
+                .disabled(isCapturing || isUploading)
+                .accessibilityLabel("360-Grad-Innenaufnahme aus der Fotomediathek auswählen")
+            }
         } else {
             Button {
                 Task { await takePhoto() }
@@ -597,6 +653,48 @@ struct CaptureFlowView: View {
         }
     }
 
+    private var exterior360Viewfinder: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "circle.hexagongrid.fill")
+                .font(.system(size: 56, weight: .medium))
+                .foregroundStyle(.mint)
+            Text("360° Außenaufnahme")
+                .font(.title2.bold())
+            Text(
+                "Die App führt Sie zu 12 gleichmäßigen Positionen rund um das Fahrzeug. "
+                    + "Der Auslöser wird erst aktiv, wenn Abstand, Winkel und Höhe stimmen."
+            )
+            .font(.callout)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.white.opacity(0.78))
+            .frame(maxWidth: 460)
+        }
+        .padding(32)
+        .foregroundStyle(.white)
+    }
+
+    private var exterior360Controls: some View {
+        let exteriorSteps = captureSession?.captureSteps.filter(isExterior360) ?? []
+        let completed = exteriorSteps.filter { existingPhoto(for: $0.id) != nil }.count
+
+        return Button {
+            camera.stop()
+            showExterior360Capture = true
+        } label: {
+            railButtonLabel(
+                completed == 0
+                    ? "Rundgang starten"
+                    : "Fortsetzen \(completed)/\(exteriorSteps.count)",
+                systemImage: "circle.hexagongrid.fill"
+            )
+        }
+        .foregroundStyle(.mint)
+        .disabled(isCapturing || isUploading)
+        .accessibilityHint(
+            "Startet die geführte Aufnahme an zwölf Positionen rund um das Fahrzeug"
+        )
+    }
+
     private var completedCount: Int {
         guard let captureSession else { return 0 }
         let activeStepIDs = Set(captureSession.captureSteps.map(\.id))
@@ -617,6 +715,32 @@ struct CaptureFlowView: View {
 
     private func existingPhoto(for stepID: UUID) -> CapturedPhoto? {
         captureSession?.photos.first(where: { $0.captureStepID == stepID })
+    }
+
+    private func isInterior360(_ step: ConfiguredCaptureStep) -> Bool {
+        let normalizedKey = step.orientationKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalizedName = step.name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalizedKey == "interior-360"
+            || normalizedKey == "interior_360"
+            || normalizedName == "360° innenaufnahme"
+            || normalizedName == "360 innenaufnahme"
+    }
+
+    private func isExterior360(_ step: ConfiguredCaptureStep) -> Bool {
+        let normalizedKey = step.orientationKey?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let normalizedName = step.name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalizedKey == "exterior-360"
+            || normalizedKey == "exterior_360"
+            || normalizedName == "360° außenaufnahme"
+            || normalizedName == "360 aussenaufnahme"
     }
 
     private func prepare() async {
@@ -654,16 +778,30 @@ struct CaptureFlowView: View {
             selectedLibraryItem = nil
         }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  let sourceImage = UIImage(data: data),
-                  let jpegData = normalizedJPEGData(sourceImage)
-            else {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
                 throw NSError(
                     domain: "ShowroomFlow.PhotoLibrary",
                     code: 1,
                     userInfo: [
                         NSLocalizedDescriptionKey:
                             "Das ausgewählte 360°-Bild konnte nicht gelesen werden."
+                    ]
+                )
+            }
+
+            let jpegData: Data
+            if isJPEG(data) {
+                jpegData = data
+            } else if let sourceImage = UIImage(data: data),
+                      let normalizedData = normalizedJPEGData(sourceImage) {
+                jpegData = normalizedData
+            } else {
+                throw NSError(
+                    domain: "ShowroomFlow.PhotoLibrary",
+                    code: 2,
+                    userInfo: [
+                        NSLocalizedDescriptionKey:
+                            "Das ausgewählte 360°-Bild konnte nicht in JPEG umgewandelt werden."
                     ]
                 )
             }
@@ -674,6 +812,10 @@ struct CaptureFlowView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func isJPEG(_ data: Data) -> Bool {
+        data.count > 3 && data[0] == 0xFF && data[1] == 0xD8
     }
 
     private func normalizedJPEGData(_ image: UIImage) -> Data? {
@@ -715,6 +857,30 @@ struct CaptureFlowView: View {
         }
     }
 
+    @MainActor
+    private func storeUploadedPhoto(_ uploadedPhoto: CapturedPhoto) {
+        guard let currentSession = captureSession else { return }
+        captureSession = CaptureSession(
+            job: currentSession.job,
+            captureSteps: currentSession.captureSteps,
+            photos: currentSession.photos.filter {
+                $0.captureStepID != uploadedPhoto.captureStepID
+            } + [uploadedPhoto]
+        )
+    }
+
+    @MainActor
+    private func resumeAfterExterior360Capture() async {
+        await camera.start()
+        do {
+            let refreshedSession = try await loadCaptureSession(job.id)
+            captureSession = refreshedSession
+            moveToNextIncompleteStep(in: refreshedSession)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func finishCapture() async {
         isCompletingCapture = true
         errorMessage = nil
@@ -735,6 +901,174 @@ struct CaptureFlowView: View {
         }) {
             currentIndex = nextIndex
             isRetakingExistingPhoto = false
+        }
+    }
+}
+
+private struct ThetaCaptureView: View {
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var theta = ThetaCameraController()
+    @AppStorage("showroomflow.theta.ssid") private var ssid = ""
+    @State private var password = ""
+
+    let onCapture: (Data) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Label(
+                        theta.statusMessage,
+                        systemImage: theta.cameraInfo == nil
+                            ? "wifi"
+                            : "checkmark.circle.fill"
+                    )
+                    .foregroundStyle(theta.cameraInfo == nil ? Color.primary : Color.green)
+
+                    if let errorMessage = theta.errorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
+                } header: {
+                    Text("Kamerastatus")
+                }
+
+                Section {
+                    TextField("THETA-WLAN (SSID)", text: $ssid)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                    SecureField("WLAN-Passwort", text: $password)
+
+                    Button {
+                        Task {
+                            await theta.connectToWiFi(
+                                ssid: ssid,
+                                password: password
+                            )
+                        }
+                    } label: {
+                        Label("Mit THETA-WLAN verbinden", systemImage: "wifi")
+                    }
+                    .disabled(theta.isBusy || ssid.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                    Button {
+                        Task { await theta.checkConnection() }
+                    } label: {
+                        Label("Bestehende Verbindung prüfen", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(theta.isBusy)
+                } header: {
+                    Text("WLAN-Verbindung")
+                } footer: {
+                    Text(
+                        "Schalten Sie die THETA ein und aktivieren Sie deren WLAN. "
+                            + "Wenn das iPhone bereits mit der Kamera verbunden ist, "
+                            + "genügt „Bestehende Verbindung prüfen“."
+                    )
+                }
+
+                if theta.cameraInfo != nil {
+                    Section {
+                        ZStack {
+                            Color.black
+
+                            if let previewImage = theta.previewImage {
+                                Image(uiImage: previewImage)
+                                    .resizable()
+                                    .scaledToFit()
+                            } else if theta.isPreviewRunning {
+                                VStack(spacing: 12) {
+                                    ProgressView()
+                                        .controlSize(.large)
+                                        .tint(.white)
+                                    Text("Live-Vorschau wird geladen …")
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(.white.opacity(0.82))
+                                }
+                            } else {
+                                ContentUnavailableView {
+                                    Label(
+                                        "Keine Live-Vorschau",
+                                        systemImage: "video.slash"
+                                    )
+                                } description: {
+                                    Text(
+                                        theta.previewErrorMessage
+                                            ?? "Die Vorschau konnte nicht gestartet werden."
+                                    )
+                                } actions: {
+                                    Button("Erneut laden") {
+                                        theta.restartPreview()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
+                                .foregroundStyle(.white)
+                            }
+                        }
+                        .aspectRatio(2, contentMode: .fit)
+                        .clipShape(.rect(cornerRadius: 16))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                        }
+                        .listRowInsets(EdgeInsets())
+                        .accessibilityLabel("Live-Vorschau der Ricoh THETA")
+
+                        Button {
+                            Task {
+                                if let data = await theta.capturePhoto() {
+                                    onCapture(data)
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Spacer()
+                                if theta.isBusy {
+                                    ProgressView()
+                                } else {
+                                    Label(
+                                        "360°-Foto aufnehmen",
+                                        systemImage: "camera.aperture"
+                                    )
+                                    .font(.headline)
+                                }
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(theta.isBusy || theta.previewImage == nil)
+                    } footer: {
+                        Text(
+                            "Die Vorschau zeigt das vollständige 360°-Panorama "
+                                + "in equirektangularer Darstellung. Die THETA löst aus; "
+                                + "das vollständige 360°-JPEG wird "
+                                + "anschließend direkt in den Fahrzeugauftrag übernommen."
+                        )
+                    }
+                }
+            }
+            .navigationTitle("Ricoh THETA")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Abbrechen") { dismiss() }
+                        .disabled(theta.isBusy)
+                }
+            }
+            .overlay {
+                if theta.isBusy {
+                    ZStack {
+                        Color.black.opacity(0.12).ignoresSafeArea()
+                        ProgressView()
+                            .controlSize(.large)
+                            .padding(24)
+                            .background(.regularMaterial, in: .rect(cornerRadius: 18))
+                    }
+                }
+            }
+            .onDisappear {
+                theta.stopPreview()
+            }
         }
     }
 }

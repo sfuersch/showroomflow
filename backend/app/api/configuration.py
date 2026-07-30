@@ -112,6 +112,8 @@ def app_configuration(
                 is_required=step.is_required,
                 requires_processing=step.requires_processing,
                 silhouette_url=silhouette_url(step),
+                orientation_key=orientation_keys.get(step.orientation_id),
+                orientation_instance_index=step.orientation_instance_index,
             )
             for step in steps
         ],
