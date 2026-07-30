@@ -39,6 +39,8 @@ class ExportItem:
     object_key: str
     filename_marker: str = ""
     preserve_dimensions: bool = False
+    fixed_position: bool = False
+    filename_separator: str = "_"
 
 
 def safe_vin(value: str) -> str:
@@ -72,37 +74,43 @@ def arrange_export_items(
     photo_items: list[ExportItem],
     supplemental_items: list[ExportItem],
 ) -> list[ExportItem]:
-    """Place fixed supplemental images and fill every other slot with photos.
+    """Reserve fixed slots and fill every remaining position with normal photos.
 
-    Photo ``order`` values describe their relative order only. Supplemental image
-    orders are absolute preferred positions in the final archive. This keeps an
-    advert at its configured position while optional, missing photos simply make
-    later photos move up and the ZIP numbering stays continuous.
+    Supplemental images and 360° exterior captures retain their configured,
+    absolute export number. All other photos keep only their relative order and
+    close gaps left by optional, omitted captures.
     """
-    photos = validate_export_items(photo_items) if photo_items else []
-    supplemental = validate_export_items(supplemental_items) if supplemental_items else []
-    if not photos and not supplemental:
+    if not photo_items and not supplemental_items:
         return validate_export_items([])
-
-    arranged = list(photos)
-    for item in supplemental:
-        # Insert supplemental images in ascending order. Existing entries move
-        # back, so the configured slot remains reserved and photos skip it.
-        # If there are too few actual images for a high slot, append instead of
-        # creating empty ZIP positions.
-        index = min(max(0, item.order - 1), len(arranged))
-        arranged.insert(index, item)
-
-    return [
-        ExportItem(
-            position,
-            item.name,
-            item.object_key,
-            item.filename_marker,
-            item.preserve_dimensions,
-        )
-        for position, item in enumerate(arranged, start=1)
+    fixed = [
+        *supplemental_items,
+        *(item for item in photo_items if item.fixed_position),
     ]
+    validate_export_items(fixed) if fixed else None
+    occupied = {item.order for item in fixed}
+    floating = sorted(
+        (item for item in photo_items if not item.fixed_position),
+        key=lambda item: (item.order, item.name),
+    )
+    arranged = list(fixed)
+    position = 1
+    for item in floating:
+        while position in occupied:
+            position += 1
+        arranged.append(
+            ExportItem(
+                position,
+                item.name,
+                item.object_key,
+                item.filename_marker,
+                item.preserve_dimensions,
+                False,
+                item.filename_separator,
+            )
+        )
+        occupied.add(position)
+        position += 1
+    return validate_export_items(arranged)
 
 
 def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
@@ -152,18 +160,21 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
         else:
             object_key = photo.original_object_key
         is_360_interior = orientation_key == "interior-360"
+        is_360_exterior = orientation_key == "exterior-360"
         photo_items.append(
             ExportItem(
                 int(step.export_order),
                 step.name,
                 object_key,
-                filename_marker="i" if is_360_interior else "",
-                preserve_dimensions=is_360_interior,
+                filename_marker="i" if is_360_interior else ("a" if is_360_exterior else ""),
+                preserve_dimensions=is_360_interior or is_360_exterior,
+                fixed_position=is_360_exterior,
+                filename_separator="." if is_360_exterior else "_",
             )
         )
 
     supplemental_items = [
-        ExportItem(item.export_order, item.name, item.object_key)
+        ExportItem(item.export_order, item.name, item.object_key, fixed_position=True)
         for item in supplemental_images
         if _supplemental_matches(item, job)
     ]
@@ -199,11 +210,15 @@ def build_zip_bytes(
 ) -> bytes:
     archive = io.BytesIO()
     filename_prefix = safe_vin(vin)
+    arranged_items = arrange_export_items(items, [])
     with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_STORED) as zip_file:
-        for position, item in enumerate(validate_export_items(items), start=1):
+        for item in arranged_items:
             content = storage.get_object(object_key=item.object_key)
             zip_file.writestr(
-                f"{filename_prefix}_{item.filename_marker}{position:02d}.jpg",
+                (
+                    f"{filename_prefix}{item.filename_separator}"
+                    f"{item.filename_marker}{item.order:02d}.jpg"
+                ),
                 normalize_export_jpeg(
                     content,
                     settings,

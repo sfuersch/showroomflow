@@ -323,6 +323,36 @@ private struct RefreshPayload: Encodable {
 
 private struct ErrorPayload: Decodable {
     let detail: String
+
+    private enum CodingKeys: String, CodingKey {
+        case detail
+    }
+
+    private struct ValidationIssue: Decodable {
+        let message: String
+
+        private enum CodingKeys: String, CodingKey {
+            case message = "msg"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let message = try? container.decode(String.self, forKey: .detail) {
+            detail = message
+            return
+        }
+        if let issues = try? container.decode([ValidationIssue].self, forKey: .detail),
+           let firstIssue = issues.first {
+            detail = firstIssue.message
+            return
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: .detail,
+            in: container,
+            debugDescription: "Unsupported API error response"
+        )
+    }
 }
 
 struct TokenPair: Codable {
@@ -433,6 +463,7 @@ struct ConfiguredCaptureStep: Decodable, Identifiable {
     let requiresProcessing: Bool
     let silhouetteURL: URL?
     let orientationKey: String?
+    let orientationInstanceIndex: Int
 
     var usesScenePrototype: Bool {
         guard let orientationKey else { return false }
@@ -447,6 +478,7 @@ struct ConfiguredCaptureStep: Decodable, Identifiable {
         case requiresProcessing = "requires_processing"
         case silhouetteURL = "silhouette_url"
         case orientationKey = "orientation_key"
+        case orientationInstanceIndex = "orientation_instance_index"
     }
 }
 

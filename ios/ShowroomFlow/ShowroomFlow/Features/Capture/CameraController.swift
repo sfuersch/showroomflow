@@ -22,7 +22,10 @@ struct CameraCaptureMetadata: Codable, Equatable {
         horizonAngleDegrees: 0,
         verticalAngleDegrees: 0,
         yawAngleDegrees: 0,
-        fieldOfViewDegrees: 0,
+        // The backend accepts camera fields of view from 20° through 140°.
+        // Imported and THETA images do not use this value because motion data
+        // is unavailable, but it still has to be valid during API validation.
+        fieldOfViewDegrees: 65,
         motionAvailable: false
     )
 }

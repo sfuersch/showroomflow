@@ -91,6 +91,7 @@ class CaptureStepConfigurationResponse(BaseModel):
     requires_processing: bool
     silhouette_url: str | None = None
     orientation_key: str | None = None
+    orientation_instance_index: int = 1
 
 
 class AppConfigurationResponse(BaseModel):
