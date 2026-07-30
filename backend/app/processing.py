@@ -1313,11 +1313,12 @@ def create_photoroom_shadowed_composition(
         raise ImageProcessingError(
             "Die korrigierte Fahrzeugebene ist ungültig"
         ) from exc
-    expected_size = (settings.output_width, settings.output_height)
-    if placed_vehicle.size != expected_size:
-        raise ImageProcessingError(
-            "Die korrigierte Fahrzeugebene hat nicht das erwartete Ausgabeformat"
-        )
+    # The placed layer is authoritative for the final canvas. Most photos use
+    # the configured 4:3 output size, while exterior 360° frames deliberately
+    # use 3:2. Requiring ``settings.output_height`` here made every 3:2 shadow
+    # request fail before it reached Photoroom and silently select the local
+    # fallback during automatic (re-)processing.
+    expected_size = placed_vehicle.size
     if placed_vehicle.getchannel("A").getbbox() is None:
         raise ImageProcessingError(
             "Die korrigierte Fahrzeugebene enthält kein Fahrzeug"
@@ -1337,7 +1338,7 @@ def create_photoroom_shadowed_composition(
         "keepExistingAlphaChannel": "auto",
         "referenceBox": "originalImage",
         "background.color": "transparent",
-        "outputSize": f"{settings.output_width}x{settings.output_height}",
+        "outputSize": f"{expected_size[0]}x{expected_size[1]}",
         "padding": "0",
         "shadow.mode": shadow_mode,
         "export.format": "png",

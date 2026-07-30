@@ -1680,6 +1680,52 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
     assert all(145 <= value <= 185 for value in shadow_pixel)
 
 
+def test_photoroom_shadowed_composition_accepts_exterior_360_canvas() -> None:
+    placed_vehicle = Image.new("RGBA", (900, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(placed_vehicle).rectangle(
+        (180, 150, 719, 539),
+        fill=(20, 30, 40, 255),
+    )
+    placed_bytes = image_bytes(placed_vehicle, "PNG")
+    background = image_bytes(Image.new("RGB", (900, 600), "white"), "JPEG")
+    shadowed_vehicle = placed_vehicle.copy()
+    ImageDraw.Draw(shadowed_vehicle).rectangle(
+        (170, 540, 729, 559),
+        fill=(0, 0, 0, 90),
+    )
+    api_result = image_bytes(shadowed_vehicle, "PNG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert b'name="outputSize"' in request.content
+        assert b"900x600" in request.content
+        return httpx.Response(
+            200,
+            content=api_result,
+            headers={"content-type": "image/png"},
+        )
+
+    # The regular output is 4:3, but the exterior 360° layer is 3:2.
+    settings = Settings(
+        output_width=900,
+        output_height=675,
+        photoroom_api_key="test-key",
+        photoroom_sandbox=True,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = create_photoroom_shadowed_composition(
+            placed_bytes,
+            background,
+            "image/jpeg",
+            settings,
+            shadow_opacity_percent=42,
+            client=client,
+        )
+
+    finished = Image.open(io.BytesIO(result))
+    assert finished.size == (900, 600)
+    assert finished.format == "JPEG"
+
+
 def test_photoroom_shadowed_correction_rejects_opaque_result() -> None:
     placed_vehicle = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
     ImageDraw.Draw(placed_vehicle).rectangle(
