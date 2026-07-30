@@ -732,6 +732,7 @@ def external_api_usage_page(
                 "guided_segmentation": "Geführte Maskierung",
                 "semantic_mask": "Semantische KI-Maske",
                 "showroom_composition": "Showroom-Komposition",
+                "automatic_vehicle_shadow": "KI-Schatten Erstverarbeitung",
                 "quality_correction_shadow": "KI-Schatten nach Korrektur",
             },
         ),

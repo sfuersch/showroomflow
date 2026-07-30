@@ -1297,11 +1297,12 @@ def create_photoroom_shadowed_composition(
     photoroom_sandbox: bool | None = None,
     client: httpx.Client | None = None,
     usage_context: ExternalApiUsageContext | None = None,
+    usage_operation: str = "quality_correction_shadow",
 ) -> bytes:
-    """Add an AI shadow without changing an operator-approved transform.
+    """Add an AI shadow without changing the final vehicle transform.
 
     ``placed_vehicle_png`` already has the final output dimensions and contains
-    the corrected vehicle at its final coordinates. Keeping the existing alpha
+    the vehicle at its final coordinates. Keeping the existing alpha
     channel and using the original image as reference prevents Photoroom from
     fitting or centering the subject again.
     """
@@ -1366,19 +1367,19 @@ def create_photoroom_shadowed_composition(
         record_external_api_usage(
             usage_context,
             provider="photoroom",
-            operation="quality_correction_shadow",
+            operation=usage_operation,
             sandbox=sandbox_active,
             outcome="network_error",
             duration_ms=round((time.perf_counter() - started) * 1000),
             error_message=str(exc),
         )
         raise ImageProcessingError(
-            "Photoroom ist für den korrigierten KI-Schatten nicht erreichbar"
+            "Photoroom ist für den KI-Hauptschatten nicht erreichbar"
         ) from exc
     record_external_api_usage(
         usage_context,
         provider="photoroom",
-        operation="quality_correction_shadow",
+        operation=usage_operation,
         sandbox=sandbox_active,
         outcome=(
             "success"
@@ -1395,7 +1396,7 @@ def create_photoroom_shadowed_composition(
     if response.status_code != 200:
         detail = response.text.replace("\n", " ")[:300]
         raise ImageProcessingError(
-            "KI-Schatten für die Korrektur fehlgeschlagen "
+            "KI-Hauptschatten fehlgeschlagen "
             f"(HTTP {response.status_code}): {detail}"
         )
     try:
@@ -1433,6 +1434,51 @@ def create_photoroom_shadowed_composition(
     output = io.BytesIO()
     finished.convert("RGB").save(output, format="JPEG", quality=92, optimize=True)
     return output.getvalue()
+
+
+def compose_photoroom_vehicle_with_shadow(
+    background_bytes: bytes,
+    background_content_type: str,
+    vehicle_cutout_png: bytes,
+    options: CompositionOptions,
+    settings: Settings,
+    *,
+    photoroom_sandbox: bool,
+    usage_context: ExternalApiUsageContext | None = None,
+) -> bytes:
+    """Compose an automatic result with the same AI shadow used after QA.
+
+    The locally generated contour shadow remains a non-blocking fallback. This
+    keeps uploads processable when the additional shadow request is temporarily
+    unavailable, while successful requests produce the same shadow pipeline as
+    an operator correction.
+    """
+    if options.shadow_opacity_percent <= 0:
+        return compose_showroom(background_bytes, vehicle_cutout_png, options)
+
+    placed_vehicle = compose_showroom(
+        background_bytes,
+        vehicle_cutout_png,
+        options,
+        vehicle_layer_only=True,
+    )
+    try:
+        return create_photoroom_shadowed_composition(
+            placed_vehicle,
+            background_bytes,
+            background_content_type,
+            settings,
+            shadow_opacity_percent=options.shadow_opacity_percent,
+            photoroom_sandbox=photoroom_sandbox,
+            usage_context=usage_context,
+            usage_operation="automatic_vehicle_shadow",
+        )
+    except ImageProcessingError:
+        logger.warning(
+            "Automatic Photoroom shadow failed; using the local contour shadow",
+            exc_info=True,
+        )
+        return compose_showroom(background_bytes, vehicle_cutout_png, options)
 
 
 def apply_cutout_mask_to_original(original_bytes: bytes, cutout_png_bytes: bytes) -> bytes:
@@ -2536,44 +2582,60 @@ def process_photo(photo_id: str) -> None:
                     if processing_mode == "exterior_360"
                     else photoroom_cutout
                 )
-                # Photoroom supplies the high-quality vehicle mask. ShowroomFlow
-                # owns the deterministic composition so that the configured
-                # ground line and the contour-based shadow are identical in
-                # automatic processing and in the quality editor.
-                finished = compose_showroom(
-                    composed_background,
-                    preview_cutout,
-                    CompositionOptions(
-                        width=output_width,
-                        height=output_height,
-                        contour_target_area_percent=(
-                            composition.contour_target_area_percent
-                        ),
-                        contour_max_width_percent=(
-                            composition.contour_max_width_percent
-                        ),
-                        contour_max_height_percent=(
-                            composition.contour_max_height_percent
-                        ),
-                        vehicle_bottom_percent=composition.vehicle_bottom_percent,
-                        shadow_opacity_percent=composition.shadow_opacity_percent,
-                        reflection_opacity_percent=(
-                            composition.reflection_opacity_percent
-                        ),
-                        brightness_percent=composition.brightness_percent,
-                        capture_step_name=step.name,
-                        orientation_key=orientation.key if orientation else "",
-                        capture_metadata=photo.capture_metadata,
-                        scene_projection_enabled=background.scene_projection_enabled,
-                        scene_horizon_percent=background.scene_horizon_percent,
-                        scene_reference_vertical_degrees=(
-                            background.scene_reference_vertical_degrees
-                        ),
-                        scene_perspective_strength_percent=(
-                            background.scene_perspective_strength_percent
-                        ),
-                        preserve_source_framing=processing_mode == "exterior_360",
+                automatic_options = CompositionOptions(
+                    width=output_width,
+                    height=output_height,
+                    contour_target_area_percent=(
+                        composition.contour_target_area_percent
                     ),
+                    contour_max_width_percent=(
+                        composition.contour_max_width_percent
+                    ),
+                    contour_max_height_percent=(
+                        composition.contour_max_height_percent
+                    ),
+                    vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                    shadow_opacity_percent=composition.shadow_opacity_percent,
+                    reflection_opacity_percent=(
+                        composition.reflection_opacity_percent
+                    ),
+                    brightness_percent=composition.brightness_percent,
+                    capture_step_name=step.name,
+                    orientation_key=orientation.key if orientation else "",
+                    capture_metadata=photo.capture_metadata,
+                    scene_projection_enabled=background.scene_projection_enabled,
+                    scene_horizon_percent=background.scene_horizon_percent,
+                    scene_reference_vertical_degrees=(
+                        background.scene_reference_vertical_degrees
+                    ),
+                    scene_perspective_strength_percent=(
+                        background.scene_perspective_strength_percent
+                    ),
+                    preserve_source_framing=processing_mode == "exterior_360",
+                )
+                # Normal exterior photos use the same AI-main-shadow path as an
+                # operator correction. The 360° exterior series keeps its
+                # original framing and local composition without an extra API
+                # pass because its output format differs from the standard
+                # showroom canvas.
+                finished = (
+                    compose_photoroom_vehicle_with_shadow(
+                        composed_background,
+                        composed_background_content_type,
+                        preview_cutout,
+                        automatic_options,
+                        settings,
+                        photoroom_sandbox=photoroom_sandbox_active(
+                            image_settings, settings
+                        ),
+                        usage_context=usage_context,
+                    )
+                    if processing_mode == "optimized"
+                    else compose_showroom(
+                        composed_background,
+                        preview_cutout,
+                        automatic_options,
+                    )
                 )
             elif image_settings.provider == "remove_bg":
                 ai_cutout = remove_vehicle_background(
