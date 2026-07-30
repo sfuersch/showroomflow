@@ -27,6 +27,7 @@ from app.processing import (
     calculate_scene_adjustment,
     compose_background_through_windows,
     compose_background_through_mask,
+    compose_photoroom_vehicle_with_shadow,
     compose_showroom,
     create_automatic_background_mask,
     create_openai_semantic_mask,
@@ -1713,3 +1714,82 @@ def test_photoroom_shadowed_correction_rejects_opaque_result() -> None:
                 shadow_opacity_percent=42,
                 client=client,
             )
+
+
+def test_automatic_photoroom_composition_uses_same_ai_shadow_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+    vehicle = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(vehicle).rectangle((220, 180, 579, 499), fill=(20, 30, 40, 255))
+    cutout = image_bytes(vehicle, "PNG")
+    expected = image_bytes(Image.new("RGB", (800, 600), "#123456"), "JPEG")
+    observed: dict[str, object] = {}
+
+    def fake_shadow(
+        placed_vehicle_png: bytes,
+        background_bytes: bytes,
+        background_content_type: str,
+        settings: Settings,
+        **kwargs: object,
+    ) -> bytes:
+        placed = Image.open(io.BytesIO(placed_vehicle_png)).convert("RGBA")
+        observed["placed_size"] = placed.size
+        observed["placed_alpha_bbox"] = placed.getchannel("A").getbbox()
+        observed["background"] = background_bytes
+        observed["content_type"] = background_content_type
+        observed["operation"] = kwargs["usage_operation"]
+        return expected
+
+    monkeypatch.setattr(
+        processing_module,
+        "create_photoroom_shadowed_composition",
+        fake_shadow,
+    )
+    result = compose_photoroom_vehicle_with_shadow(
+        background,
+        "image/jpeg",
+        cutout,
+        CompositionOptions(width=800, height=600, shadow_opacity_percent=42),
+        Settings(output_width=800, output_height=600),
+        photoroom_sandbox=True,
+    )
+
+    assert result == expected
+    assert observed["placed_size"] == (800, 600)
+    assert observed["placed_alpha_bbox"] is not None
+    assert observed["background"] == background
+    assert observed["content_type"] == "image/jpeg"
+    assert observed["operation"] == "automatic_vehicle_shadow"
+
+
+def test_automatic_photoroom_shadow_failure_uses_local_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    background = image_bytes(Image.new("RGB", (800, 600), "white"), "JPEG")
+    vehicle = Image.new("RGBA", (800, 600), (0, 0, 0, 0))
+    ImageDraw.Draw(vehicle).rectangle((220, 180, 579, 499), fill=(20, 30, 40, 255))
+    cutout = image_bytes(vehicle, "PNG")
+    options = CompositionOptions(width=800, height=600, shadow_opacity_percent=42)
+
+    def unavailable(*args: object, **kwargs: object) -> bytes:
+        raise ImageProcessingError("temporarily unavailable")
+
+    monkeypatch.setattr(
+        processing_module,
+        "create_photoroom_shadowed_composition",
+        unavailable,
+    )
+    result = compose_photoroom_vehicle_with_shadow(
+        background,
+        "image/jpeg",
+        cutout,
+        options,
+        Settings(output_width=800, output_height=600),
+        photoroom_sandbox=True,
+    )
+
+    expected = compose_showroom(background, cutout, options)
+    actual_image = Image.open(io.BytesIO(result)).convert("RGB")
+    expected_image = Image.open(io.BytesIO(expected)).convert("RGB")
+    assert ImageChops.difference(actual_image, expected_image).getbbox() is None
