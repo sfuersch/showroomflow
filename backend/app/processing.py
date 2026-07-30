@@ -2613,11 +2613,10 @@ def process_photo(photo_id: str) -> None:
                     ),
                     preserve_source_framing=processing_mode == "exterior_360",
                 )
-                # Normal exterior photos use the same AI-main-shadow path as an
-                # operator correction. The 360° exterior series keeps its
-                # original framing and local composition without an extra API
-                # pass because its output format differs from the standard
-                # showroom canvas.
+                # All exterior photos use the same AI-main-shadow path as an
+                # operator correction. For the 360° exterior series,
+                # preserve_source_framing keeps the original vehicle position,
+                # size and aspect ratio while PhotoRoom only adds the shadow.
                 finished = (
                     compose_photoroom_vehicle_with_shadow(
                         composed_background,
@@ -2630,7 +2629,7 @@ def process_photo(photo_id: str) -> None:
                         ),
                         usage_context=usage_context,
                     )
-                    if processing_mode == "optimized"
+                    if processing_mode in {"optimized", "exterior_360"}
                     else compose_showroom(
                         composed_background,
                         preview_cutout,
