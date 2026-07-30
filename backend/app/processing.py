@@ -946,11 +946,31 @@ def create_photoroom_cutout(
         original_size = original.size
     except (OSError, ValueError) as exc:
         raise ImageProcessingError("Das Originalbild ist ungültig") from exc
+    # Photoroom rejects output dimensions of 5000 pixels or more. Camera
+    # originals and older 360° captures can exceed that limit, so request the
+    # largest supported, aspect-ratio-preserving mask. Callers that need the
+    # source resolution apply this mask back to the original afterwards.
+    max_photoroom_dimension = 4999
+    scale = min(
+        1.0,
+        max_photoroom_dimension / max(1, original_size[0]),
+        max_photoroom_dimension / max(1, original_size[1]),
+    )
+    photoroom_size = (
+        max(1, min(max_photoroom_dimension, round(original_size[0] * scale))),
+        max(1, min(max_photoroom_dimension, round(original_size[1] * scale))),
+    )
+    request_image_bytes = original_bytes
+    if photoroom_size != original_size:
+        resized = original.resize(photoroom_size, Image.Resampling.LANCZOS).convert("RGB")
+        resized_output = io.BytesIO()
+        resized.save(resized_output, format="JPEG", quality=94, optimize=True)
+        request_image_bytes = resized_output.getvalue()
     request = client.post if client is not None else httpx.post
     request_data = {
         "removeBackground": "true",
         "referenceBox": "originalImage",
-        "outputSize": f"{original_size[0]}x{original_size[1]}",
+        "outputSize": f"{photoroom_size[0]}x{photoroom_size[1]}",
         "padding": "0",
         "export.format": "png",
     }
@@ -970,7 +990,7 @@ def create_photoroom_cutout(
         response = request(
             "https://image-api.photoroom.com/v2/edit",
             headers=headers,
-            files={"imageFile": ("vehicle.jpg", original_bytes, "image/jpeg")},
+            files={"imageFile": ("vehicle.jpg", request_image_bytes, "image/jpeg")},
             data=request_data,
             timeout=180,
         )

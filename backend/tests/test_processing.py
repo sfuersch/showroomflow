@@ -1181,6 +1181,30 @@ def test_text_guided_cutout_omits_incompatible_hd_header(monkeypatch) -> None:
     assert events[0]["outcome"] == "success"
 
 
+def test_photoroom_cutout_limits_large_camera_output_size() -> None:
+    original = image_bytes(Image.new("RGB", (6000, 4000), "navy"), "JPEG")
+    cutout = image_bytes(Image.new("RGBA", (4999, 3333), (20, 30, 40, 255)), "PNG")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content
+        assert b'name="outputSize"' in body
+        assert b"4999x3333" in body
+        assert b"6000x4000" not in body
+        jpeg_start = body.index(b"\xff\xd8")
+        jpeg_end = body.index(b"\xff\xd9", jpeg_start) + 2
+        assert Image.open(io.BytesIO(body[jpeg_start:jpeg_end])).size == (4999, 3333)
+        return httpx.Response(200, content=cutout, headers={"content-type": "image/png"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = create_photoroom_cutout(
+            original,
+            Settings(photoroom_api_key="test-key"),
+            client=client,
+        )
+
+    assert Image.open(io.BytesIO(result)).size == (4999, 3333)
+
+
 def test_openai_magenta_overlay_ignores_original_magenta_pixels() -> None:
     original = Image.new("RGB", (800, 600), (80, 100, 130))
     ImageDraw.Draw(original).rectangle((20, 20, 180, 180), fill=(220, 20, 210))

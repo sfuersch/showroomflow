@@ -884,7 +884,16 @@ private final class Exterior360CaptureGuide: NSObject, ObservableObject, ARSessi
         outputWidth = max(2, floor(outputWidth / 2) * 2)
         outputHeight = max(2, floor(outputHeight / 2) * 2)
         let targetSize = CGSize(width: outputWidth, height: outputHeight)
-        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let rendererFormat = UIGraphicsImageRendererFormat()
+        // The target size is expressed in output pixels. The default renderer
+        // inherits the iPhone screen scale (often 3x), which previously turned
+        // 3240 × 2160 captures into 9720 × 6480 files.
+        rendererFormat.scale = 1
+        rendererFormat.opaque = true
+        let renderer = UIGraphicsImageRenderer(
+            size: targetSize,
+            format: rendererFormat
+        )
         let normalized = renderer.image { _ in
             source.draw(in: CGRect(origin: .zero, size: targetSize))
         }
