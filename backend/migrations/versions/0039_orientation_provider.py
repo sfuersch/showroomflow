@@ -1,6 +1,6 @@
 """Add an image provider selection to every orientation.
 
-Revision ID: 0039_orientation_processing_provider
+Revision ID: 0039_orientation_provider
 Revises: 0038_exterior_360_capture
 """
 
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0039_orientation_processing_provider"
+revision = "0039_orientation_provider"
 down_revision = "0038_exterior_360_capture"
 branch_labels = None
 depends_on = None
