@@ -29,6 +29,7 @@ from app.image_service import (
     credit_balance,
     grant_additional_credits,
     get_image_settings,
+    orientation_processing_provider,
     photoroom_sandbox_active,
     provider_is_available,
     reserve_vehicle_credit,
@@ -61,12 +62,13 @@ from app.models import (
 from app.orientations import (
     MASKED_BACKGROUND_MODES,
     ORIENTATION_CATEGORIES,
+    ORIENTATION_PROCESSING_PROVIDERS,
     PROCESSING_MODES,
-    PROCESSING_REQUIRED_MODES,
     STANDARD_ORIENTATIONS,
     default_silhouette_path,
     instance_name,
     mask_prompt_defaults,
+    orientation_requires_processing,
 )
 from app.processing import (
     DEFAULT_OPENAI_MASK_PROMPT_TEMPLATE,
@@ -398,6 +400,9 @@ def _ensure_standard_orientations(db: Session) -> list[Orientation]:
                 is_required=standard.required,
                 requires_processing=standard.requires_processing,
                 processing_mode=standard.processing_mode,
+                processing_provider=(
+                    "original" if standard.processing_mode == "original" else "photoroom"
+                ),
                 is_repeatable=standard.repeatable,
                 default_instance_count=standard.default_instances,
                 max_instances=standard.max_instances,
@@ -1424,6 +1429,7 @@ async def create_orientation(
     default_export_order: int | None = Form(default=None),
     is_required: str | None = Form(default=None),
     processing_mode: str = Form(default="original"),
+    processing_provider: str = Form(default="photoroom"),
     mask_prompt: str = Form(default=""),
     mask_negative_prompt: str = Form(default=""),
     is_repeatable: str | None = Form(default=None),
@@ -1443,6 +1449,7 @@ async def create_orientation(
         or not name.strip()
         or category not in ORIENTATION_CATEGORIES
         or processing_mode not in PROCESSING_MODES
+        or processing_provider not in ORIENTATION_PROCESSING_PROVIDERS
         or len(mask_prompt) > 4000
         or len(mask_negative_prompt) > 4000
         or default_capture_order < 1
@@ -1464,8 +1471,11 @@ async def create_orientation(
             default_capture_order=default_capture_order,
             default_export_order=default_export_order,
             is_required=is_required == "on",
-            requires_processing=processing_mode in PROCESSING_REQUIRED_MODES,
+            requires_processing=orientation_requires_processing(
+                processing_mode, processing_provider
+            ),
             processing_mode=processing_mode,
+            processing_provider=processing_provider,
             mask_prompt=mask_prompt.strip() or None,
             mask_negative_prompt=mask_negative_prompt.strip() or None,
             is_repeatable=is_repeatable == "on",
@@ -1503,6 +1513,7 @@ async def update_orientation(
     default_export_order: int | None = Form(default=None),
     is_required: str | None = Form(default=None),
     processing_mode: str = Form(default="original"),
+    processing_provider: str | None = Form(default=None),
     mask_prompt: str = Form(default=""),
     mask_negative_prompt: str = Form(default=""),
     is_repeatable: str | None = Form(default=None),
@@ -1521,10 +1532,14 @@ async def update_orientation(
     orientation = db.get(Orientation, orientation_id)
     if orientation is None:
         raise HTTPException(status_code=404, detail="Orientierung wurde nicht gefunden")
+    selected_processing_provider = (
+        processing_provider or orientation.processing_provider or "photoroom"
+    )
     if (
         not name.strip()
         or category not in ORIENTATION_CATEGORIES
         or processing_mode not in PROCESSING_MODES
+        or selected_processing_provider not in ORIENTATION_PROCESSING_PROVIDERS
         or len(mask_prompt) > 4000
         or len(mask_negative_prompt) > 4000
         or default_capture_order < 1
@@ -1543,9 +1558,12 @@ async def update_orientation(
         orientation.default_export_order = default_export_order
         orientation.is_required = is_required == "on"
         orientation.processing_mode = processing_mode
+        orientation.processing_provider = selected_processing_provider
         orientation.mask_prompt = mask_prompt.strip() or None
         orientation.mask_negative_prompt = mask_negative_prompt.strip() or None
-        orientation.requires_processing = processing_mode in PROCESSING_REQUIRED_MODES
+        orientation.requires_processing = orientation_requires_processing(
+            processing_mode, selected_processing_provider
+        )
         orientation.is_repeatable = is_repeatable == "on"
         orientation.default_instance_count = default_instance_count
         orientation.max_instances = max_instances if orientation.is_repeatable else 1
@@ -2187,6 +2205,14 @@ async def upload_job_photo_from_admin(
         _flash(request, "Die gewählte Fotoposition ist nicht verfügbar.", "error")
         return RedirectResponse(f"/admin/jobs/{job.id}", status_code=status.HTTP_303_SEE_OTHER)
 
+    image_settings = get_image_settings(db)
+    runtime = get_settings()
+    orientation = (
+        db.get(Orientation, step.orientation_id) if step.orientation_id else None
+    )
+    processing_provider = orientation_processing_provider(orientation, image_settings)
+    requires_processing = step.requires_processing and processing_provider != "original"
+
     try:
         original, original_type, original_extension = await _read_job_photo(original_image)
         original_thumbnail = create_thumbnail(original)
@@ -2272,25 +2298,27 @@ async def upload_job_photo_from_admin(
         uploaded_at=datetime.now(timezone.utc),
         is_selected=True,
         processing_status=(
-            ProcessingStatus.PENDING if step.requires_processing else ProcessingStatus.NOT_REQUIRED
+            ProcessingStatus.PENDING
+            if requires_processing
+            else ProcessingStatus.NOT_REQUIRED
         ),
     )
     db.add(photo)
     job.status = JobStatus.REVIEW_REQUIRED
     db.commit()
 
-    process_now = start_processing == "on" and step.requires_processing
-    image_settings = get_image_settings(db)
-    runtime = get_settings()
+    process_now = start_processing == "on" and requires_processing
     if process_now and job.background_id is None:
         _flash(
             request,
             "Foto gespeichert. Ohne gewählten Hintergrund kann die Optimierung nicht starten.",
             "error",
         )
-    elif process_now and provider_is_available(image_settings, runtime):
+    elif process_now and provider_is_available(
+        image_settings, runtime, processing_provider
+    ):
         try:
-            reserve_vehicle_credit(db, job, image_settings.provider)
+            reserve_vehicle_credit(db, job, processing_provider)
         except VehicleCreditsExhausted as exc:
             photo.processing_error = str(exc)
             db.commit()
@@ -2390,6 +2418,42 @@ def job_detail_page(
     }
     runtime = get_settings()
     image_settings = get_image_settings(db)
+    orientation_ids = {
+        step.orientation_id for step in steps.values() if step.orientation_id is not None
+    }
+    orientations = (
+        {
+            orientation.id: orientation
+            for orientation in db.scalars(
+                select(Orientation).where(Orientation.id.in_(orientation_ids))
+            )
+        }
+        if orientation_ids
+        else {}
+    )
+    processing_available_by_photo = {
+        photo.id: provider_is_available(
+            image_settings,
+            runtime,
+            orientation_processing_provider(
+                orientations.get(steps[photo.capture_step_id].orientation_id),
+                image_settings,
+            ),
+        )
+        for photo in photos
+        if photo.capture_step_id in steps
+    }
+    processing_steps = [step for step in active_steps if step.requires_processing]
+    configured_processing_available = not processing_steps or any(
+        provider_is_available(
+            image_settings,
+            runtime,
+            orientation_processing_provider(
+                orientations.get(step.orientation_id), image_settings
+            ),
+        )
+        for step in processing_steps
+    )
     export_runs = list(
         db.scalars(
             select(ExportRun)
@@ -2523,7 +2587,8 @@ def job_detail_page(
                 and variant.provider == "photoroom_optimized"
                 and variant.object_key
             },
-            processing_enabled=provider_is_available(image_settings, runtime),
+            processing_enabled=configured_processing_available,
+            processing_available_by_photo=processing_available_by_photo,
             comparison_mode_enabled=image_settings.comparison_mode_enabled,
             standard_comparison_enabled=image_settings.provider != "photoroom",
             photoroom_enabled=runtime.photoroom_enabled,
@@ -2568,6 +2633,10 @@ def reprocess_photo(
     _authorized_dealership(db, admin, job.dealership_id)
     runtime = get_settings()
     image_settings = get_image_settings(db)
+    orientation = (
+        db.get(Orientation, step.orientation_id) if step.orientation_id else None
+    )
+    processing_provider = orientation_processing_provider(orientation, image_settings)
     comparison_provider = {
         "photoroom_comparison": "photoroom",
         "photoroom_optimized_comparison": "photoroom_optimized",
@@ -2606,11 +2675,16 @@ def reprocess_photo(
             _flash(request, f"{label}-Vergleich wurde zur Verarbeitung vorgemerkt.")
     elif provider != "primary":
         _flash(request, "Unbekannter Bildverarbeitungsdienst.", "error")
-    elif not provider_is_available(image_settings, runtime):
+    elif processing_provider == "original":
+        photo.processing_status = ProcessingStatus.NOT_REQUIRED
+        photo.processing_error = None
+        db.commit()
+        _flash(request, "Diese Orientierung wird im Original verwendet.")
+    elif not provider_is_available(image_settings, runtime, processing_provider):
         _flash(request, "Es ist noch kein KI-Dienst konfiguriert.", "error")
     else:
         try:
-            reserve_vehicle_credit(db, job, image_settings.provider)
+            reserve_vehicle_credit(db, job, processing_provider)
         except VehicleCreditsExhausted as exc:
             photo.processing_status = ProcessingStatus.PENDING
             photo.processing_error = str(exc)

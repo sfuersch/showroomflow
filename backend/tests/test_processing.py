@@ -22,6 +22,7 @@ from app.processing import (
     VehicleContour,
     VehicleFrame,
     apply_cutout_mask_to_original,
+    background_mask_from_cutout,
     apply_image_overlays,
     calculate_contour_framing,
     calculate_scene_adjustment,
@@ -54,6 +55,20 @@ def image_bytes(image: Image.Image, format_name: str) -> bytes:
     output = io.BytesIO()
     image.save(output, format=format_name)
     return output.getvalue()
+
+
+def test_background_mask_from_cutout_inverts_cutout_alpha() -> None:
+    cutout = Image.new("RGBA", (4, 2), (240, 240, 240, 255))
+    for x in (2, 3):
+        for y in (0, 1):
+            cutout.putpixel((x, y), (0, 0, 0, 0))
+
+    mask = Image.open(
+        io.BytesIO(background_mask_from_cutout(image_bytes(cutout, "PNG")))
+    ).convert("RGBA").getchannel("A")
+
+    assert mask.getpixel((0, 0)) == 0
+    assert mask.getpixel((3, 0)) == 255
 
 
 def test_background_transform_zoom_and_offset_keep_output_filled() -> None:

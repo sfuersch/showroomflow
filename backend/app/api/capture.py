@@ -12,6 +12,7 @@ from app.exporting import try_enqueue_auto_export
 from app.image_service import (
     VehicleCreditsExhausted,
     get_image_settings,
+    orientation_processing_provider,
     provider_is_available,
     reserve_vehicle_credit,
 )
@@ -335,17 +336,26 @@ def complete_photo_upload(
     step = db.get(CaptureStep, photo.capture_step_id)
     runtime = get_settings()
     image_settings = get_image_settings(db)
+    orientation = (
+        db.get(Orientation, step.orientation_id)
+        if step is not None and step.orientation_id is not None
+        else None
+    )
+    processing_provider = orientation_processing_provider(orientation, image_settings)
     should_enqueue = bool(
-        step and step.requires_processing and provider_is_available(image_settings, runtime)
+        step
+        and step.requires_processing
+        and processing_provider != "original"
+        and provider_is_available(image_settings, runtime, processing_provider)
     )
     credit_error: str | None = None
     if should_enqueue:
         try:
-            reserve_vehicle_credit(db, job, image_settings.provider)
+            reserve_vehicle_credit(db, job, processing_provider)
         except VehicleCreditsExhausted as exc:
             should_enqueue = False
             credit_error = str(exc)
-    if step and step.requires_processing:
+    if step and step.requires_processing and processing_provider != "original":
         photo.processing_status = (
             ProcessingStatus.QUEUED if should_enqueue else ProcessingStatus.PENDING
         )
@@ -353,6 +363,7 @@ def complete_photo_upload(
         photo.processing_error = credit_error
     else:
         photo.processing_status = ProcessingStatus.NOT_REQUIRED
+        photo.processing_error = None
     db.commit()
     db.refresh(photo)
     if should_enqueue:

@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -10,9 +11,67 @@ from app.image_service import (
     VehicleCreditsExhausted,
     credit_balance,
     grant_additional_credits,
+    orientation_processing_provider,
+    provider_is_available,
     reserve_vehicle_credit,
 )
-from app.models import Dealership, Location, User, UserRole, VehicleCreditUsage, VehicleJob
+from app.models import (
+    Dealership,
+    Location,
+    Orientation,
+    User,
+    UserRole,
+    VehicleCreditUsage,
+    VehicleJob,
+)
+from app.orientations import orientation_requires_processing
+
+
+@pytest.mark.parametrize(
+    ("processing_mode", "processing_provider", "expected"),
+    [
+        ("optimized", "photoroom", True),
+        ("optimized", "remove_bg", True),
+        ("optimized", "openai", True),
+        ("optimized", "original", False),
+        ("original", "photoroom", False),
+    ],
+)
+def test_orientation_requires_processing_respects_provider(
+    processing_mode: str,
+    processing_provider: str,
+    expected: bool,
+) -> None:
+    assert (
+        orientation_requires_processing(processing_mode, processing_provider)
+        is expected
+    )
+
+
+def test_orientation_provider_overrides_global_provider() -> None:
+    image_settings = SimpleNamespace(provider="photoroom")
+    orientation = Orientation(
+        key="front",
+        name="Front",
+        category="exterior",
+        default_capture_order=1,
+        processing_provider="remove_bg",
+    )
+
+    assert orientation_processing_provider(orientation, image_settings) == "remove_bg"
+    assert orientation_processing_provider(None, image_settings) == "photoroom"
+
+
+def test_provider_availability_uses_explicit_orientation_provider() -> None:
+    image_settings = SimpleNamespace(provider="photoroom")
+    runtime = SimpleNamespace(
+        openai_api_key="openai-key",
+        remove_bg_api_key="remove-bg-key",
+    )
+
+    assert provider_is_available(image_settings, runtime, "openai") is True
+    assert provider_is_available(image_settings, runtime, "remove_bg") is True
+    assert provider_is_available(image_settings, runtime, "original") is True
 
 
 def create_job(db: Session, dealership: Dealership, user: User, location: Location) -> VehicleJob:

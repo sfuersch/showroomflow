@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.models import (
     Dealership,
+    Orientation,
     SystemImageSettings,
     User,
     VehicleCreditGrant,
@@ -19,6 +20,7 @@ from app.models import (
 
 SYSTEM_IMAGE_SETTINGS_ID = 1
 IMAGE_PROVIDERS = {"disabled", "remove_bg", "photoroom"}
+ORIENTATION_IMAGE_PROVIDERS = {"photoroom", "remove_bg", "openai", "original"}
 
 
 class VehicleCreditsExhausted(RuntimeError):
@@ -73,16 +75,40 @@ def get_image_settings(db: Session) -> SystemImageSettings:
     return image_settings
 
 
-def provider_is_available(image_settings: SystemImageSettings, runtime: Settings) -> bool:
-    if image_settings.provider == "remove_bg":
+def provider_is_available(
+    image_settings: SystemImageSettings,
+    runtime: Settings,
+    provider: str | None = None,
+) -> bool:
+    selected_provider = provider or image_settings.provider
+    if selected_provider == "original":
+        return True
+    if selected_provider == "openai":
+        return bool(runtime.openai_api_key)
+    if selected_provider == "remove_bg":
         return bool(runtime.remove_bg_api_key)
-    if image_settings.provider == "photoroom":
+    if selected_provider == "photoroom":
         return bool(
             runtime.photoroom_key_for(
                 sandbox=photoroom_sandbox_active(image_settings, runtime)
             )
         )
     return False
+
+
+def orientation_processing_provider(
+    orientation: Orientation | None,
+    image_settings: SystemImageSettings,
+) -> str:
+    """Resolve the provider selected for one orientation.
+
+    The global provider remains the compatibility fallback for databases from
+    before providers could be selected per orientation.
+    """
+    selected = getattr(orientation, "processing_provider", None)
+    if selected in ORIENTATION_IMAGE_PROVIDERS:
+        return selected
+    return image_settings.provider
 
 
 def photoroom_sandbox_active(

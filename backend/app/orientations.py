@@ -15,9 +15,18 @@ PROCESSING_REQUIRED_MODES = {
     "opening_background",
     "exterior_360",
 }
+ORIENTATION_PROCESSING_PROVIDERS = {"photoroom", "remove_bg", "openai", "original"}
 MASKED_BACKGROUND_MODES = {"window_background", "opening_background"}
 ORIENTATION_CATEGORIES = {"exterior", "interior", "detail", "special"}
 WINDOW_MASK_PROMPT = "windshield, side window"
+
+
+def orientation_requires_processing(processing_mode: str, processing_provider: str) -> bool:
+    """Return whether an orientation needs an asynchronous processing job."""
+    return (
+        processing_provider != "original"
+        and processing_mode in PROCESSING_REQUIRED_MODES
+    )
 
 
 def mask_prompt_defaults(orientation_key: str, processing_mode: str) -> tuple[str, str]:
