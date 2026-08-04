@@ -23,6 +23,7 @@ from app.database import SessionLocal
 from app.exporting import try_enqueue_auto_export
 from app.image_service import (
     get_image_settings,
+    orientation_processing_provider,
     photoroom_sandbox_active,
     provider_is_available,
 )
@@ -246,6 +247,21 @@ Return the annotated photograph only. Do not add text, legends, outlines or new
 objects.
 """.strip()
 
+OPENAI_VEHICLE_CUTOUT_PROMPT = """
+Create a pixel-aligned technical annotation of this exact vehicle photograph. Keep
+the original resolution, crop, perspective and every visible vehicle detail
+unchanged. Paint every pixel that does not belong to the primary vehicle with one
+flat, fully opaque, uniform pure magenta #FF00FF overlay. This includes the ground,
+sky, buildings, vegetation, other vehicles and the environment visible through
+windows, under the vehicle and through wheel or body gaps.
+
+Never paint any part of the primary vehicle: preserve its body, wheels, tyres,
+mirrors and mirror housings, windows and glass, lights, badges, license plate,
+interior visible through glass, roof equipment, open doors and attached
+accessories. Preserve the vehicle's existing pixels exactly. Return only the
+annotated photograph without text, outlines, legends or newly generated objects.
+""".strip()
+
 
 def openai_semantic_mask_prompt(
     profile: MaskedBackgroundProfile,
@@ -423,6 +439,28 @@ def create_openai_semantic_mask(
         mask,
         boundary_radius_percent=0.006,
     )
+
+
+def create_openai_vehicle_cutout(
+    original_bytes: bytes,
+    settings: Settings,
+    *,
+    usage_context: ExternalApiUsageContext | None = None,
+) -> bytes:
+    """Use OpenAI for semantic vehicle separation and retain original pixels."""
+    background_mask = create_openai_semantic_mask(
+        original_bytes,
+        settings,
+        MaskedBackgroundProfile(
+            prompt="the complete environment outside the primary vehicle",
+            negative_prompt="every part of the primary vehicle",
+            minimum_fraction=0.02,
+            maximum_fraction=0.97,
+        ),
+        prompt_template=OPENAI_VEHICLE_CUTOUT_PROMPT,
+        usage_context=usage_context,
+    )
+    return apply_background_mask_to_original(original_bytes, background_mask)
 
 
 def refine_manual_background_mask(
@@ -1503,6 +1541,46 @@ def apply_cutout_mask_to_original(original_bytes: bytes, cutout_png_bytes: bytes
     return output.getvalue()
 
 
+def apply_background_mask_to_original(
+    original_bytes: bytes,
+    background_mask_png_bytes: bytes,
+) -> bytes:
+    """Turn a background-selection mask into an original-pixel vehicle cutout."""
+    try:
+        original = ImageOps.exif_transpose(Image.open(io.BytesIO(original_bytes))).convert("RGBA")
+        mask = Image.open(io.BytesIO(background_mask_png_bytes)).convert("RGBA")
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError(
+            "Die Hintergrundmaske konnte nicht mit dem Original verbunden werden"
+        ) from exc
+    background_alpha = mask.getchannel("A")
+    if background_alpha.size != original.size:
+        background_alpha = background_alpha.resize(original.size, Image.Resampling.LANCZOS)
+    vehicle_alpha = ImageOps.invert(background_alpha)
+    if vehicle_alpha.getbbox() is None:
+        raise ImageProcessingError("Die Hintergrundmaske enthält kein Fahrzeug")
+    original.putalpha(vehicle_alpha)
+    output = io.BytesIO()
+    original.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def background_mask_from_cutout(cutout_png_bytes: bytes) -> bytes:
+    """Convert a transparent subject cutout into a selected-background mask."""
+    try:
+        cutout = Image.open(io.BytesIO(cutout_png_bytes)).convert("RGBA")
+    except (OSError, ValueError) as exc:
+        raise ImageProcessingError("Die Freistellungsmaske ist ungültig") from exc
+    background_alpha = ImageOps.invert(cutout.getchannel("A"))
+    if background_alpha.getbbox() is None:
+        raise ImageProcessingError("Die Freistellung enthält keinen Hintergrund")
+    mask = Image.new("RGBA", cutout.size, (255, 0, 255, 0))
+    mask.putalpha(background_alpha)
+    output = io.BytesIO()
+    mask.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
 def compose_background_through_windows(
     original_bytes: bytes,
     window_mask_png_bytes: bytes,
@@ -2273,6 +2351,9 @@ def process_photo(photo_id: str) -> None:
                 raise ImageProcessingError("Für den Auftrag ist kein aktiver Hintergrund gewählt")
             image_settings = get_image_settings(db)
             orientation = db.get(Orientation, step.orientation_id) if step.orientation_id else None
+            processing_provider = orientation_processing_provider(
+                orientation, image_settings
+            )
             composition_override = (
                 db.scalar(
                     select(BackgroundOrientationComposition).where(
@@ -2284,7 +2365,15 @@ def process_photo(photo_id: str) -> None:
                 else None
             )
             composition = resolve_background_composition(background, composition_override)
-            if not provider_is_available(image_settings, settings):
+            if processing_provider == "original":
+                photo.processing_status = ProcessingStatus.NOT_REQUIRED
+                photo.processing_error = None
+                job.status = _next_job_status(db, job.id)
+                db.commit()
+                return
+            if not provider_is_available(
+                image_settings, settings, processing_provider
+            ):
                 raise ImageProcessingError("Der gewählte Bilddienstleister ist nicht verfügbar")
 
             photo.processing_status = ProcessingStatus.PROCESSING
@@ -2323,10 +2412,6 @@ def process_photo(photo_id: str) -> None:
                 )
                 composed_background_content_type = "image/jpeg"
             if processing_mode in MASKED_BACKGROUND_MODES:
-                if image_settings.provider != "photoroom":
-                    raise ImageProcessingError(
-                        "Die maskierte Hintergrundverarbeitung benötigt Photoroom"
-                    )
                 profile = masked_background_profile(
                     orientation.key if orientation else "",
                     processing_mode,
@@ -2372,16 +2457,34 @@ def process_photo(photo_id: str) -> None:
                             # expensive full-resolution GrabCut pass.
                             db.commit()
                 else:
-                    window_mask, used_openai_mask = create_automatic_background_mask(
-                        original,
-                        settings,
-                        profile,
-                        photoroom_sandbox=photoroom_sandbox_active(
-                            image_settings, settings
-                        ),
-                        prompt_template=image_settings.openai_mask_prompt_template,
-                        usage_context=usage_context,
-                    )
+                    if processing_provider == "openai":
+                        window_mask = create_openai_semantic_mask(
+                            original,
+                            settings,
+                            profile,
+                            prompt_template=image_settings.openai_mask_prompt_template,
+                            usage_context=usage_context,
+                        )
+                        used_openai_mask = True
+                    elif processing_provider == "photoroom":
+                        window_mask = create_photoroom_cutout(
+                            original,
+                            settings,
+                            photoroom_sandbox_active(image_settings, settings),
+                            segmentation_prompt=profile.prompt,
+                            segmentation_negative_prompt=profile.negative_prompt,
+                            usage_context=usage_context,
+                        )
+                    elif processing_provider == "remove_bg":
+                        window_mask = background_mask_from_cutout(
+                            remove_vehicle_background(
+                                original, settings, usage_context=usage_context
+                            )
+                        )
+                    else:
+                        raise ImageProcessingError(
+                            "Der gewählte Bilddienstleister unterstützt diese Verarbeitung nicht"
+                        )
                     mask_key = (
                         f"dealerships/{job.dealership_id}/jobs/{job.id}/"
                         f"photos/{photo.id}/window-mask.png"
@@ -2527,27 +2630,30 @@ def process_photo(photo_id: str) -> None:
                     manual_source_framing=True,
                 )
                 if shadow_opacity_percent > 0:
-                    if image_settings.provider != "photoroom":
-                        raise ImageProcessingError(
-                            "Der KI-Hauptschatten nach einer Korrektur benötigt Photoroom"
+                    if processing_provider == "photoroom":
+                        placed_vehicle = compose_showroom(
+                            composed_background,
+                            preview_cutout,
+                            correction_options,
+                            vehicle_layer_only=True,
                         )
-                    placed_vehicle = compose_showroom(
-                        composed_background,
-                        preview_cutout,
-                        correction_options,
-                        vehicle_layer_only=True,
-                    )
-                    finished = create_photoroom_shadowed_composition(
-                        placed_vehicle,
-                        composed_background,
-                        composed_background_content_type,
-                        settings,
-                        shadow_opacity_percent=shadow_opacity_percent,
-                        photoroom_sandbox=photoroom_sandbox_active(
-                            image_settings, settings
-                        ),
-                        usage_context=usage_context,
-                    )
+                        finished = create_photoroom_shadowed_composition(
+                            placed_vehicle,
+                            composed_background,
+                            composed_background_content_type,
+                            settings,
+                            shadow_opacity_percent=shadow_opacity_percent,
+                            photoroom_sandbox=photoroom_sandbox_active(
+                                image_settings, settings
+                            ),
+                            usage_context=usage_context,
+                        )
+                    else:
+                        finished = compose_showroom(
+                            composed_background,
+                            preview_cutout,
+                            correction_options,
+                        )
                 else:
                     finished = compose_showroom(
                         composed_background,
@@ -2571,7 +2677,7 @@ def process_photo(photo_id: str) -> None:
                 photo.quality_reviewed_by_id = None
                 photo.quality_reviewed_at = None
                 photo.quality_review_resolution = "awaiting_operator_approval"
-            elif image_settings.provider == "photoroom":
+            elif processing_provider == "photoroom":
                 photoroom_cutout = create_photoroom_cutout(
                     original,
                     settings,
@@ -2637,11 +2743,45 @@ def process_photo(photo_id: str) -> None:
                         automatic_options,
                     )
                 )
-            elif image_settings.provider == "remove_bg":
+            elif processing_provider == "remove_bg":
                 ai_cutout = remove_vehicle_background(
                     original, settings, usage_context=usage_context
                 )
                 cutout = apply_cutout_mask_to_original(original, ai_cutout)
+                preview_cutout = cutout
+                finished = compose_showroom(
+                    composed_background,
+                    cutout,
+                    CompositionOptions(
+                        width=output_width,
+                        height=output_height,
+                        contour_target_area_percent=composition.contour_target_area_percent,
+                        contour_max_width_percent=composition.contour_max_width_percent,
+                        contour_max_height_percent=composition.contour_max_height_percent,
+                        vehicle_bottom_percent=composition.vehicle_bottom_percent,
+                        shadow_opacity_percent=composition.shadow_opacity_percent,
+                        reflection_opacity_percent=composition.reflection_opacity_percent,
+                        brightness_percent=composition.brightness_percent,
+                        capture_step_name=step.name,
+                        orientation_key=orientation.key if orientation else "",
+                        capture_metadata=photo.capture_metadata,
+                        scene_projection_enabled=background.scene_projection_enabled,
+                        scene_horizon_percent=background.scene_horizon_percent,
+                        scene_reference_vertical_degrees=(
+                            background.scene_reference_vertical_degrees
+                        ),
+                        scene_perspective_strength_percent=(
+                            background.scene_perspective_strength_percent
+                        ),
+                        preserve_source_framing=processing_mode == "exterior_360",
+                    ),
+                )
+            elif processing_provider == "openai":
+                cutout = create_openai_vehicle_cutout(
+                    original,
+                    settings,
+                    usage_context=usage_context,
+                )
                 preview_cutout = cutout
                 finished = compose_showroom(
                     composed_background,
@@ -2719,7 +2859,7 @@ def process_photo(photo_id: str) -> None:
             photo.processed_content_type = "image/jpeg"
             photo.processed_size_bytes = len(finished)
             photo.processed_thumbnail_object_key = processed_thumbnail_key
-            photo.processed_provider = image_settings.provider
+            photo.processed_provider = processing_provider
             photo.processing_status = ProcessingStatus.COMPLETED
             photo.processing_completed_at = datetime.now(timezone.utc)
             job.status = _next_job_status(db, job.id)

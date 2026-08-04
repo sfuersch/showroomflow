@@ -286,6 +286,7 @@ class Orientation(Timestamped, Base):
     is_required: Mapped[bool] = mapped_column(Boolean, default=True)
     requires_processing: Mapped[bool] = mapped_column(Boolean, default=False)
     processing_mode: Mapped[str] = mapped_column(String(32), default="original")
+    processing_provider: Mapped[str] = mapped_column(String(32), default="photoroom")
     mask_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     mask_negative_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_repeatable: Mapped[bool] = mapped_column(Boolean, default=False)

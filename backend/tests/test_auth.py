@@ -841,6 +841,11 @@ def test_system_admin_sees_grouped_orientation_catalog_with_default_silhouettes(
     assert "System-Silhouette" in response.text
     assert 'value="window_background"' in response.text
     assert "Scheibenhintergrund" in response.text
+    assert "Bilddienstleister" in response.text
+    assert 'value="photoroom"' in response.text
+    assert 'value="remove_bg"' in response.text
+    assert 'value="openai"' in response.text
+    assert "Original (keine API)" in response.text
     assert "KI-Maskenprompt" in response.text
     assert "KI-Schutzprompt" in response.text
 
@@ -874,6 +879,7 @@ def test_system_admin_updates_orientation_mask_prompts() -> None:
             "default_export_order": "12",
             "is_required": "on",
             "processing_mode": "window_background",
+            "processing_provider": "openai",
             "mask_prompt": "nur der Außenbereich hinter der Frontscheibe",
             "mask_negative_prompt": "Head-up-Display vollständig schützen",
             "default_instance_count": "1",
@@ -889,6 +895,7 @@ def test_system_admin_updates_orientation_mask_prompts() -> None:
     with TestingSession() as db:
         updated = db.get(Orientation, orientation_id)
         assert updated is not None
+        assert updated.processing_provider == "openai"
         assert updated.mask_prompt == "nur der Außenbereich hinter der Frontscheibe"
         assert updated.mask_negative_prompt == "Head-up-Display vollständig schützen"
 

@@ -116,7 +116,12 @@ def arrange_export_items(
 def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
     rows = list(
         db.execute(
-            select(PhotoAsset, CaptureStep, Orientation.key)
+            select(
+                PhotoAsset,
+                CaptureStep,
+                Orientation.key,
+                Orientation.processing_provider,
+            )
             .join(CaptureStep, CaptureStep.id == PhotoAsset.capture_step_id)
             .outerjoin(Orientation, Orientation.id == CaptureStep.orientation_id)
             .where(
@@ -141,12 +146,12 @@ def resolve_export_items(db: Session, job: VehicleJob) -> list[ExportItem]:
     )
 
     photo_items: list[ExportItem] = []
-    for photo, step, orientation_key in rows:
+    for photo, step, orientation_key, processing_provider in rows:
         if photo.quality_review_required:
             raise ExportValidationError(
                 f'Fotoposition "{step.name}" wartet auf die interne Qualitätsfreigabe.'
             )
-        if photo.uses_original_result:
+        if photo.uses_original_result or processing_provider == "original":
             object_key = photo.original_object_key
         elif step.requires_processing:
             if (
