@@ -13,7 +13,19 @@ def test_landing_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "Vom Fahrzeug zur Verkaufsanzeige" in response.text
+    assert "360°-Innenaufnahme" in response.text
+    assert "showroom-before-after.webp" in response.text
     assert 'href="/admin"' in response.text
+
+
+@pytest.mark.parametrize(
+    "path, heading",
+    [("/impressum", "Impressum"), ("/datenschutz", "Datenschutz")],
+)
+def test_legal_pages(path: str, heading: str) -> None:
+    response = client.get(path)
+    assert response.status_code == 200
+    assert f"<h1>{heading}" in response.text
 
 
 def test_health() -> None:
