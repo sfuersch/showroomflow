@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{% endblock %} · ShowroomFlow</title>
+    <meta name="robots" content="index,follow">
+    <meta name="theme-color" content="#080b16">
+    <link rel="stylesheet" href="{{ url_for('landing-static', path='/landing.css') }}">
+</head>
+<body class="legal-page">
+    <header class="site-header legal-header">
+        <a class="logo" href="/" aria-label="Zur ShowroomFlow Startseite">
+            <span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>Showroom<span>Flow</span></span>
+        </a>
+        <a class="legal-back" href="/">← Zur Startseite</a>
+    </header>
+    <main class="legal-main">
+        <div class="section-kicker">Rechtliche Informationen</div>
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="legal-footer">
+        <a href="/">ShowroomFlow</a>
+        <div><a href="/impressum">Impressum</a><a href="/datenschutz">Datenschutz</a><span>© 2026 ShowroomFlow</span></div>
+    </footer>
+</body>
+</html>
