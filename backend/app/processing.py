@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import cv2
 import httpx
 import numpy as np
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -1329,17 +1329,46 @@ def _extend_photoroom_shadow_downward(
     shadowed_vehicle: Image.Image,
     placed_vehicle: Image.Image,
     *,
-    depth_ratio: float = 0.24,
+    depth_ratio: float = 0.22,
 ) -> Image.Image:
-    """Add a visible depth shadow behind Photoroom's native contact shadow."""
+    """Extend Photoroom's visible shadow below the vehicle without adding one."""
     vehicle_box = placed_vehicle.getchannel("A").getbbox()
     if vehicle_box is None:
         return shadowed_vehicle
 
-    vehicle_width = vehicle_box[2] - vehicle_box[0]
+    placed_alpha = np.asarray(
+        placed_vehicle.getchannel("A"), dtype=np.float32
+    ) / 255
+    combined_alpha = np.asarray(
+        shadowed_vehicle.getchannel("A"), dtype=np.float32
+    ) / 255
+    remaining_transparency = 1 - placed_alpha
+    shadow_alpha = np.divide(
+        np.maximum(0, combined_alpha - placed_alpha),
+        remaining_transparency,
+        out=np.zeros_like(combined_alpha),
+        where=remaining_transparency > 0.001,
+    )
+    shadow_alpha_u8 = np.rint(
+        np.clip(shadow_alpha, 0, 1) * 255
+    ).astype(np.uint8)
+    shadow_mask = Image.fromarray(shadow_alpha_u8, mode="L")
+    effective_shadow = shadow_mask.point(
+        lambda value: 255 if value >= 8 else 0
+    )
+    shadow_box = effective_shadow.getbbox()
+    if shadow_box is None:
+        return shadowed_vehicle
+
+    source_top = max(vehicle_box[3], shadow_box[1])
+    source_bottom = shadow_box[3]
+    source_height = source_bottom - source_top
+    if source_height < 2:
+        return shadowed_vehicle
+
     vehicle_height = vehicle_box[3] - vehicle_box[1]
     bottom_margin = max(2, round(shadowed_vehicle.height * 0.015))
-    available_depth = shadowed_vehicle.height - bottom_margin - vehicle_box[3]
+    available_depth = shadowed_vehicle.height - bottom_margin - source_bottom
     desired_depth = max(
         round(vehicle_height * depth_ratio),
         round(shadowed_vehicle.height * 0.10),
@@ -1348,42 +1377,62 @@ def _extend_photoroom_shadow_downward(
     if depth < 4:
         return shadowed_vehicle
 
-    horizontal_inset = round(vehicle_width * 0.18)
-    blur_radius = max(2, round(depth * 0.09))
-    ellipse_box = (
-        vehicle_box[0] + horizontal_inset,
-        vehicle_box[3] - round(depth * 0.08),
-        vehicle_box[2] - horizontal_inset,
-        vehicle_box[3] + depth - round(blur_radius * 1.2),
+    # Extrude every lower contour point independently. This follows the full
+    # native PhotoRoom silhouette instead of placing a second ellipse below it.
+    extension_alpha = np.zeros_like(shadow_alpha_u8)
+    max_y = shadowed_vehicle.height - bottom_margin - 1
+    reference_band = max(2, round(source_height * 0.35))
+    for x in range(shadow_box[0], shadow_box[2]):
+        column = shadow_alpha_u8[source_top:source_bottom, x]
+        visible_rows = np.flatnonzero(column >= 8)
+        if visible_rows.size == 0:
+            continue
+        contour_y = source_top + int(visible_rows[-1])
+        extension_length = min(depth, max_y - contour_y)
+        if extension_length <= 0:
+            continue
+        reference_top = max(source_top, contour_y - reference_band + 1)
+        reference_alpha = int(
+            shadow_alpha_u8[reference_top : contour_y + 1, x].max()
+        )
+        fade = np.linspace(0.85, 0.10, extension_length, dtype=np.float32)
+        extension_alpha[
+            contour_y + 1 : contour_y + 1 + extension_length,
+            x,
+        ] = np.rint(reference_alpha * fade).astype(np.uint8)
+
+    # Pull the broad native contour down while adding only a slight
+    # perspective taper. The marked full-width shadow remains recognizable,
+    # but its sides do not look like a vertically extruded cylinder.
+    shadow_width = shadow_box[2] - shadow_box[0]
+    for y in range(source_bottom, min(max_y + 1, source_bottom + depth)):
+        progress = (y - source_bottom + 1) / max(1, depth)
+        target_width = max(1, round(shadow_width * (1 - 0.10 * progress)))
+        row = extension_alpha[y, shadow_box[0] : shadow_box[2]]
+        tapered_row = cv2.resize(
+            row.reshape(1, -1),
+            (target_width, 1),
+            interpolation=cv2.INTER_LINEAR,
+        )[0]
+        extension_alpha[y, shadow_box[0] : shadow_box[2]] = 0
+        target_left = shadow_box[0] + (shadow_width - target_width) // 2
+        extension_alpha[y, target_left : target_left + target_width] = tapered_row
+
+    extension_mask = Image.fromarray(extension_alpha, mode="L").filter(
+        ImageFilter.GaussianBlur(radius=max(1, round(depth * 0.015)))
     )
-    depth_alpha = Image.new("L", shadowed_vehicle.size, 0)
-    ImageDraw.Draw(depth_alpha).ellipse(ellipse_box, fill=72)
-    depth_alpha = depth_alpha.filter(
-        ImageFilter.GaussianBlur(radius=blur_radius)
+    extended_shadow = Image.new(
+        "RGBA",
+        shadowed_vehicle.size,
+        (0, 0, 0, 0),
     )
-    # Keep the contact area readable while fading the added shadow steadily
-    # towards the lower image edge. This avoids the broad, uniform grey halo
-    # that a fully opaque blurred ellipse creates on textured asphalt.
-    alpha_array = np.asarray(depth_alpha, dtype=np.float32)
-    fade_start = vehicle_box[3]
-    fade_end = min(shadowed_vehicle.height - 1, vehicle_box[3] + depth)
-    fade_length = max(1, fade_end - fade_start)
-    fade = np.ones(shadowed_vehicle.height, dtype=np.float32)
-    fade[fade_start:] = np.clip(
-        1 - 0.85 * (np.arange(fade_start, shadowed_vehicle.height) - fade_start)
-        / fade_length,
-        0.15,
-        1,
+    extended_shadow.putalpha(extension_mask)
+    # The native PhotoRoom result remains authoritative. Only pixels below its
+    # effective lower edge are added, so contact shadow and vehicle stay intact.
+    return Image.alpha_composite(
+        extended_shadow,
+        shadowed_vehicle,
     )
-    depth_alpha = Image.fromarray(
-        np.rint(alpha_array * fade[:, None]).astype(np.uint8),
-        mode="L",
-    )
-    depth_shadow = Image.new("RGBA", shadowed_vehicle.size, (0, 0, 0, 0))
-    depth_shadow.putalpha(depth_alpha)
-    # Keep PhotoRoom's complete native result above the additional ellipse.
-    # Vehicle, contact shadow and antialiased cutout edges remain unchanged.
-    return Image.alpha_composite(depth_shadow, shadowed_vehicle)
 
 
 def create_photoroom_shadowed_composition(
