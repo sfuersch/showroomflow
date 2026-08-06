@@ -1329,7 +1329,7 @@ def _extend_photoroom_shadow_downward(
     shadowed_vehicle: Image.Image,
     placed_vehicle: Image.Image,
     *,
-    height_multiplier: float = 1.35,
+    height_multiplier: float = 1.55,
 ) -> Image.Image:
     """Extend Photoroom's lower shadow tail while preserving its native result."""
     placed_alpha = np.asarray(
