@@ -1329,7 +1329,7 @@ def _extend_photoroom_shadow_downward(
     shadowed_vehicle: Image.Image,
     placed_vehicle: Image.Image,
     *,
-    depth_ratio: float = 0.60,
+    depth_ratio: float = 0.72,
 ) -> Image.Image:
     """Extend Photoroom's visible shadow below the vehicle without adding one."""
     vehicle_box = placed_vehicle.getchannel("A").getbbox()
@@ -1367,11 +1367,11 @@ def _extend_photoroom_shadow_downward(
         return shadowed_vehicle
 
     vehicle_height = vehicle_box[3] - vehicle_box[1]
-    bottom_margin = max(2, round(shadowed_vehicle.height * 0.015))
+    bottom_margin = max(2, round(shadowed_vehicle.height * 0.005))
     available_depth = shadowed_vehicle.height - bottom_margin - source_bottom
     desired_depth = max(
         round(vehicle_height * depth_ratio),
-        round(shadowed_vehicle.height * 0.25),
+        round(shadowed_vehicle.height * 0.30),
     )
     depth = min(available_depth, desired_depth)
     if depth < 4:
@@ -1407,10 +1407,10 @@ def _extend_photoroom_shadow_downward(
     warped_mask = cv2.GaussianBlur(
         warped_mask,
         (0, 0),
-        sigmaX=max(0.8, depth * 0.01),
-        sigmaY=max(1.2, depth * 0.02),
+        sigmaX=max(1.2, depth * 0.04),
+        sigmaY=max(1.8, depth * 0.06),
     )
-    warped_mask = np.clip(warped_mask.astype(np.float32) * 1.40, 0, 255)
+    warped_mask = warped_mask.astype(np.float32)
     fade = np.ones(warped_height, dtype=np.float32)
     tail_progress = np.linspace(
         0,
@@ -1419,7 +1419,9 @@ def _extend_photoroom_shadow_downward(
         endpoint=True,
         dtype=np.float32,
     )
-    fade[source_height:] = np.power(1 - tail_progress, 0.42)
+    fade[source_height:] = 1 - (
+        tail_progress * tail_progress * (3 - 2 * tail_progress)
+    )
     warped_mask = np.clip(warped_mask * fade[:, None], 0, 255)
 
     # Replace the native lower mask instead of layering a second shape below
