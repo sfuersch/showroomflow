@@ -1713,28 +1713,25 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
         abs=5,
     )
     shadow_pixel = finished.convert("RGB").getpixel((400, 510))
-    assert all(210 <= value <= 225 for value in shadow_pixel)
+    assert all(145 <= value <= 185 for value in shadow_pixel)
 
 
-def test_photoroom_shadow_strength_preserves_vehicle_and_scales_only_added_alpha() -> None:
-    placed_vehicle = Image.new("RGBA", (8, 4), (20, 30, 40, 0))
-    placed_vehicle.putpixel((3, 1), (20, 30, 40, 128))
-    placed_vehicle.putpixel((4, 1), (20, 30, 40, 255))
+def test_photoroom_straight_shadow_extends_downward_and_preserves_vehicle() -> None:
+    placed_vehicle = Image.new("RGBA", (20, 20), (20, 30, 40, 0))
+    ImageDraw.Draw(placed_vehicle).rectangle((5, 3, 14, 9), fill=(20, 30, 40, 255))
     shadowed_vehicle = placed_vehicle.copy()
-    shadowed_vehicle.putpixel((2, 2), (0, 0, 0, 200))
-    shadowed_vehicle.putpixel((3, 1), (20, 30, 40, 200))
-    shadowed_vehicle.putpixel((4, 1), (20, 30, 40, 255))
+    ImageDraw.Draw(shadowed_vehicle).rectangle((4, 10, 15, 13), fill=(0, 0, 0, 120))
 
-    processing_module._attenuate_photoroom_shadow_alpha(
+    extended = processing_module._extend_photoroom_shadow_downward(
         shadowed_vehicle,
         placed_vehicle,
-        50,
+        height_multiplier=1.5,
     )
 
-    alpha = shadowed_vehicle.getchannel("A")
-    assert alpha.getpixel((2, 2)) == 100
-    assert alpha.getpixel((3, 1)) == 164
-    assert alpha.getpixel((4, 1)) == 255
+    alpha = extended.getchannel("A")
+    assert alpha.getpixel((10, 15)) > 0
+    assert alpha.getpixel((10, 3)) == 255
+    assert extended.getpixel((10, 3)) == placed_vehicle.getpixel((10, 3))
 
 
 def test_photoroom_shadowed_composition_accepts_exterior_360_canvas() -> None:
@@ -1842,6 +1839,7 @@ def test_automatic_photoroom_composition_uses_same_ai_shadow_path(
         observed["background"] = background_bytes
         observed["content_type"] = background_content_type
         observed["operation"] = kwargs["usage_operation"]
+        observed["orientation_key"] = kwargs["orientation_key"]
         return expected
 
     monkeypatch.setattr(
@@ -1853,7 +1851,12 @@ def test_automatic_photoroom_composition_uses_same_ai_shadow_path(
         background,
         "image/jpeg",
         cutout,
-        CompositionOptions(width=800, height=600, shadow_opacity_percent=42),
+        CompositionOptions(
+            width=800,
+            height=600,
+            shadow_opacity_percent=42,
+            orientation_key="front",
+        ),
         Settings(output_width=800, output_height=600),
         photoroom_sandbox=True,
     )
@@ -1864,6 +1867,7 @@ def test_automatic_photoroom_composition_uses_same_ai_shadow_path(
     assert observed["background"] == background
     assert observed["content_type"] == "image/jpeg"
     assert observed["operation"] == "automatic_vehicle_shadow"
+    assert observed["orientation_key"] == "front"
 
 
 def test_automatic_photoroom_composition_preserves_exterior_360_framing(
