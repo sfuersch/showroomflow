@@ -1348,18 +1348,36 @@ def _extend_photoroom_shadow_downward(
     if depth < 4:
         return shadowed_vehicle
 
-    horizontal_inset = round(vehicle_width * 0.08)
-    blur_radius = max(2, round(depth * 0.14))
+    horizontal_inset = round(vehicle_width * 0.18)
+    blur_radius = max(2, round(depth * 0.09))
     ellipse_box = (
         vehicle_box[0] + horizontal_inset,
-        vehicle_box[3] - round(depth * 0.18),
+        vehicle_box[3] - round(depth * 0.08),
         vehicle_box[2] - horizontal_inset,
-        vehicle_box[3] + depth - round(blur_radius * 1.5),
+        vehicle_box[3] + depth - round(blur_radius * 1.2),
     )
     depth_alpha = Image.new("L", shadowed_vehicle.size, 0)
-    ImageDraw.Draw(depth_alpha).ellipse(ellipse_box, fill=70)
+    ImageDraw.Draw(depth_alpha).ellipse(ellipse_box, fill=72)
     depth_alpha = depth_alpha.filter(
         ImageFilter.GaussianBlur(radius=blur_radius)
+    )
+    # Keep the contact area readable while fading the added shadow steadily
+    # towards the lower image edge. This avoids the broad, uniform grey halo
+    # that a fully opaque blurred ellipse creates on textured asphalt.
+    alpha_array = np.asarray(depth_alpha, dtype=np.float32)
+    fade_start = vehicle_box[3]
+    fade_end = min(shadowed_vehicle.height - 1, vehicle_box[3] + depth)
+    fade_length = max(1, fade_end - fade_start)
+    fade = np.ones(shadowed_vehicle.height, dtype=np.float32)
+    fade[fade_start:] = np.clip(
+        1 - 0.85 * (np.arange(fade_start, shadowed_vehicle.height) - fade_start)
+        / fade_length,
+        0.15,
+        1,
+    )
+    depth_alpha = Image.fromarray(
+        np.rint(alpha_array * fade[:, None]).astype(np.uint8),
+        mode="L",
     )
     depth_shadow = Image.new("RGBA", shadowed_vehicle.size, (0, 0, 0, 0))
     depth_shadow.putalpha(depth_alpha)
