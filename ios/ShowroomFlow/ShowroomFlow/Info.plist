@@ -31,8 +31,16 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>ShowroomFlow benötigt die Kamera für Fahrzeugaufnahmen.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>ShowroomFlow benötigt Bluetooth, um eine Insta360-Kamera zu finden und zu verbinden.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>ShowroomFlow benötigt Bluetooth, um eine Insta360-Kamera zu finden und zu verbinden.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ShowroomFlow verbindet sich mit der Ricoh THETA für 360°-Innenaufnahmen.</string>
+	<string>ShowroomFlow verbindet sich mit Ricoh- und Insta360-Kameras für 360°-Innenaufnahmen.</string>
+	<key>Insta360AppID</key>
+	<string>$(INSTA360_APP_ID)</string>
+	<key>Insta360AppSecret</key>
+	<string>$(INSTA360_APP_SECRET)</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchScreen</key>

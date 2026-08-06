@@ -6,6 +6,7 @@ struct Camera360ProviderSelectionView: View {
     @Binding var selectedDJIPhoto: PhotosPickerItem?
 
     let onSelectTheta: () -> Void
+    let onSelectInsta360: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -33,6 +34,20 @@ struct Camera360ProviderSelectionView: View {
                     .buttonStyle(.plain)
                     .accessibilityHint(
                         "Öffnet die WLAN-Verbindung und Live-Vorschau der Ricoh THETA"
+                    )
+
+                    Button(action: onSelectInsta360) {
+                        providerCard(
+                            title: "Insta360 X4",
+                            subtitle: "Kamera-WLAN verbinden, Live-Vorschau anzeigen und direkt auslösen.",
+                            systemImage: "camera.viewfinder",
+                            badge: "Direkt verbunden",
+                            tint: .blue
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(
+                        "Öffnet die Verbindung und Live-Vorschau der Insta360 X4"
                     )
 
                     PhotosPicker(
