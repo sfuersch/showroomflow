@@ -1737,6 +1737,8 @@ def test_photoroom_straight_shadow_extends_downward_and_preserves_vehicle() -> N
     assert alpha.getpixel((15, 78)) > 0
     assert alpha.getpixel((85, 78)) > 0
     assert alpha.getpixel((5, 78)) == 0
+    assert alpha.getpixel((50, 70)) > alpha.getpixel((50, 78))
+    assert alpha.getpixel((50, 65)) >= 115
     assert alpha.getpixel((50, 10)) == 255
     assert extended.getpixel((50, 10)) == placed_vehicle.getpixel((50, 10))
 
