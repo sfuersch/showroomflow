@@ -7,7 +7,7 @@ import cv2
 import httpx
 import numpy as np
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from app.config import Settings
 from app.api_usage import ExternalApiUsageContext
@@ -1713,7 +1713,28 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
         abs=5,
     )
     shadow_pixel = finished.convert("RGB").getpixel((400, 510))
-    assert all(145 <= value <= 185 for value in shadow_pixel)
+    assert all(210 <= value <= 225 for value in shadow_pixel)
+
+
+def test_photoroom_shadow_strength_preserves_vehicle_and_scales_only_added_alpha() -> None:
+    placed_vehicle = Image.new("RGBA", (8, 4), (20, 30, 40, 0))
+    placed_vehicle.putpixel((3, 1), (20, 30, 40, 128))
+    placed_vehicle.putpixel((4, 1), (20, 30, 40, 255))
+    shadowed_vehicle = placed_vehicle.copy()
+    shadowed_vehicle.putpixel((2, 2), (0, 0, 0, 200))
+    shadowed_vehicle.putpixel((3, 1), (20, 30, 40, 200))
+    shadowed_vehicle.putpixel((4, 1), (20, 30, 40, 255))
+
+    processing_module._attenuate_photoroom_shadow_alpha(
+        shadowed_vehicle,
+        placed_vehicle,
+        50,
+    )
+
+    alpha = shadowed_vehicle.getchannel("A")
+    assert alpha.getpixel((2, 2)) == 100
+    assert alpha.getpixel((3, 1)) == 164
+    assert alpha.getpixel((4, 1)) == 255
 
 
 def test_photoroom_shadowed_composition_accepts_exterior_360_canvas() -> None:
