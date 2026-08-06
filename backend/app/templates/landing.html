@@ -22,8 +22,10 @@
         </a>
         <nav aria-label="Hauptnavigation">
             <a href="#produkt">Produkt</a>
+            <a href="#showroom">Showroom</a>
+            <a href="#360-grad">360°</a>
             <a href="#vorteile">Vorteile</a>
-            <a href="#ablauf">Ablauf</a>
+            <a href="#ios-download">iOS App</a>
         </nav>
         <div class="header-actions">
             <a class="login-link" href="/admin">Adminbereich</a>
@@ -116,6 +118,37 @@
             </div>
         </section>
 
+        <section class="showroom section" id="showroom">
+            <div class="showroom-heading">
+                <div><div class="section-kicker">Vom Parkplatz in den Showroom</div><h2>Ein Fahrzeug.<br><em>Ein komplett neuer Auftritt.</em></h2></div>
+                <p>ShowroomFlow entfernt den ursprünglichen Hintergrund, setzt das Fahrzeug sauber in Ihren virtuellen Indoor-Showroom und sorgt für einen konsistenten Markenlook.</p>
+            </div>
+            <figure class="before-after">
+                <img src="{{ url_for('landing-static', path='/showroom-before-after.webp') }}" alt="Dasselbe Fahrzeug vor und nach der Platzierung in einem virtuellen ShowroomFlow Indoor-Showroom">
+                <figcaption><span>Vorher · Originalaufnahme</span><span>Nachher · Virtueller Showroom</span></figcaption>
+                <div class="comparison-line" aria-hidden="true"><i>↔</i></div>
+            </figure>
+            <div class="showroom-facts"><span><b>01</b> Hintergrund automatisch entfernt</span><span><b>02</b> Fahrzeug präzise positioniert</span><span><b>03</b> Markenlook einheitlich angewendet</span></div>
+        </section>
+
+        <section class="panorama section" id="360-grad">
+            <div class="panorama-copy">
+                <div class="section-kicker light">Mittendrin statt nur davor</div>
+                <h2>Der Innenraum.<br><em>Rundum erlebbar.</em></h2>
+                <p>Erstellen Sie direkt im Aufnahmeablauf eine 360°-Innenaufnahme. ShowroomFlow verbindet sich mit kompatiblen Kameras, übernimmt das fertige 2:1-Panorama und exportiert es zusammen mit dem vollständigen Bildsatz.</p>
+                <div class="camera-chips"><span>Insta360 X4</span><span>Ricoh THETA</span><span>DJI-Import</span></div>
+            </div>
+            <div class="panorama-demo" aria-label="Darstellung eines interaktiven 360-Grad-Innenraumpanoramas">
+                <div class="panorama-toolbar"><span><b>360°</b> Innenaufnahme</span><span>Ziehen zum Umschauen ↔</span></div>
+                <div class="cabin-view">
+                    <div class="windshield"></div><div class="dash"></div><div class="wheel"></div><div class="console"></div>
+                    <span class="view-marker marker-left">‹</span><span class="view-marker marker-right">›</span>
+                    <div class="view-angle"><i></i><span>360° Panorama</span></div>
+                </div>
+                <div class="panorama-status"><span><i>✓</i> Kamera verbunden</span><span>2:1 · volle Auflösung</span></div>
+            </div>
+        </section>
+
         <section class="results section" id="vorteile">
             <div class="results-copy">
                 <div class="section-kicker light">Für Autohäuser gemacht</div>
@@ -144,6 +177,24 @@
             </ol>
         </section>
 
+        <section class="ios-section section" id="ios-download">
+            <div class="ios-mark" aria-hidden="true">●</div>
+            <div class="ios-copy">
+                <div class="section-kicker">ShowroomFlow für iPhone</div>
+                <h2>Der komplette Fotoablauf.<br><em>Direkt in der Hand.</em></h2>
+                <p>Aufträge auswählen, Fahrzeug erfassen, Perspektiven geführt aufnehmen und 360°-Kameras anbinden – entwickelt für den täglichen Einsatz im Autohaus.</p>
+                <div class="ios-points"><span>✓ Für iOS 17+</span><span>✓ Kamera-Workflow</span><span>✓ Offline vorbereitet</span></div>
+            </div>
+            <div class="ios-action">
+                {% if ios_app_store_url %}
+                <a class="app-store-button" href="{{ ios_app_store_url }}" rel="noopener" target="_blank"><small>Laden im</small><strong>App Store</strong></a>
+                {% else %}
+                <span class="app-store-button is-coming-soon" aria-disabled="true"><small>Demnächst im</small><strong>App Store</strong></span>
+                {% endif %}
+                <small>Der Download wird mit der Veröffentlichung im Apple App Store freigeschaltet.</small>
+            </div>
+        </section>
+
         <section class="cta section" id="kontakt">
             <div class="cta-glow"></div>
             <div class="cta-copy">
@@ -161,7 +212,7 @@
     <footer>
         <a class="logo" href="#top"><span class="logo-mark"><i></i><i></i><i></i></span><span>Showroom<span>Flow</span></span></a>
         <p>Geführte Fahrzeugfotografie für einen konsistenten Auftritt.</p>
-        <div><a href="/admin">Adminbereich</a><a href="mailto:info@promotekk.com">Kontakt</a><span>© 2026 ShowroomFlow</span></div>
+        <div><a href="/admin">Adminbereich</a><a href="/impressum">Impressum</a><a href="/datenschutz">Datenschutz</a><a href="mailto:info@promotekk.com">Kontakt</a><span>© 2026 ShowroomFlow</span></div>
     </footer>
 </body>
 </html>

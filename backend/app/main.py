@@ -51,7 +51,21 @@ app.mount(
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def landing_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "landing.html")
+    return templates.TemplateResponse(
+        request,
+        "landing.html",
+        {"ios_app_store_url": settings.ios_app_store_url},
+    )
+
+
+@app.get("/impressum", response_class=HTMLResponse, include_in_schema=False)
+async def imprint_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "impressum.html")
+
+
+@app.get("/datenschutz", response_class=HTMLResponse, include_in_schema=False)
+async def privacy_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "datenschutz.html")
 
 
 app.include_router(admin_router)

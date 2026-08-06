@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     environment: str = "development"
     public_base_url: str = "https://showroomflow.promotekk.com"
+    ios_app_store_url: str | None = None
     allowed_hosts: str = "localhost,127.0.0.1,testserver"
     secret_key: str = Field(default="development-only-change-me-please", min_length=32)
     access_token_minutes: int = Field(default=30, ge=5, le=1440)
