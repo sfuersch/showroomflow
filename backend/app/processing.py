@@ -1325,25 +1325,70 @@ def create_photoroom_showroom(
     return output.getvalue()
 
 
-def _attenuate_photoroom_shadow_alpha(
+def _extend_photoroom_shadow_downward(
     shadowed_vehicle: Image.Image,
     placed_vehicle: Image.Image,
-    opacity_percent: int,
-) -> None:
-    """Scale only alpha coverage added by Photoroom behind the placed vehicle."""
-    placed_alpha_array = np.asarray(
+    *,
+    height_multiplier: float = 1.35,
+) -> Image.Image:
+    """Extend Photoroom's lower shadow tail while preserving its native result."""
+    placed_alpha = np.asarray(
         placed_vehicle.getchannel("A"), dtype=np.float32
-    )
-    shadowed_alpha_array = np.asarray(
+    ) / 255
+    combined_alpha = np.asarray(
         shadowed_vehicle.getchannel("A"), dtype=np.float32
+    ) / 255
+    remaining_transparency = 1 - placed_alpha
+    shadow_alpha = np.divide(
+        np.maximum(0, combined_alpha - placed_alpha),
+        remaining_transparency,
+        out=np.zeros_like(combined_alpha),
+        where=remaining_transparency > 0.001,
     )
-    shadow_strength = max(0, min(80, opacity_percent)) / 100
-    adjusted_alpha_array = np.rint(
-        placed_alpha_array
-        + np.maximum(0, shadowed_alpha_array - placed_alpha_array)
-        * shadow_strength
-    ).astype(np.uint8)
-    shadowed_vehicle.putalpha(Image.fromarray(adjusted_alpha_array, mode="L"))
+    shadow_mask = Image.fromarray(
+        np.rint(np.clip(shadow_alpha, 0, 1) * 255).astype(np.uint8),
+        mode="L",
+    )
+    shadow_box = shadow_mask.getbbox()
+    if shadow_box is None:
+        return shadowed_vehicle
+
+    shadow_layer = shadowed_vehicle.copy()
+    shadow_layer.putalpha(shadow_mask)
+    shadow_height = shadow_box[3] - shadow_box[1]
+    extra_height = min(
+        shadowed_vehicle.height - shadow_box[3],
+        max(0, round(shadow_height * (height_multiplier - 1))),
+    )
+    if extra_height == 0:
+        return shadowed_vehicle
+
+    # A softened stretch of only the lowest shadow tail produces a longer
+    # falloff without deforming the native contact shadow. Keeping the upper
+    # 75 % out of the extension avoids copying gaps where tyres occluded it.
+    tail_top = shadow_box[1] + round(shadow_height * 0.75)
+    extension = shadow_layer.crop(
+        (shadow_box[0], tail_top, shadow_box[2], shadow_box[3])
+    )
+    extension = extension.resize(
+        (extension.width, extension.height + extra_height),
+        Image.Resampling.BICUBIC,
+    )
+    extension_alpha = extension.getchannel("A").point(
+        lambda value: round(value * 0.55)
+    )
+    extension.putalpha(extension_alpha)
+    extension = extension.filter(
+        ImageFilter.GaussianBlur(radius=max(1, round(shadow_height * 0.05)))
+    )
+    extended_shadow = Image.new("RGBA", shadowed_vehicle.size, (0, 0, 0, 0))
+    extended_shadow.alpha_composite(
+        extension,
+        (shadow_box[0], tail_top),
+    )
+    # Keep PhotoRoom's complete native result above the added tail. Vehicle,
+    # contact shadow and antialiased cutout edges therefore remain unchanged.
+    return Image.alpha_composite(extended_shadow, shadowed_vehicle)
 
 
 def create_photoroom_shadowed_composition(
@@ -1353,6 +1398,7 @@ def create_photoroom_shadowed_composition(
     settings: Settings,
     *,
     shadow_opacity_percent: int,
+    orientation_key: str = "",
     photoroom_sandbox: bool | None = None,
     client: httpx.Client | None = None,
     usage_context: ExternalApiUsageContext | None = None,
@@ -1475,16 +1521,12 @@ def create_photoroom_shadowed_composition(
         raise ImageProcessingError(
             "Photoroom hat den KI-Schatten ohne transparenten Hintergrund geliefert"
         )
-    # Photoroom exposes only a discrete soft/hard mode. Treat the configured
-    # percentage as the actual local strength of the additional AI shadow so
-    # that background and orientation overrides remain meaningful. The alpha
-    # of the placed vehicle is the lower bound; only coverage added by
-    # Photoroom outside/behind that vehicle is attenuated.
-    _attenuate_photoroom_shadow_alpha(
-        shadowed_vehicle,
-        placed_vehicle,
-        shadow_opacity_percent,
-    )
+    normalized_orientation = orientation_key.casefold().strip().replace("_", "-")
+    if normalized_orientation in {"front", "rear"}:
+        shadowed_vehicle = _extend_photoroom_shadow_downward(
+            shadowed_vehicle,
+            placed_vehicle,
+        )
     try:
         background = ImageOps.fit(
             Image.open(io.BytesIO(background_bytes)).convert("RGB"),
@@ -1539,6 +1581,7 @@ def compose_photoroom_vehicle_with_shadow(
             background_content_type,
             settings,
             shadow_opacity_percent=options.shadow_opacity_percent,
+            orientation_key=options.orientation_key,
             photoroom_sandbox=photoroom_sandbox,
             usage_context=usage_context,
             usage_operation="automatic_vehicle_shadow",
@@ -2709,6 +2752,7 @@ def process_photo(photo_id: str) -> None:
                             composed_background_content_type,
                             settings,
                             shadow_opacity_percent=shadow_opacity_percent,
+                            orientation_key=correction_options.orientation_key,
                             photoroom_sandbox=photoroom_sandbox_active(
                                 image_settings, settings
                             ),
