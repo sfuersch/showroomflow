@@ -1,0 +1,6 @@
+INSTA360_APP_ID =
+INSTA360_APP_SECRET =
+
+// Public build configuration. Keep real credentials in the ignored file below.
+// The optional include comes last so local values override the empty defaults.
+#include? "Insta360Secrets.xcconfig"

@@ -15,6 +15,7 @@ struct CaptureFlowView: View {
     @State private var showCompletionConfirmation = false
     @State private var show360CameraSelection = false
     @State private var showThetaCapture = false
+    @State private var showInsta360Capture = false
     @State private var showExterior360Capture = false
     @State private var isRetakingExistingPhoto = false
     @State private var selectedLibraryItem: PhotosPickerItem?
@@ -59,23 +60,45 @@ struct CaptureFlowView: View {
         }
         .sheet(isPresented: $show360CameraSelection) {
             Camera360ProviderSelectionView(
-                selectedDJIPhoto: $selectedLibraryItem
-            ) {
-                show360CameraSelection = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    showThetaCapture = true
+                selectedDJIPhoto: $selectedLibraryItem,
+                onSelectTheta: {
+                    camera.stop()
+                    show360CameraSelection = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        showThetaCapture = true
+                    }
+                },
+                onSelectInsta360: {
+                    camera.stop()
+                    show360CameraSelection = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        showInsta360Capture = true
+                    }
                 }
-            }
+            )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .fullScreenCover(isPresented: $showThetaCapture) {
+        .fullScreenCover(isPresented: $showThetaCapture, onDismiss: {
+            Task { await camera.start() }
+        }) {
             ThetaCaptureView { data in
                 pendingPhoto = CapturedCameraPhoto(
                     data: data,
                     metadata: .libraryImport
                 )
                 showThetaCapture = false
+            }
+        }
+        .fullScreenCover(isPresented: $showInsta360Capture, onDismiss: {
+            Task { await camera.start() }
+        }) {
+            Insta360CaptureView { data in
+                pendingPhoto = CapturedCameraPhoto(
+                    data: data,
+                    metadata: .libraryImport
+                )
+                showInsta360Capture = false
             }
         }
         .fullScreenCover(isPresented: $showExterior360Capture, onDismiss: {

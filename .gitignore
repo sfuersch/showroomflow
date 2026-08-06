@@ -11,6 +11,8 @@ __pycache__/
 backend/.coverage
 backend/htmlcov/
 ios/DerivedData/
+ios/ShowroomFlow/Vendor/Insta360/
+ios/ShowroomFlow/Config/Insta360Secrets.xcconfig
 **/*.xcworkspace/xcuserdata/
 **/*.xcodeproj/xcuserdata/
 web/node_modules/
