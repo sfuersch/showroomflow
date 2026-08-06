@@ -1723,6 +1723,10 @@ def test_photoroom_straight_shadow_extends_downward_and_preserves_vehicle() -> N
         fill=(20, 30, 40, 255),
     )
     shadowed_vehicle = placed_vehicle.copy()
+    ImageDraw.Draw(shadowed_vehicle).rectangle(
+        (10, 60, 89, 69),
+        fill=(0, 0, 0, 120),
+    )
 
     extended = processing_module._extend_photoroom_shadow_downward(
         shadowed_vehicle,
@@ -1730,9 +1734,9 @@ def test_photoroom_straight_shadow_extends_downward_and_preserves_vehicle() -> N
     )
 
     alpha = extended.getchannel("A")
-    assert alpha.getpixel((50, 70)) > 0
-    assert alpha.getpixel((50, 62)) > alpha.getpixel((50, 70))
-    assert alpha.getpixel((20, 65)) < alpha.getpixel((50, 65))
+    assert alpha.getpixel((15, 78)) > 0
+    assert alpha.getpixel((85, 78)) > 0
+    assert alpha.getpixel((5, 78)) == 0
     assert alpha.getpixel((50, 10)) == 255
     assert extended.getpixel((50, 10)) == placed_vehicle.getpixel((50, 10))
 
