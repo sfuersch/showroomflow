@@ -1717,7 +1717,7 @@ def test_photoroom_shadowed_correction_preserves_placed_canvas() -> None:
 
 
 def test_photoroom_straight_shadow_extends_downward_and_preserves_vehicle() -> None:
-    placed_vehicle = Image.new("RGBA", (20, 30), (20, 30, 40, 0))
+    placed_vehicle = Image.new("RGBA", (20, 50), (20, 30, 40, 0))
     ImageDraw.Draw(placed_vehicle).rectangle((5, 3, 14, 9), fill=(20, 30, 40, 255))
     shadowed_vehicle = placed_vehicle.copy()
     ImageDraw.Draw(shadowed_vehicle).rectangle((4, 10, 15, 19), fill=(0, 0, 0, 120))
@@ -1728,7 +1728,7 @@ def test_photoroom_straight_shadow_extends_downward_and_preserves_vehicle() -> N
     )
 
     alpha = extended.getchannel("A")
-    assert alpha.getpixel((10, 25)) > 0
+    assert alpha.getpixel((10, 39)) > 0
     assert alpha.getpixel((10, 3)) == 255
     assert extended.getpixel((10, 3)) == placed_vehicle.getpixel((10, 3))
 
