@@ -1565,13 +1565,47 @@ def apply_background_mask_to_original(
     return output.getvalue()
 
 
-def background_mask_from_cutout(cutout_png_bytes: bytes) -> bytes:
-    """Convert a transparent subject cutout into a selected-background mask."""
+def background_mask_from_cutout(
+    cutout_png_bytes: bytes,
+    *,
+    strengthen_translucent_regions: bool = False,
+) -> bytes:
+    """Convert a transparent subject cutout into a selected-background mask.
+
+    Background-removal services commonly retain glass with a partially opaque
+    subject alpha.  A direct inversion is correct for a normal vehicle cutout,
+    but it produces a very weak replacement mask for windows: an alpha value of
+    200 becomes only 55 after inversion, leaving most of the photographed
+    environment visible.  Window-only processing may therefore expand that
+    translucent range while preserving a soft transition to fully opaque trim.
+    """
     try:
         cutout = Image.open(io.BytesIO(cutout_png_bytes)).convert("RGBA")
     except (OSError, ValueError) as exc:
         raise ImageProcessingError("Die Freistellungsmaske ist ungültig") from exc
     background_alpha = ImageOps.invert(cutout.getchannel("A"))
+    if strengthen_translucent_regions:
+        # Ignore tiny alpha fluctuations on otherwise solid vehicle parts, then
+        # map the characteristic remove.bg glass matte (roughly 200 subject
+        # alpha / 55 inverted alpha) to a fully selected replacement region.
+        # Values between both endpoints remain feathered for antialiased seals
+        # and window edges.
+        minimum_signal = 5
+        glass_signal = 55
+        background_alpha = background_alpha.point(
+            lambda value: (
+                0
+                if value <= minimum_signal
+                else min(
+                    255,
+                    round(
+                        (value - minimum_signal)
+                        * 255
+                        / (glass_signal - minimum_signal)
+                    ),
+                )
+            )
+        )
     if background_alpha.getbbox() is None:
         raise ImageProcessingError("Die Freistellung enthält keinen Hintergrund")
     mask = Image.new("RGBA", cutout.size, (255, 0, 255, 0))
@@ -2479,7 +2513,8 @@ def process_photo(photo_id: str) -> None:
                         window_mask = background_mask_from_cutout(
                             remove_vehicle_background(
                                 original, settings, usage_context=usage_context
-                            )
+                            ),
+                            strengthen_translucent_regions=True,
                         )
                     else:
                         raise ImageProcessingError(

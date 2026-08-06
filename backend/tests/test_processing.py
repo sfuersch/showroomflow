@@ -71,6 +71,27 @@ def test_background_mask_from_cutout_inverts_cutout_alpha() -> None:
     assert mask.getpixel((3, 0)) == 255
 
 
+def test_background_mask_from_cutout_strengthens_translucent_glass() -> None:
+    cutout = Image.new("RGBA", (4, 1), (240, 240, 240, 255))
+    cutout.putpixel((1, 0), (240, 240, 240, 252))
+    cutout.putpixel((2, 0), (240, 240, 240, 230))
+    cutout.putpixel((3, 0), (240, 240, 240, 200))
+
+    mask = Image.open(
+        io.BytesIO(
+            background_mask_from_cutout(
+                image_bytes(cutout, "PNG"),
+                strengthen_translucent_regions=True,
+            )
+        )
+    ).convert("RGBA").getchannel("A")
+
+    assert mask.getpixel((0, 0)) == 0
+    assert mask.getpixel((1, 0)) == 0
+    assert mask.getpixel((2, 0)) == 102
+    assert mask.getpixel((3, 0)) == 255
+
+
 def test_background_transform_zoom_and_offset_keep_output_filled() -> None:
     background = Image.new("RGB", (800, 600), "#164c9c")
     ImageDraw.Draw(background).rectangle((0, 0, 399, 599), fill="#e64b3c")
