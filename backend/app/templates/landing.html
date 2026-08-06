@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ShowroomFlow · Fahrzeugfotografie im Flow</title>
+    <meta name="description" content="Geführte Fahrzeugfotografie, automatische Bildbearbeitung und direkter Export – ein konsistenter Workflow für Autohäuser.">
+    <meta name="theme-color" content="#080b16">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="ShowroomFlow · Fahrzeugfotografie im Flow">
+    <meta property="og:description" content="Vom Fahrzeug zur Verkaufsanzeige: geführt fotografieren, automatisch optimieren und direkt exportieren.">
+    <meta property="og:image" content="{{ request.base_url }}static/og-showroomflow.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <link rel="stylesheet" href="{{ url_for('landing-static', path='/landing.css') }}">
+</head>
+<body>
+    <a class="skip-link" href="#main">Zum Inhalt springen</a>
+    <header class="site-header">
+        <a class="logo" href="#top" aria-label="ShowroomFlow Startseite">
+            <span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>Showroom<span>Flow</span></span>
+        </a>
+        <nav aria-label="Hauptnavigation">
+            <a href="#produkt">Produkt</a>
+            <a href="#vorteile">Vorteile</a>
+            <a href="#ablauf">Ablauf</a>
+        </nav>
+        <div class="header-actions">
+            <a class="login-link" href="/admin">Adminbereich</a>
+            <a class="button button-small" href="#kontakt">Demo anfragen</a>
+        </div>
+    </header>
+
+    <main id="main">
+        <section class="hero" id="top">
+            <div class="hero-glow" aria-hidden="true"></div>
+            <div class="hero-copy">
+                <p class="eyebrow"><span></span> Fahrzeugfotografie. Neu gedacht.</p>
+                <h1>Vom Fahrzeug zur<br><em>Verkaufsanzeige.</em><br>Im Flow.</h1>
+                <p class="hero-lead">ShowroomFlow führt Ihr Team durch jede Aufnahme, optimiert die Bilder automatisch und übergibt sie genau dorthin, wo sie gebraucht werden.</p>
+                <div class="hero-actions">
+                    <a class="button" href="#kontakt">Kostenlose Demo anfragen <span aria-hidden="true">↗</span></a>
+                    <a class="text-link" href="#produkt">So funktioniert’s <span aria-hidden="true">↓</span></a>
+                </div>
+                <div class="hero-proof" aria-label="Produktvorteile">
+                    <span><b>✓</b> Keine Fotobox nötig</span>
+                    <span><b>✓</b> Einheitliche Qualität</span>
+                    <span><b>✓</b> Für jeden Standort</span>
+                </div>
+            </div>
+
+            <div class="product-stage" aria-label="ShowroomFlow Produktvorschau">
+                <div class="stage-orbit orbit-one"></div>
+                <div class="stage-orbit orbit-two"></div>
+                <div class="phone">
+                    <div class="phone-bar"><span>9:41</span><i></i><span>● ●</span></div>
+                    <div class="phone-screen">
+                        <div class="capture-top"><span class="mini-logo">S</span><span>Aufnahme 03 / 12</span><button aria-label="Mehr Optionen">•••</button></div>
+                        <div class="camera-view">
+                            <div class="guide-frame"></div>
+                            <img src="{{ url_for('admin-static', path='/orientation-silhouettes/front-left.png') }}" alt="Aufnahmehilfe für die Fahrzeugposition">
+                            <span class="camera-hint">Fahrzeug an Kontur ausrichten</span>
+                        </div>
+                        <div class="capture-bottom"><span>‹</span><button aria-label="Foto aufnehmen"></button><span>›</span></div>
+                    </div>
+                </div>
+                <div class="floating-card card-ready">
+                    <span class="status-icon">✓</span>
+                    <div><strong>Bild optimiert</strong><small>Bereit für den Export</small></div>
+                </div>
+                <div class="floating-card card-vin">
+                    <small>Fahrzeug erkannt</small><strong>WVWZZZ…284</strong>
+                </div>
+                <div class="floating-card card-progress"><span>12</span><small>Aufnahmen<br>im Ablauf</small></div>
+            </div>
+        </section>
+
+        <section class="intro section" id="produkt">
+            <div class="section-kicker">Ein System. Der ganze Prozess.</div>
+            <div class="intro-heading">
+                <h2>Professionelle Fahrzeugbilder.<br><em>Ohne Reibungsverluste.</em></h2>
+                <p>Von der ersten Aufnahme bis zum fertigen Datensatz verbindet ShowroomFlow alle Schritte in einem klaren, konfigurierbaren Workflow.</p>
+            </div>
+            <div class="feature-grid">
+                <article class="feature feature-large feature-capture">
+                    <div class="feature-number">01</div>
+                    <div class="feature-copy"><span class="pill">iOS App</span><h3>Geführt fotografieren</h3><p>Individuelle Fotosequenzen und präzise Silhouetten führen Mitarbeitende sicher durch jede Perspektive.</p></div>
+                    <div class="capture-demo" aria-hidden="true">
+                        <div class="capture-demo-head"><span>Front links</span><b>03 / 12</b></div>
+                        <img src="{{ url_for('admin-static', path='/orientation-silhouettes/front-left.png') }}" alt="">
+                        <div class="shutter"></div>
+                    </div>
+                </article>
+                <article class="feature feature-process">
+                    <div class="feature-number">02</div>
+                    <span class="pill">Automatisch</span>
+                    <h3>Perfekt aufbereiten</h3>
+                    <p>Hintergrund entfernen, Fahrzeug positionieren, Schatten abstimmen – konsistent für jedes Bild.</p>
+                    <div class="process-visual" aria-hidden="true">
+                        <span>Original</span><span>Showroom</span>
+                        <div class="split-car"><img src="{{ url_for('admin-static', path='/orientation-silhouettes/front.png') }}" alt=""></div>
+                        <i></i>
+                    </div>
+                </article>
+                <article class="feature feature-export">
+                    <div class="feature-number">03</div>
+                    <span class="pill">Nahtlos</span>
+                    <h3>Direkt exportieren</h3>
+                    <p>VIN-basierte Benennung und automatisierte Übertragung per SFTP oder FTPS – passend zu Ihren Systemen.</p>
+                    <div class="export-list" aria-hidden="true">
+                        <span><i>✓</i> WVWZZZ1JZ3W386752_01.jpg</span>
+                        <span><i>✓</i> WVWZZZ1JZ3W386752_02.jpg</span>
+                        <span><i>✓</i> WVWZZZ1JZ3W386752_03.jpg</span>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section class="results section" id="vorteile">
+            <div class="results-copy">
+                <div class="section-kicker light">Für Autohäuser gemacht</div>
+                <h2>Ein Look, der Ihre<br><em>Marke stärkt.</em></h2>
+                <p>ShowroomFlow macht aus einem variablen Arbeitsablauf einen verlässlichen Markenprozess – über Teams, Fahrzeuge und Standorte hinweg.</p>
+                <a class="button button-light" href="#kontakt">ShowroomFlow kennenlernen <span>→</span></a>
+            </div>
+            <div class="benefit-list">
+                <article><span>01</span><div><h3>Konstant starke Bilder</h3><p>Definierte Perspektiven, Hintergründe und Bildkompositionen sorgen für einen wiedererkennbaren Auftritt.</p></div></article>
+                <article><span>02</span><div><h3>Schneller im Bestand</h3><p>Geführte Aufnahme und automatisierte Verarbeitung reduzieren Handgriffe und Rückfragen.</p></div></article>
+                <article><span>03</span><div><h3>Einfach skalierbar</h3><p>Zentrale Konfiguration für mehrere Marken, Standorte und Rollen – ohne Prozesswildwuchs.</p></div></article>
+                <article><span>04</span><div><h3>Bereit für Ihre Systeme</h3><p>Strukturierter Export bringt fertige Bilder zuverlässig in die nachgelagerte Vermarktung.</p></div></article>
+            </div>
+        </section>
+
+        <section class="workflow section" id="ablauf">
+            <div class="workflow-head">
+                <div><div class="section-kicker">Klar vom Start bis zum Ziel</div><h2>Vier Schritte.<br><em>Ein sauberer Flow.</em></h2></div>
+                <p>So einfach wird aus einem Fahrzeug ein vollständiger, markengerechter Bildsatz.</p>
+            </div>
+            <ol class="workflow-steps">
+                <li><span>01</span><div class="step-icon">⌁</div><h3>Fahrzeug erfassen</h3><p>Fahrzeug zuordnen und konfigurierten Fotoablauf starten.</p></li>
+                <li><span>02</span><div class="step-icon">◎</div><h3>Geführt aufnehmen</h3><p>Silhouetten und Reihenfolge geben jede Perspektive präzise vor.</p></li>
+                <li><span>03</span><div class="step-icon">✦</div><h3>Automatisch veredeln</h3><p>Fahrzeug freistellen und in den gewünschten Showroom einsetzen.</p></li>
+                <li><span>04</span><div class="step-icon">↗</div><h3>Direkt übergeben</h3><p>Geprüfte Aufnahmen strukturiert benennen und exportieren.</p></li>
+            </ol>
+        </section>
+
+        <section class="cta section" id="kontakt">
+            <div class="cta-glow"></div>
+            <div class="cta-copy">
+                <div class="section-kicker light">Bereit für den nächsten Schritt?</div>
+                <h2>Bringen wir Ihre<br>Fahrzeugfotografie<br><em>in den Flow.</em></h2>
+            </div>
+            <div class="cta-action">
+                <p>Wir zeigen Ihnen ShowroomFlow live – mit Ihrem Prozess, Ihren Perspektiven und Ihrem Markenauftritt.</p>
+                <a class="button button-light" href="mailto:info@promotekk.com?subject=ShowroomFlow%20Demo">Demo-Termin anfragen <span>↗</span></a>
+                <small>Unverbindlich · Persönlich · Auf Ihren Betrieb zugeschnitten</small>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <a class="logo" href="#top"><span class="logo-mark"><i></i><i></i><i></i></span><span>Showroom<span>Flow</span></span></a>
+        <p>Geführte Fahrzeugfotografie für einen konsistenten Auftritt.</p>
+        <div><a href="/admin">Adminbereich</a><a href="mailto:info@promotekk.com">Kontakt</a><span>© 2026 ShowroomFlow</span></div>
+    </footer>
+</body>
+</html>

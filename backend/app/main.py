@@ -2,8 +2,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -19,6 +21,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 settings = get_settings()
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 app = FastAPI(
     title="ShowroomFlow API",
     version="0.1.0",
@@ -39,5 +42,17 @@ app.mount(
     StaticFiles(directory=Path(__file__).parent / "static"),
     name="admin-static",
 )
+app.mount(
+    "/static",
+    StaticFiles(directory=Path(__file__).parent / "static" / "landing"),
+    name="landing-static",
+)
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def landing_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "landing.html")
+
+
 app.include_router(admin_router)
 app.include_router(router, prefix="/api/v1")
