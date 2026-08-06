@@ -1329,7 +1329,7 @@ def _extend_photoroom_shadow_downward(
     shadowed_vehicle: Image.Image,
     placed_vehicle: Image.Image,
     *,
-    depth_ratio: float = 0.22,
+    depth_ratio: float = 0.28,
 ) -> Image.Image:
     """Extend Photoroom's visible shadow below the vehicle without adding one."""
     vehicle_box = placed_vehicle.getchannel("A").getbbox()
@@ -1371,7 +1371,7 @@ def _extend_photoroom_shadow_downward(
     available_depth = shadowed_vehicle.height - bottom_margin - source_bottom
     desired_depth = max(
         round(vehicle_height * depth_ratio),
-        round(shadowed_vehicle.height * 0.10),
+        round(shadowed_vehicle.height * 0.12),
     )
     depth = min(available_depth, desired_depth)
     if depth < 4:
@@ -1410,6 +1410,7 @@ def _extend_photoroom_shadow_downward(
         sigmaX=max(0.8, depth * 0.01),
         sigmaY=max(1.2, depth * 0.02),
     )
+    warped_mask = np.clip(warped_mask.astype(np.float32) * 1.15, 0, 255)
     fade = np.ones(warped_height, dtype=np.float32)
     fade[source_height:] = np.linspace(
         1,
