@@ -1410,7 +1410,7 @@ def _extend_photoroom_shadow_downward(
         sigmaX=max(0.8, depth * 0.01),
         sigmaY=max(1.2, depth * 0.02),
     )
-    warped_mask = np.clip(warped_mask.astype(np.float32) * 1.40, 0, 255)
+    warped_mask = np.clip(warped_mask.astype(np.float32) * 1.65, 0, 255)
     fade = np.ones(warped_height, dtype=np.float32)
     tail_progress = np.linspace(
         0,
@@ -1419,7 +1419,7 @@ def _extend_photoroom_shadow_downward(
         endpoint=True,
         dtype=np.float32,
     )
-    fade[source_height:] = np.power(1 - tail_progress, 0.42)
+    fade[source_height:] = np.power(1 - tail_progress, 0.28)
     warped_mask = np.clip(warped_mask * fade[:, None], 0, 255)
 
     # Replace the native lower mask instead of layering a second shape below
