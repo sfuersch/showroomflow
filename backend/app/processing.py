@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import cv2
 import httpx
 import numpy as np
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -1325,6 +1325,27 @@ def create_photoroom_showroom(
     return output.getvalue()
 
 
+def _attenuate_photoroom_shadow_alpha(
+    shadowed_vehicle: Image.Image,
+    placed_vehicle: Image.Image,
+    opacity_percent: int,
+) -> None:
+    """Scale only alpha coverage added by Photoroom behind the placed vehicle."""
+    placed_alpha_array = np.asarray(
+        placed_vehicle.getchannel("A"), dtype=np.float32
+    )
+    shadowed_alpha_array = np.asarray(
+        shadowed_vehicle.getchannel("A"), dtype=np.float32
+    )
+    shadow_strength = max(0, min(80, opacity_percent)) / 100
+    adjusted_alpha_array = np.rint(
+        placed_alpha_array
+        + np.maximum(0, shadowed_alpha_array - placed_alpha_array)
+        * shadow_strength
+    ).astype(np.uint8)
+    shadowed_vehicle.putalpha(Image.fromarray(adjusted_alpha_array, mode="L"))
+
+
 def create_photoroom_shadowed_composition(
     placed_vehicle_png: bytes,
     background_bytes: bytes,
@@ -1454,6 +1475,16 @@ def create_photoroom_shadowed_composition(
         raise ImageProcessingError(
             "Photoroom hat den KI-Schatten ohne transparenten Hintergrund geliefert"
         )
+    # Photoroom exposes only a discrete soft/hard mode. Treat the configured
+    # percentage as the actual local strength of the additional AI shadow so
+    # that background and orientation overrides remain meaningful. The alpha
+    # of the placed vehicle is the lower bound; only coverage added by
+    # Photoroom outside/behind that vehicle is attenuated.
+    _attenuate_photoroom_shadow_alpha(
+        shadowed_vehicle,
+        placed_vehicle,
+        shadow_opacity_percent,
+    )
     try:
         background = ImageOps.fit(
             Image.open(io.BytesIO(background_bytes)).convert("RGB"),
