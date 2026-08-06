@@ -1377,61 +1377,74 @@ def _extend_photoroom_shadow_downward(
     if depth < 4:
         return shadowed_vehicle
 
-    # Extrude every lower contour point independently. This follows the full
-    # native PhotoRoom silhouette instead of placing a second ellipse below it.
-    extension_alpha = np.zeros_like(shadow_alpha_u8)
-    max_y = shadowed_vehicle.height - bottom_margin - 1
-    reference_band = max(2, round(source_height * 0.35))
-    for x in range(shadow_box[0], shadow_box[2]):
-        column = shadow_alpha_u8[source_top:source_bottom, x]
-        visible_rows = np.flatnonzero(column >= 8)
-        if visible_rows.size == 0:
-            continue
-        contour_y = source_top + int(visible_rows[-1])
-        extension_length = min(depth, max_y - contour_y)
-        if extension_length <= 0:
-            continue
-        reference_top = max(source_top, contour_y - reference_band + 1)
-        reference_alpha = int(
-            shadow_alpha_u8[reference_top : contour_y + 1, x].max()
-        )
-        fade = np.linspace(0.85, 0.10, extension_length, dtype=np.float32)
-        extension_alpha[
-            contour_y + 1 : contour_y + 1 + extension_length,
-            x,
-        ] = np.rint(reference_alpha * fade).astype(np.uint8)
-
-    # Pull the broad native contour down while adding only a slight
-    # perspective taper. The marked full-width shadow remains recognizable,
-    # but its sides do not look like a vertically extruded cylinder.
+    # Warp the complete lower mask as one continuous 2D surface. Resizing the
+    # mask instead of extruding individual columns avoids vertical streaks and
+    # preserves PhotoRoom's soft internal gradients.
     shadow_width = shadow_box[2] - shadow_box[0]
-    for y in range(source_bottom, min(max_y + 1, source_bottom + depth)):
-        progress = (y - source_bottom + 1) / max(1, depth)
-        target_width = max(1, round(shadow_width * (1 - 0.10 * progress)))
-        row = extension_alpha[y, shadow_box[0] : shadow_box[2]]
+    source_mask = shadow_alpha_u8[
+        source_top:source_bottom,
+        shadow_box[0] : shadow_box[2],
+    ]
+    warped_height = source_height + depth
+    stretched_mask = cv2.resize(
+        source_mask,
+        (shadow_width, warped_height),
+        interpolation=cv2.INTER_CUBIC,
+    )
+    warped_mask = np.zeros_like(stretched_mask)
+    for y in range(warped_height):
+        progress = max(0.0, (y - source_height) / max(1, depth))
+        target_width = max(1, round(shadow_width * (1 - 0.08 * progress)))
+        row = stretched_mask[y]
         tapered_row = cv2.resize(
             row.reshape(1, -1),
             (target_width, 1),
             interpolation=cv2.INTER_LINEAR,
         )[0]
-        extension_alpha[y, shadow_box[0] : shadow_box[2]] = 0
-        target_left = shadow_box[0] + (shadow_width - target_width) // 2
-        extension_alpha[y, target_left : target_left + target_width] = tapered_row
+        target_left = (shadow_width - target_width) // 2
+        warped_mask[y, target_left : target_left + target_width] = tapered_row
 
-    extension_mask = Image.fromarray(extension_alpha, mode="L").filter(
-        ImageFilter.GaussianBlur(radius=max(1, round(depth * 0.015)))
+    warped_mask = cv2.GaussianBlur(
+        warped_mask,
+        (0, 0),
+        sigmaX=max(0.8, depth * 0.01),
+        sigmaY=max(1.2, depth * 0.02),
     )
-    extended_shadow = Image.new(
+    fade = np.ones(warped_height, dtype=np.float32)
+    fade[source_height:] = np.linspace(
+        1,
+        0,
+        depth,
+        endpoint=True,
+        dtype=np.float32,
+    )
+    warped_mask = np.clip(warped_mask * fade[:, None], 0, 255)
+
+    # Replace the native lower mask instead of layering a second shape below
+    # it. This turns the marked PhotoRoom shadow into one continuous elongated
+    # surface and removes the doubled bright/dark outline.
+    target_shadow_alpha = shadow_alpha_u8.copy()
+    target_shadow_alpha[source_top:] = 0
+    target_shadow_alpha[
+        source_top : source_top + warped_height,
+        shadow_box[0] : shadow_box[2],
+    ] = np.rint(warped_mask).astype(np.uint8)
+    target_shadow = Image.new(
         "RGBA",
         shadowed_vehicle.size,
         (0, 0, 0, 0),
     )
-    extended_shadow.putalpha(extension_mask)
-    # The native PhotoRoom result remains authoritative. Only pixels below its
-    # effective lower edge are added, so contact shadow and vehicle stay intact.
+    target_shadow.putalpha(
+        Image.fromarray(
+            target_shadow_alpha,
+            mode="L",
+        )
+    )
+    # Reapply the authoritative placed layer so vehicle pixels and antialiased
+    # cutout edges remain identical after replacing the lower shadow mask.
     return Image.alpha_composite(
-        extended_shadow,
-        shadowed_vehicle,
+        target_shadow,
+        placed_vehicle,
     )
 
 
